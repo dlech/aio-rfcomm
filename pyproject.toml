@@ -42,17 +42,24 @@ test = [
 [tool.uv]
 default-groups = ["lint", "test"]
 
-# Prototypes are verbatim copies of working spikes from other repositories.
-# They are kept unmodified as a known-good reference, so they are not linted
-# or type checked.
+# Prototypes are verbatim copies of working spikes from other repositories,
+# and typings/ holds stubs for rubicon-objc, which ships none of its own,
+# imported as a git subtree. Both are kept unmodified, so neither is linted
+# or type checked here.
 [tool.ruff]
 # extend-exclude, not exclude: the latter replaces ruff's own defaults, which
 # would drag .venv into the lint as soon as there is no .gitignore to fall back
 # on -- as happens in a copy of the tree without its .git directory.
-extend-exclude = ["prototypes"]
+extend-exclude = ["prototypes", "typings"]
 
 [tool.pyright]
 exclude = ["prototypes", ".venv"]
+# typings/ is pyright's default stub path, and is where the rubicon-objc
+# stubs land; it is named here only to keep them out of the check itself.
+ignore = ["typings"]
+# rubicon-objc ships no type information of its own, which is the whole
+# reason those stubs are here. Saying so once is enough.
+reportMissingModuleSource = "none"
 
 # Structured concurrency, enforced mechanically rather than by review.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
@@ -64,6 +71,8 @@ exclude = ["prototypes", ".venv"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Only our own tests, never anything that turns up under a subtree.
+testpaths = ["tests"]
 # These tests exist to catch hangs and deadlocks, so a hang must fail rather
 # than stall the run.
 timeout = 10
