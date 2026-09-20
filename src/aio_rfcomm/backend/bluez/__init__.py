@@ -36,12 +36,11 @@ from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
 from dbus_fast.service import ServiceInterface, method
 
 from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel, BackendProvider
+from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     AdapterNotFoundError,
     AdapterOffError,
-    ChannelClosedError,
-    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     RfcommError,
@@ -234,49 +233,14 @@ class _Profiles:
                     self._bus.unexport(path)
 
 
-class BlueZChannel(BackendChannel):
+class BlueZChannel(StreamChannel):
     """
     An RFCOMM channel over the file descriptor BlueZ supplied.
+
+    Nothing to add: BlueZ gives us a connected socket and the shared stream
+    channel does the rest. It stays a class of its own so that a backtrace
+    names the platform.
     """
-
-    def __init__(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        super().__init__()
-        self._reader = reader
-        self._writer = writer
-
-    async def send(self, data: bytes) -> None:
-        try:
-            self._writer.write(data)
-            await self._writer.drain()
-        except OSError as error:
-            raise self._lost() from error
-
-    async def receive(self, max_bytes: int | None = None) -> bytes:
-        try:
-            data = await self._reader.read(max_bytes if max_bytes is not None else 4096)
-        except OSError as error:
-            raise self._lost() from error
-
-        # An orderly hang-up drains what is buffered and then reads empty,
-        # which ends the stream rather than failing.
-        if not data:
-            self._mark_gone(CloseReason.PEER_CLOSED)
-        return data
-
-    def _lost(self) -> ChannelClosedError:
-        """
-        Turn a socket failure into the end of the channel.
-
-        A dropped link arrives as ``ECONNRESET`` or similar rather than as an
-        orderly end of stream, and no bare OSError should reach the caller.
-
-        Returns:
-            The error to raise instead.
-        """
-        self._mark_gone(CloseReason.LINK_LOST)
-        return ChannelClosedError(CloseReason.LINK_LOST)
 
 
 class BlueZAdapter(BackendAdapter):
