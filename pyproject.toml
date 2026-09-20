@@ -44,7 +44,10 @@ default-groups = ["lint", "test"]
 # They are kept unmodified as a known-good reference, so they are not linted
 # or type checked.
 [tool.ruff]
-exclude = ["prototypes"]
+# extend-exclude, not exclude: the latter replaces ruff's own defaults, which
+# would drag .venv into the lint as soon as there is no .gitignore to fall back
+# on -- as happens in a copy of the tree without its .git directory.
+extend-exclude = ["prototypes"]
 
 [tool.pyright]
 exclude = ["prototypes", ".venv"]
