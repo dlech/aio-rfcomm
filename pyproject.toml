@@ -1,0 +1,45 @@
+[project]
+name = "aio-rfcomm"
+version = "0.1.0"
+description = "Cross-platform asyncio RFCOMM (Bluetooth Classic serial port) for Linux, macOS and Windows"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "David Lechner", email = "david@pybricks.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "dbus-fast>=2.44.1 ; sys_platform == 'linux'",
+    "rubicon-objc>=0.5.3 ; sys_platform == 'darwin'",
+    "winrt-windows-devices-bluetooth>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-devices-bluetooth-rfcomm>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-devices-enumeration>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-foundation>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-foundation-collections>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-networking>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-networking-sockets>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-storage>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-storage-streams>=3.2.1 ; sys_platform == 'win32'",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+lint = [
+    "pyright>=1.1.408",
+    "ruff>=0.13.0",
+]
+
+[tool.uv]
+default-groups = ["lint"]
+
+# Prototypes are verbatim copies of working spikes from other repositories.
+# They are kept unmodified as a known-good reference, so they are not linted
+# or type checked.
+[tool.ruff]
+exclude = ["prototypes"]
+
+[tool.pyright]
+exclude = ["prototypes", ".venv"]
