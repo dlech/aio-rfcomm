@@ -55,3 +55,13 @@ class RfcommDeviceInfo:
     Not reliable for identification: the OS may be reporting a stale cached
     name. Match on :attr:`address`.
     """
+
+    id: str | None = None
+    """
+    Opaque, platform-specific handle for the device.
+
+    Set when the description came from a listing, and lets the backend reach
+    the device again without rebuilding a handle from the address. ``None``
+    for a device named by bare address, which the backend then has to resolve
+    itself. Never inspect it; its meaning differs on every platform.
+    """
