@@ -31,9 +31,14 @@ lint = [
     "pyright>=1.1.408",
     "ruff>=0.13.0",
 ]
+test = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-timeout>=2.3",
+]
 
 [tool.uv]
-default-groups = ["lint"]
+default-groups = ["lint", "test"]
 
 # Prototypes are verbatim copies of working spikes from other repositories.
 # They are kept unmodified as a known-good reference, so they are not linted
@@ -43,6 +48,7 @@ exclude = ["prototypes"]
 
 [tool.pyright]
 exclude = ["prototypes", ".venv"]
+
 # Structured concurrency, enforced mechanically rather than by review.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "asyncio.create_task".msg = "Use asyncio.TaskGroup (structured concurrency rule)."
@@ -50,3 +56,17 @@ exclude = ["prototypes", ".venv"]
 "asyncio.gather".msg = "Use asyncio.TaskGroup."
 "asyncio.wait".msg = "Use asyncio.TaskGroup plus a timeout."
 "asyncio.set_event_loop_policy".msg = "Never change the caller's event loop policy."
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# These tests exist to catch hangs and deadlocks, so a hang must fail rather
+# than stall the run.
+timeout = 10
+# A warning is a defect until proven otherwise -- an un-awaited coroutine or an
+# unclosed transport shows up here and nowhere else.
+filterwarnings = ["error"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests stand in for a second, misbehaving caller, which is exactly what the
+# structured concurrency rule forbids in the library itself.
+"tests/**" = ["TID251"]
