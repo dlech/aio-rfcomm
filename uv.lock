@@ -33,7 +33,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dbus-fast", marker = "sys_platform == 'linux'", specifier = ">=2.44.1" },
+    { name = "dbus-fast", marker = "sys_platform == 'linux'", specifier = ">=4" },
     { name = "rubicon-objc", marker = "sys_platform == 'darwin'", specifier = ">=0.5.3" },
     { name = "winrt-windows-devices-bluetooth", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
     { name = "winrt-windows-devices-bluetooth-rfcomm", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },

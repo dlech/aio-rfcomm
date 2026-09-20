@@ -9,7 +9,9 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "dbus-fast>=2.44.1 ; sys_platform == 'linux'",
+    # 4.0 is where dbus_fast.annotations arrived; the Linux backend uses those
+    # rather than bare D-Bus signature strings.
+    "dbus-fast>=4 ; sys_platform == 'linux'",
     "rubicon-objc>=0.5.3 ; sys_platform == 'darwin'",
     "winrt-windows-devices-bluetooth>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-devices-bluetooth-rfcomm>=3.2.1 ; sys_platform == 'win32'",

@@ -22,7 +22,9 @@ def get_backend() -> BackendProvider:
         UnsupportedPlatformError: This platform has no RFCOMM support.
     """
     if sys.platform == "linux":
-        raise NotImplementedError("the Linux backend is not written yet")
+        from aio_rfcomm.backend.bluez import BlueZBackend
+
+        return BlueZBackend()
 
     if sys.platform == "darwin":
         raise NotImplementedError("the macOS backend is not written yet")

@@ -29,6 +29,7 @@ __all__ = [
     "RfcommError",
     "ScopeClosedError",
     "ServiceNotFoundError",
+    "UnsupportedOperationError",
     "UnsupportedPlatformError",
 ]
 
@@ -229,6 +230,18 @@ class ChannelBusyError(RfcommError):
 # --------------------------------------------------------------------------
 # Misuse
 # --------------------------------------------------------------------------
+
+
+class UnsupportedOperationError(RfcommError):
+    """
+    This platform cannot do that, even though it has a backend.
+
+    Not every platform can do everything. Connecting to a bare RFCOMM channel
+    number on Linux, for instance, needs a Bluetooth socket, and the Python
+    builds that ship without Bluetooth support cannot open one -- while BlueZ
+    offers no way to do it over D-Bus. The message says what would make it
+    work.
+    """
 
 
 class ScopeClosedError(RfcommError):
