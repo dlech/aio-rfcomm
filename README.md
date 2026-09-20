@@ -21,12 +21,24 @@ up in the design notes:
 ## Intended API
 
 ```python
-async with aiorfcomm.adapter() as bt:
-    devices = await bt.known_devices(service=MY_UUID)
+async with aio_rfcomm.open_adapter() as adapter:
+    known = await adapter.list_known_devices(service=MY_UUID)
+    device = adapter.use_device(known[0])
 
-    async with bt.connect(devices[0], service=MY_UUID) as chan:
+    async with device.open_service(MY_UUID) as chan:
         await chan.send(b"hello\n")
-        data = await chan.receive()   # b"" at end of stream
+
+        while data := await chan.receive():  # b"" ends the stream
+            print(data.decode(), end="")
+```
+
+If you already know a device's address, you can skip the search entirely. It
+does not need to be paired, and giving the channel number directly saves a
+round trip looking the service up:
+
+```python
+async with adapter.use_device("00:16:53:11:C4:9A").open_channel(1) as chan:
+    ...
 ```
 
 ## How each platform is reached

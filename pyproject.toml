@@ -43,3 +43,10 @@ exclude = ["prototypes"]
 
 [tool.pyright]
 exclude = ["prototypes", ".venv"]
+# Structured concurrency, enforced mechanically rather than by review.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"asyncio.create_task".msg = "Use asyncio.TaskGroup (structured concurrency rule)."
+"asyncio.ensure_future".msg = "Use asyncio.TaskGroup (structured concurrency rule)."
+"asyncio.gather".msg = "Use asyncio.TaskGroup."
+"asyncio.wait".msg = "Use asyncio.TaskGroup plus a timeout."
+"asyncio.set_event_loop_policy".msg = "Never change the caller's event loop policy."
