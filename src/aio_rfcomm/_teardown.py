@@ -9,12 +9,34 @@ inherited from a base class, since the two have nothing else in common.
 """
 
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
+from contextlib import asynccontextmanager, contextmanager
 
 from aio_rfcomm.errors import RfcommError
 
-__all__ = ["raise_when"]
+__all__ = ["raise_when", "unwrap_lone_error"]
+
+
+@contextmanager
+def unwrap_lone_error() -> Generator[None, None, None]:
+    """
+    Report a task group's single failure as itself rather than as a group.
+
+    A task group reports one failure as a group of one. Callers of this
+    library should not have to write ``except*`` for what is a single error,
+    so wherever a task group is an implementation detail its lone failure is
+    unwrapped. A genuine group of several is passed through untouched, because
+    flattening that would lose information.
+
+    Yields:
+        Nothing. The block runs as usual.
+    """
+    try:
+        yield
+    except BaseExceptionGroup as group:
+        if len(group.exceptions) == 1:
+            raise group.exceptions[0] from None
+        raise
 
 
 @asynccontextmanager
@@ -39,17 +61,10 @@ async def raise_when(
     async def watch() -> None:
         raise await error()
 
-    try:
+    with unwrap_lone_error():
         async with asyncio.TaskGroup() as group:
             watcher = group.create_task(watch())
             try:
                 yield
             finally:
                 watcher.cancel()
-    except BaseExceptionGroup as group_error:
-        # A task group reports one failure as a group of one. Callers should
-        # not have to write ``except*`` for what is a single error, so unwrap
-        # it; a genuine group of several is passed through untouched.
-        if len(group_error.exceptions) == 1:
-            raise group_error.exceptions[0] from None
-        raise
