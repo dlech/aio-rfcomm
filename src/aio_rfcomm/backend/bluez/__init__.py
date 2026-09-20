@@ -34,6 +34,7 @@ from dbus_fast.aio import MessageBus
 from dbus_fast.aio.proxy_object import ProxyInterface
 from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
 from dbus_fast.service import ServiceInterface, method
+from typing_extensions import override
 
 from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel, BackendProvider
 from aio_rfcomm.backend.stream import StreamChannel
@@ -275,6 +276,7 @@ class BlueZAdapter(BackendAdapter):
         proxy = self._bus.get_proxy_object(_SERVICE, path, introspection)
         return cast(_Interface, proxy.get_interface(name))
 
+    @override
     async def list_known_devices(
         self, *, service: UUID | Collection[UUID] | None = None
     ) -> list[RfcommDeviceInfo]:
@@ -312,11 +314,13 @@ class BlueZAdapter(BackendAdapter):
             )
         return found
 
+    @override
     def open_service(
         self, device: RfcommDeviceInfo | str, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, service)
 
+    @override
     def open_channel(
         self, device: RfcommDeviceInfo | str, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
@@ -429,10 +433,12 @@ class BlueZBackend(BackendProvider):
     The Linux implementation.
     """
 
+    @override
     async def list_adapters(self) -> list[RfcommAdapterInfo]:
         async with _bus(negotiate_unix_fd=False) as bus:
             return await _list_adapters(bus)
 
+    @override
     def open_adapter(
         self, adapter: RfcommAdapterInfo | None = None
     ) -> AbstractAsyncContextManager[BackendAdapter]:

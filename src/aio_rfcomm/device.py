@@ -9,6 +9,8 @@ from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
+from typing_extensions import override
+
 from aio_rfcomm._scope import Scope
 from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel
 from aio_rfcomm.channel import RfcommChannel
@@ -105,5 +107,6 @@ class RfcommDevice:
             finally:
                 scope.close()
 
+    @override
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.address} {self.name!r}>"

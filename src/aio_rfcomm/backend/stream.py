@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 
+from typing_extensions import override
+
 from aio_rfcomm.backend.provider import BackendChannel
 from aio_rfcomm.errors import ChannelClosedError, CloseReason
 
@@ -44,6 +46,7 @@ class StreamChannel(BackendChannel):
         self._reader = reader
         self._writer = writer
 
+    @override
     async def send(self, data: bytes) -> None:
         try:
             self._writer.write(data)
@@ -51,6 +54,7 @@ class StreamChannel(BackendChannel):
         except OSError as error:
             raise self._lost() from error
 
+    @override
     async def receive(self, max_bytes: int | None = None) -> bytes:
         try:
             data = await self._reader.read(

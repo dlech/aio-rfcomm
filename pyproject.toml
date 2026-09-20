@@ -9,6 +9,9 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    # 4.4 is where typing_extensions.override arrived; typing.override itself
+    # needs Python 3.12, which is above this project's floor.
+    "typing-extensions>=4.4",
     # 4.0 is where dbus_fast.annotations arrived; the Linux backend uses those
     # rather than bare D-Bus signature strings.
     "dbus-fast>=4 ; sys_platform == 'linux'",
@@ -60,6 +63,9 @@ ignore = ["typings"]
 # rubicon-objc ships no type information of its own, which is the whole
 # reason those stubs are here. Saying so once is enough.
 reportMissingModuleSource = "none"
+# An overriding method says so, rather than leaving a reader to go and
+# check for themselves. Enforced here rather than left to review.
+reportImplicitOverride = "error"
 
 # Structured concurrency, enforced mechanically rather than by review.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
