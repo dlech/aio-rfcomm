@@ -19,6 +19,7 @@ dependencies = [
     "winrt-windows-devices-bluetooth>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-devices-bluetooth-rfcomm>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-devices-enumeration>=3.2.1 ; sys_platform == 'win32'",
+    "winrt-windows-devices-radios>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-foundation>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-foundation-collections>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-networking>=3.2.1 ; sys_platform == 'win32'",

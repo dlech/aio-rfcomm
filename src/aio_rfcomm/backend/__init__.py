@@ -32,6 +32,8 @@ def get_backend() -> BackendProvider:
         return IOBluetoothBackend()
 
     if sys.platform == "win32":
-        raise NotImplementedError("the Windows backend is not written yet")
+        from aio_rfcomm.backend.windows import WindowsBackend
+
+        return WindowsBackend()
 
     raise UnsupportedPlatformError(f"no Bluetooth backend for {sys.platform}")
