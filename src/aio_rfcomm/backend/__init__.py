@@ -27,7 +27,9 @@ def get_backend() -> BackendProvider:
         return BlueZBackend()
 
     if sys.platform == "darwin":
-        raise NotImplementedError("the macOS backend is not written yet")
+        from aio_rfcomm.backend.iobluetooth import IOBluetoothBackend
+
+        return IOBluetoothBackend()
 
     if sys.platform == "win32":
         raise NotImplementedError("the Windows backend is not written yet")

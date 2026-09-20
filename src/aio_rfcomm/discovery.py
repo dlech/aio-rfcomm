@@ -60,8 +60,10 @@ class RfcommDeviceInfo:
     """
     Opaque, platform-specific handle for the device.
 
-    Set when the description came from a listing, and lets the backend reach
-    the device again without rebuilding a handle from the address. ``None``
-    for a device named by bare address, which the backend then has to resolve
-    itself. Never inspect it; its meaning differs on every platform.
+    Set where the platform has something worth carrying -- BlueZ's object
+    path, say -- so the backend can reach the device again without rebuilding
+    a handle from the address. ``None`` where it has not, either because the
+    device was named by bare address or because the address is all the
+    platform needs, as on macOS. Never inspect it; its meaning differs on
+    every platform, and on some there is nothing in it.
     """
