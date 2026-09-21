@@ -102,3 +102,94 @@ def test_anything_else_is_a_connection_failure_naming_what_happened() -> None:
     error = _translate(BluetoothError.OTHER_ERROR, "00:11")
     assert isinstance(error, ConnectionFailedError)
     assert "OTHER_ERROR" in str(error)
+
+
+# --------------------------------------------------------------------------
+# Serving
+# --------------------------------------------------------------------------
+
+
+def test_the_socket_address_is_packed_the_way_windows_reads_it() -> None:
+    """
+    Windows declares SOCKADDR_BTH without padding, so it is 30 bytes with the
+    RFCOMM channel at offset 26. Left to ctypes' natural alignment it becomes
+    40 bytes with the channel at 32, Windows reads the tail of the service
+    UUID instead, and the published record advertises a channel nobody is
+    listening on -- a service on channel 25 was advertised as 161. Nothing
+    fails loudly when this is wrong, so it is pinned here.
+    """
+    import ctypes
+
+    from aio_rfcomm.backend.windows._service import _SOCKADDR_BTH
+
+    assert ctypes.sizeof(_SOCKADDR_BTH) == 30
+    assert _SOCKADDR_BTH.port.offset == 26
+    assert _SOCKADDR_BTH.serviceClassId.offset == 10
+
+
+def test_a_uuid_survives_the_trip_into_windows_layout() -> None:
+    import ctypes
+
+    from aio_rfcomm.backend.windows._service import _GUID
+
+    value = uuid.UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
+    guid = _GUID.of(value)
+    assert guid.Data1 == 0xC0FFEE00
+    assert guid.Data2 == 0x1DEA
+    assert guid.Data3 == 0x4B1D
+    assert (
+        bytes(ctypes.cast(guid.Data4, ctypes.POINTER(ctypes.c_ubyte * 8))[0])
+        == (value.bytes[8:])
+    )
+
+
+class _FakeSocket:
+    """
+    A socket that refuses the channels a test says are taken.
+    """
+
+    def __init__(self, taken: set[int]) -> None:
+        self.taken = taken
+        self.bound: int | None = None
+
+    def bind(self, address: tuple[str, int]) -> None:
+        import errno
+
+        if address[1] in self.taken:
+            raise OSError(errno.EADDRINUSE, "in use")
+        self.bound = address[1]
+
+
+def test_a_free_channel_is_found_from_the_top_down() -> None:
+    from aio_rfcomm.backend.provider import LAST_CHANNEL
+    from aio_rfcomm.backend.windows import _bind_channel
+
+    sock = _FakeSocket(set())
+    assert _bind_channel(sock, None) == LAST_CHANNEL  # type: ignore[arg-type]
+
+
+def test_channels_in_use_are_stepped_over() -> None:
+    from aio_rfcomm.backend.provider import LAST_CHANNEL
+    from aio_rfcomm.backend.windows import _bind_channel
+
+    sock = _FakeSocket({LAST_CHANNEL, LAST_CHANNEL - 1})
+    assert _bind_channel(sock, None) == LAST_CHANNEL - 2  # type: ignore[arg-type]
+
+
+def test_an_asked_for_channel_that_is_taken_says_so() -> None:
+    from aio_rfcomm.backend.windows import _bind_channel
+    from aio_rfcomm.errors import ChannelInUseError
+
+    sock = _FakeSocket({7})
+    with pytest.raises(ChannelInUseError, match="channel 7"):
+        _bind_channel(sock, 7)  # type: ignore[arg-type]
+
+
+def test_no_free_channel_at_all_is_an_error() -> None:
+    from aio_rfcomm.backend.provider import FIRST_CHANNEL, LAST_CHANNEL
+    from aio_rfcomm.backend.windows import _bind_channel
+    from aio_rfcomm.errors import ChannelInUseError
+
+    sock = _FakeSocket(set(range(FIRST_CHANNEL, LAST_CHANNEL + 1)))
+    with pytest.raises(ChannelInUseError, match="every RFCOMM channel"):
+        _bind_channel(sock, None)  # type: ignore[arg-type]
