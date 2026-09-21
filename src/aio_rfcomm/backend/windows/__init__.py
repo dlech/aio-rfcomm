@@ -41,7 +41,12 @@ from winrt.windows.devices.bluetooth.rfcomm import RfcommServiceId
 from winrt.windows.devices.enumeration import DeviceInformation
 from winrt.windows.devices.radios import RadioState
 
-from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel, BackendProvider
+from aio_rfcomm.backend.provider import (
+    BackendAdapter,
+    BackendChannel,
+    BackendProvider,
+    BackendService,
+)
 from aio_rfcomm.backend.sdp import SdpError, read_channel
 from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
@@ -52,6 +57,7 @@ from aio_rfcomm.errors import (
     DeviceNotFoundError,
     RfcommError,
     ServiceNotFoundError,
+    UnsupportedOperationError,
 )
 
 __all__ = ["WindowsBackend"]
@@ -136,6 +142,15 @@ class WindowsAdapter(BackendAdapter):
         self, device: RfcommDeviceInfo | str, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, channel=channel)
+
+    @override
+    def serve(
+        self, service: UUID, *, name: str, channel: int | None = None
+    ) -> AbstractAsyncContextManager[BackendService]:
+        raise UnsupportedOperationError(
+            "serving a service is not implemented on Windows yet. It needs "
+            "a published SDP record, which is still being worked out. Connecting to a service from this machine works."
+        )
 
     @asynccontextmanager
     async def _connect(

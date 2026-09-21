@@ -22,6 +22,7 @@ __all__ = [
     "ChannelBrokenError",
     "ChannelBusyError",
     "ChannelClosedError",
+    "ChannelInUseError",
     "CloseReason",
     "ConnectionFailedError",
     "DeviceNotFoundError",
@@ -230,6 +231,16 @@ class ChannelBusyError(RfcommError):
 # --------------------------------------------------------------------------
 # Misuse
 # --------------------------------------------------------------------------
+
+
+class ChannelInUseError(RfcommError):
+    """
+    The RFCOMM channel a service asked to listen on is already taken.
+
+    Either by another program on this machine or by another service in this
+    one. Pick a different channel, or let the library choose by leaving the
+    channel unset.
+    """
 
 
 class UnsupportedOperationError(RfcommError):

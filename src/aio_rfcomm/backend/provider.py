@@ -4,10 +4,11 @@
 """
 The interface every platform backend implements.
 
-Three abstract classes, in the order a caller meets them: the backend itself,
-an adapter opened through it, and a channel opened through that. Each is an
-:class:`~abc.ABC`, so a backend that forgets a method fails at construction
-with the method named, rather than at the first call.
+Four abstract classes, in the order a caller meets them: the backend itself,
+an adapter opened through it, and then either a channel opened through that or
+a service published on it. Each is an :class:`~abc.ABC`, so a backend that
+forgets a method fails at construction with the method named, rather than at
+the first call.
 
 Everything that opens something returns an async context manager. Nothing here
 hands back a resource the caller has to remember to close.
@@ -24,7 +25,20 @@ from uuid import UUID
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import AdapterLostReason, CloseReason
 
-__all__ = ["BackendAdapter", "BackendChannel", "BackendProvider"]
+__all__ = [
+    "FIRST_CHANNEL",
+    "LAST_CHANNEL",
+    "BackendAdapter",
+    "BackendChannel",
+    "BackendProvider",
+    "BackendService",
+]
+
+# RFCOMM addresses a channel with five bits and reserves 0 and 31, so a server
+# has thirty to choose from. A fact about the protocol rather than about any
+# one platform, so every backend and the layer above share these.
+FIRST_CHANNEL = 1
+LAST_CHANNEL = 30
 
 
 class BackendProvider(ABC):
@@ -171,6 +185,31 @@ class BackendAdapter(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def serve(
+        self, service: UUID, *, name: str, channel: int | None = None
+    ) -> AbstractAsyncContextManager[BackendService]:
+        """
+        Publish a service and listen for peers.
+
+        Args:
+            service: The service UUID to publish.
+            name: The human-readable service name, which goes into the
+                published record.
+            channel: The RFCOMM channel to listen on. ``None`` leaves the
+                choice to the backend, which may refuse it.
+
+        Returns:
+            An async context manager yielding the listening service,
+            withdrawn on exit.
+
+        Raises:
+            ChannelInUseError: Something already holds that channel.
+            UnsupportedOperationError: This backend cannot serve yet, or
+                cannot choose a channel and was given none.
+        """
+        raise NotImplementedError
+
 
 class BackendChannel(ABC):
     """
@@ -243,5 +282,35 @@ class BackendChannel(ABC):
 
         Raises:
             ChannelClosedError: The channel went away unexpectedly.
+        """
+        raise NotImplementedError
+
+
+class BackendService(ABC):
+    """
+    A published service, listening for peers.
+    """
+
+    @property
+    @abstractmethod
+    def channel(self) -> int:
+        """
+        The RFCOMM channel the service is listening on.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def accept(
+        self,
+    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
+        """
+        Wait for the next peer to connect.
+
+        The channel comes back unopened, as a context manager, so that
+        whoever takes it decides how long it lives -- the same way a channel
+        opened from this side is handed over.
+
+        Returns:
+            Who connected, and their channel as an async context manager.
         """
         raise NotImplementedError

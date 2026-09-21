@@ -27,7 +27,12 @@ from uuid import UUID
 from typing_extensions import override
 
 from aio_rfcomm.backend.iobluetooth._helper import Helper, run_helper
-from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel, BackendProvider
+from aio_rfcomm.backend.provider import (
+    BackendAdapter,
+    BackendChannel,
+    BackendProvider,
+    BackendService,
+)
 from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
@@ -35,6 +40,7 @@ from aio_rfcomm.errors import (
     AdapterOffError,
     CloseReason,
     ConnectionFailedError,
+    UnsupportedOperationError,
 )
 
 __all__ = ["IOBluetoothBackend"]
@@ -122,6 +128,15 @@ class IOBluetoothAdapter(BackendAdapter):
         self, device: RfcommDeviceInfo | str, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, channel=channel)
+
+    @override
+    def serve(
+        self, service: UUID, *, name: str, channel: int | None = None
+    ) -> AbstractAsyncContextManager[BackendService]:
+        raise UnsupportedOperationError(
+            "serving a service is not implemented on macOS yet. It needs "
+            "an SDP record encoder, which this library does not have yet. Connecting to a service from this machine works."
+        )
 
     @asynccontextmanager
     async def _connect(

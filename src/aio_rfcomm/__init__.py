@@ -4,9 +4,9 @@
 """
 Cross-platform asyncio RFCOMM.
 
-No backend is written yet, so opening an adapter raises
-:class:`NotImplementedError`. The shape below is what the backends will
-implement; see the design notes linked from README.md.
+Open an adapter, then either reach out to a device's service or publish one of
+your own and wait for peers. Serving is implemented on Linux so far; see the
+design notes linked from README.md.
 """
 
 from collections.abc import AsyncGenerator
@@ -17,13 +17,16 @@ from aio_rfcomm.backend import get_backend
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.device import RfcommDevice
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
+from aio_rfcomm.service import ConnectionHandler, RfcommService
 
 __all__ = [
+    "ConnectionHandler",
     "RfcommAdapter",
     "RfcommAdapterInfo",
     "RfcommChannel",
     "RfcommDevice",
     "RfcommDeviceInfo",
+    "RfcommService",
     "list_adapters",
     "open_adapter",
 ]

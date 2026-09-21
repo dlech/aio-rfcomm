@@ -9,9 +9,12 @@ only compiles ``AF_BLUETOOTH`` support when BlueZ headers are present at build
 time, and because those are GPL the widely used ``python-build-standalone``
 builds -- the ones ``uv`` installs -- ship without it. BlueZ hands back an
 already-connected file descriptor instead, so connecting by service UUID works
-on a Python that has never heard of Bluetooth. Connecting to a bare channel
-number is the one thing that still needs a real socket; see
-:meth:`BlueZAdapter.open_channel`.
+on a Python that has never heard of Bluetooth.
+
+Two things are better with a socket, and both degrade rather than fail without
+one: connecting to a bare channel number, which cannot be done over D-Bus at
+all (:meth:`BlueZAdapter.open_channel`), and choosing the channel a service
+listens on, which falls back to a guess (:meth:`BlueZAdapter._reserve_channel`).
 """
 
 # Do not add ``from __future__ import annotations`` to this module. dbus-fast
@@ -20,6 +23,7 @@ number is the one thing that still needs a real socket; see
 # source text rather than the object, so the lookup would fail.
 
 import asyncio
+import errno
 import itertools
 import logging
 import os
@@ -36,12 +40,18 @@ from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
 from dbus_fast.service import ServiceInterface, method
 from typing_extensions import override
 
-from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel, BackendProvider
+from aio_rfcomm.backend.provider import (
+    BackendAdapter,
+    BackendChannel,
+    BackendProvider,
+    BackendService,
+)
 from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     AdapterNotFoundError,
     AdapterOffError,
+    ChannelInUseError,
     ConnectionFailedError,
     DeviceNotFoundError,
     RfcommError,
@@ -244,6 +254,130 @@ class BlueZChannel(StreamChannel):
     """
 
 
+class _ServerProfile(ServiceInterface):
+    """
+    The object BlueZ calls back with each peer that connects to a service.
+
+    Unlike the client profile, nothing is waiting for a particular device, so
+    connections go into a queue for whoever asks next. The queue is unbounded
+    because refusing a peer that BlueZ has already accepted would mean closing
+    a connection the peer believes in.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("org.bluez.Profile1")
+        self._arrived: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
+
+    async def next_connection(self) -> tuple[str, int]:
+        """
+        Wait for the next peer.
+
+        Returns:
+            The peer's object path and the connected file descriptor.
+        """
+        return await self._arrived.get()
+
+    def discard_queued(self) -> None:
+        """
+        Close any connection nobody took.
+
+        Called when the service is withdrawn. These descriptors belong to
+        peers that connected and were never handed to a handler, so closing
+        them is the only correct end.
+        """
+        while True:
+            try:
+                _, fd = self._arrived.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            logger.debug("closing fd %d, queued but never taken", fd)
+            os.close(fd)
+
+    @method()
+    def Release(self) -> None:
+        # BlueZ dropping a server registration, which for us only happens
+        # because we asked it to when the service was withdrawn.
+        logger.debug("BlueZ released the server profile")
+
+    @method()
+    def NewConnection(
+        self, device: DBusObjectPath, fd: DBusUnixFd, properties: DBusDict
+    ) -> None:
+        self._arrived.put_nowait((device, fd))
+
+    @method()
+    def RequestDisconnection(self, device: DBusObjectPath) -> None:
+        # The handler's own block is what closes a served channel, and closing
+        # the descriptor here would pull it out from under a handler that is
+        # still using it.
+        logger.debug("BlueZ asked us to disconnect %s", device)
+
+
+class BlueZService(BackendService):
+    """
+    A service published through BlueZ, listening for peers.
+    """
+
+    def __init__(self, profile: _ServerProfile, channel: int) -> None:
+        """
+        Args:
+            profile: The registered profile BlueZ calls back.
+            channel: The channel it was registered on.
+        """
+        self._profile = profile
+        self._channel = channel
+
+    @property
+    @override
+    def channel(self) -> int:
+        return self._channel
+
+    @override
+    async def accept(
+        self,
+    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
+        device_path, fd = await self._profile.next_connection()
+        return _peer_from_path(device_path), _take_connection(fd)
+
+
+def _peer_from_path(device_path: str) -> RfcommDeviceInfo:
+    """
+    Describe the peer BlueZ named by object path.
+
+    The address is read out of the path rather than fetched over D-Bus, so
+    that accepting a connection costs no round trip. The name is left unset:
+    finding it means another call, and a server that wants one can look the
+    device up itself.
+
+    Args:
+        device_path: The peer's object path, ending in ``dev_AA_BB_...``.
+
+    Returns:
+        What we know about the peer.
+    """
+    tail = device_path.rsplit("/dev_", 1)[-1]
+    return RfcommDeviceInfo(tail.replace("_", ":").upper(), None, device_path)
+
+
+@asynccontextmanager
+async def _take_connection(fd: int) -> AsyncGenerator[BackendChannel, None]:
+    """
+    Turn a descriptor BlueZ handed over into a channel, closed on exit.
+
+    Args:
+        fd: The connected file descriptor.
+
+    Yields:
+        The channel.
+    """
+    async with AsyncExitStack() as stack:
+        sock = socket.socket(fileno=fd)
+        stack.callback(sock.close)
+        reader, writer = await asyncio.open_connection(sock=sock)
+        stack.callback(writer.close)
+        yield BlueZChannel(reader, writer)
+
+
 class BlueZAdapter(BackendAdapter):
     """
     One BlueZ adapter, with a bus connection of its own.
@@ -257,6 +391,7 @@ class BlueZAdapter(BackendAdapter):
         self._path = info.id
         self._address = info.address
         self._profiles = profiles
+        self._claimed: set[int] = set()
 
     async def _interface(
         self, path: str, name: str, kind: type[_Interface]
@@ -325,6 +460,160 @@ class BlueZAdapter(BackendAdapter):
         self, device: RfcommDeviceInfo | str, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect_by_channel(device, channel)
+
+    @override
+    def serve(
+        self, service: UUID, *, name: str, channel: int | None = None
+    ) -> AbstractAsyncContextManager[BackendService]:
+        return self._serve(service, name, channel)
+
+    def _reserve_channel(self, channel: int | None) -> int:
+        """
+        Settle which channel to listen on before registering the profile.
+
+        BlueZ neither picks a channel for a server nor complains when the one
+        it is given is already taken, so the choice has to be made and checked
+        here. An RFCOMM socket bound to the adapter's own address is refused
+        with ``EADDRINUSE`` when a profile already holds that channel, and
+        binding channel 0 has the kernel pick a free one -- so a socket, used
+        only as a probe and closed again at once, answers both questions.
+
+        Binding ``BDADDR_ANY`` instead would not: it succeeds on a channel a
+        profile holds, and so would report every channel free.
+
+        Without a socket there is no probe and no safe guess, so the caller
+        has to name a channel; see :meth:`_unprobed_channel`.
+
+        The socket is closed before the profile is registered, because BlueZ
+        wants to listen on that channel itself and cannot while we hold it.
+        That leaves a moment in which another program could take the channel,
+        which is not worth avoiding: closing the window entirely would mean
+        never letting BlueZ listen at all.
+
+        Args:
+            channel: The channel the caller asked for, or ``None`` for any.
+
+        Returns:
+            The channel to register on.
+
+        Raises:
+            ChannelInUseError: The requested channel is taken, or there is
+                none free.
+            UnsupportedOperationError: No channel was named and this Python
+                cannot probe for one.
+        """
+        if not hasattr(socket, "AF_BLUETOOTH") or self._address is None:
+            return self._unprobed_channel(channel)
+
+        probe = socket.socket(
+            socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM
+        )
+        try:
+            try:
+                probe.bind((self._address, channel or 0))
+                # The kernel does not settle on a channel until the socket is
+                # listening, so binding channel 0 and reading the name back
+                # without this returns 0 rather than the channel it picked.
+                probe.listen(1)
+            except OSError as error:
+                if error.errno == errno.EADDRINUSE:
+                    raise ChannelInUseError(
+                        f"channel {channel} is already in use on {self._address}"
+                        if channel is not None
+                        else "every RFCOMM channel on this adapter is in use"
+                    ) from error
+                raise ConnectionFailedError(
+                    f"could not reserve a channel on {self._address}: {error}"
+                ) from error
+            return probe.getsockname()[1]
+        finally:
+            probe.close()
+
+    def _unprobed_channel(self, channel: int | None) -> int:
+        """
+        Settle on a channel with no socket to check it against.
+
+        The ``python-build-standalone`` builds -- the ones ``uv`` installs --
+        have no ``AF_BLUETOOTH``, so on those nothing can be probed. A channel
+        the caller named is taken at their word and used unchecked. Choosing
+        one here is refused instead of guessed: BlueZ says nothing when a
+        registration lands on a channel another profile holds, so a wrong
+        guess would publish a service that simply never appears, which is
+        worse than saying up front that the choice cannot be made.
+
+        Args:
+            channel: The channel the caller asked for, or ``None`` for any.
+
+        Returns:
+            The channel to register on.
+
+        Raises:
+            ChannelInUseError: This process is already serving on it.
+            UnsupportedOperationError: No channel was named and none can be
+                chosen.
+        """
+        if channel is None:
+            raise UnsupportedOperationError(
+                "choosing a channel to serve on needs a Python built with "
+                "Bluetooth socket support, and this one has none. BlueZ neither "
+                "picks a channel for a server nor reports which are free, and a "
+                "registration that collides is published as nothing at all. "
+                "Pass an explicit channel, or use a Python built against "
+                "libbluetooth."
+            )
+        if channel in self._claimed:
+            raise ChannelInUseError(
+                f"this process is already serving on channel {channel}"
+            )
+        return channel
+
+    @asynccontextmanager
+    async def _serve(
+        self, service: UUID, name: str, channel: int | None
+    ) -> AsyncGenerator[BackendService, None]:
+        """
+        Publish a service and listen for peers.
+
+        BlueZ will not publish a record unless it is told which channel to
+        listen on: registering without one succeeds and quietly advertises
+        nothing, which was measured rather than assumed. So a channel is
+        always settled here -- see :meth:`_reserve_channel` -- and always
+        reported back.
+        """
+        channel = self._reserve_channel(channel)
+
+        path = f"/org/aio_rfcomm/server{next(_profile_paths)}"
+        profile = _ServerProfile()
+        manager = await self._interface(
+            "/org/bluez", _PROFILE_MANAGER, _ProfileManagerProxy
+        )
+
+        self._bus.export(path, profile)
+        self._claimed.add(channel)
+        try:
+            try:
+                await manager.call_register_profile(
+                    path,
+                    str(service),
+                    {
+                        "Role": Variant("s", "server"),
+                        "Name": Variant("s", name),
+                        "Channel": Variant("q", channel),
+                        "RequireAuthentication": Variant("b", False),
+                        "RequireAuthorization": Variant("b", False),
+                    },
+                )
+            except Exception as error:
+                raise _translate_registration(error, str(service)) from error
+
+            try:
+                yield BlueZService(profile, channel)
+            finally:
+                await manager.call_unregister_profile(path)
+        finally:
+            self._claimed.discard(channel)
+            self._bus.unexport(path)
+            profile.discard_queued()
 
     def _device_path(self, device: RfcommDeviceInfo | str) -> str:
         """
