@@ -19,16 +19,20 @@ import pytest
 pytest.importorskip("dbus_fast", reason="the Linux backend needs dbus-fast")
 
 from aio_rfcomm.backend.bluez import (
+    BlueZAdapter,
     _Profile,
     _Profiles,
     _translate_connect,
     _translate_registration,
     _wanted,
 )
+from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
+    ChannelInUseError,
     ConnectionFailedError,
     DeviceNotFoundError,
     ServiceNotFoundError,
+    UnsupportedOperationError,
 )
 
 DEVICE = "/org/bluez/hci0/dev_00_11_22_33_44_55"
@@ -277,3 +281,57 @@ async def test_channel_numbers_need_bluetooth_sockets(
     with pytest.raises(UnsupportedOperationError, match="libbluetooth"):
         async with adapter.open_channel("00:11:22:33:44:55", 1):
             pass
+
+
+# --------------------------------------------------------------------------
+# Choosing a channel to serve on
+# --------------------------------------------------------------------------
+
+
+def _adapter(address: str | None = "00:11:22:33:44:55") -> BlueZAdapter:
+    return BlueZAdapter(
+        None,  # type: ignore[arg-type]
+        RfcommAdapterInfo("/org/bluez/hci0", address, "test"),
+        None,  # type: ignore[arg-type]
+    )
+
+
+def test_choosing_a_channel_needs_a_bluetooth_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    BlueZ neither picks a channel for a server nor says which are free, and a
+    registration that lands on a taken one is published as nothing at all. So
+    with no socket to probe with, refusing beats guessing: a wrong guess would
+    hand back a service that never appears.
+    """
+    monkeypatch.delattr(socket, "AF_BLUETOOTH", raising=False)
+    with pytest.raises(UnsupportedOperationError, match="libbluetooth"):
+        _adapter()._reserve_channel(None)
+
+
+def test_an_asked_for_channel_is_kept_when_it_cannot_be_probed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(socket, "AF_BLUETOOTH", raising=False)
+    assert _adapter()._reserve_channel(7) == 7
+
+
+def test_an_unprobed_channel_this_process_serves_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(socket, "AF_BLUETOOTH", raising=False)
+    adapter = _adapter()
+    adapter._claimed.add(9)
+    with pytest.raises(ChannelInUseError, match="channel 9"):
+        adapter._reserve_channel(9)
+
+
+def test_an_adapter_with_no_address_cannot_probe_either() -> None:
+    """
+    The probe binds the adapter's own address, because binding BDADDR_ANY
+    succeeds on a channel a profile already holds and so would report every
+    channel free. With no address to bind, there is nothing to probe with.
+    """
+    with pytest.raises(UnsupportedOperationError, match="libbluetooth"):
+        _adapter(address=None)._reserve_channel(None)
