@@ -18,6 +18,7 @@ hanging up from a link dropping says so by overriding
 from __future__ import annotations
 
 import asyncio
+import errno
 
 from typing_extensions import override
 
@@ -52,7 +53,7 @@ class StreamChannel(BackendChannel):
             self._writer.write(data)
             await self._writer.drain()
         except OSError as error:
-            raise self._lost() from error
+            raise await self._closed_error() from error
 
     @override
     async def receive(self, max_bytes: int | None = None) -> bytes:
@@ -61,7 +62,16 @@ class StreamChannel(BackendChannel):
                 max_bytes if max_bytes is not None else _DEFAULT_READ_BYTES
             )
         except OSError as error:
-            raise self._lost() from error
+            if error.errno != errno.ECONNRESET:
+                raise await self._closed_error() from error
+            # RFCOMM reports a peer's orderly disconnect as a reset rather
+            # than as an end of stream, at least to the side that accepted
+            # the connection -- measured against BlueZ, where a macOS peer
+            # leaving its ``async with`` block arrives here as ECONNRESET.
+            # Treating it as a failure would make every ordinary hang-up
+            # raise, so it is the same event as a read of nothing and is
+            # explained the same way.
+            data = b""
 
         if not data:
             reason = await self.explain_end()
@@ -86,16 +96,17 @@ class StreamChannel(BackendChannel):
         """
         return CloseReason.PEER_CLOSED
 
-    def _lost(self) -> ChannelClosedError:
+    async def _closed_error(self) -> ChannelClosedError:
         """
         Turn a failed read or write into the end of the channel.
 
-        A dropped link arrives as ``ECONNRESET`` or similar rather than as an
-        orderly end of stream, and no bare :class:`OSError` should reach the
-        caller.
+        No bare :class:`OSError` should reach the caller, and the backend is
+        asked why rather than told, so that a platform which can tell a
+        hang-up from a lost link says which it was.
 
         Returns:
             The error to raise instead.
         """
-        self._mark_gone(CloseReason.LINK_LOST)
-        return ChannelClosedError(CloseReason.LINK_LOST)
+        reason = await self.explain_end()
+        self._mark_gone(reason)
+        return ChannelClosedError(reason)
