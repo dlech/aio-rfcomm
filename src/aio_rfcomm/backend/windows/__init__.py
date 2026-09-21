@@ -22,6 +22,7 @@ it fails and then succeeds with nothing changed, so it is retried.
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import socket
 import threading
@@ -42,6 +43,8 @@ from winrt.windows.devices.enumeration import DeviceInformation
 from winrt.windows.devices.radios import RadioState
 
 from aio_rfcomm.backend.provider import (
+    FIRST_CHANNEL,
+    LAST_CHANNEL,
     BackendAdapter,
     BackendChannel,
     BackendProvider,
@@ -49,15 +52,16 @@ from aio_rfcomm.backend.provider import (
 )
 from aio_rfcomm.backend.sdp import SdpError, read_channel
 from aio_rfcomm.backend.stream import StreamChannel
+from aio_rfcomm.backend.windows import _service
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     AdapterNotFoundError,
     AdapterOffError,
+    ChannelInUseError,
     ConnectionFailedError,
     DeviceNotFoundError,
     RfcommError,
     ServiceNotFoundError,
-    UnsupportedOperationError,
 )
 
 __all__ = ["WindowsBackend"]
@@ -74,6 +78,9 @@ _ADDRESS = "System.DeviceInterface.Bluetooth.DeviceAddress"
 # These are not a limit on how long a caller may wait -- that is the caller's
 # to decide with a cancel scope -- but the point at which retrying stops
 # looking like flakiness and starts looking like a device that is not there.
+# How many peers may be waiting to be accepted before Windows refuses them.
+_BACKLOG = 4
+
 _ATTEMPTS = 4
 _BACKOFF_SECONDS = 0.5
 
@@ -85,6 +92,112 @@ class WindowsChannel(StreamChannel):
     Nothing to add: once connected it is an ordinary stream. It stays a class
     of its own so that a backtrace names the platform.
     """
+
+
+class WindowsService(BackendService):
+    """
+    A listening RFCOMM socket with a published record behind it.
+    """
+
+    def __init__(self, sock: socket.socket, channel: int) -> None:
+        """
+        Args:
+            sock: The listening socket.
+            channel: The channel it is bound to.
+        """
+        self._sock = sock
+        self._channel = channel
+
+    @property
+    @override
+    def channel(self) -> int:
+        return self._channel
+
+    @override
+    async def accept(
+        self,
+    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
+        """
+        Wait for a peer, on a thread, because the loop cannot do it.
+
+        ``ProactorEventLoop`` cannot accept an RFCOMM connection at all:
+        asyncio builds the socket to accept onto with ``socket.socket(family)``
+        and no protocol, which ``AF_BLUETOOTH`` rejects with
+        ``WSAEPROTONOSUPPORT``. ``asyncio.start_server`` fails the same way,
+        only later and into the loop's exception handler. So the blocking
+        accept runs on a daemon thread, the same shape the outgoing connect
+        uses and for the same reasons (see :func:`_reach`); the accepted
+        socket then works with overlapped I/O like any other.
+        """
+        loop = asyncio.get_running_loop()
+        arrived: asyncio.Future[tuple[socket.socket, str]] = loop.create_future()
+
+        def wait() -> None:
+            try:
+                conn, peer = self._sock.accept()
+            except BaseException as error:  # noqa: BLE001  (carried to the waiter)
+                loop.call_soon_threadsafe(_deliver, arrived, None, error)
+            else:
+                loop.call_soon_threadsafe(_deliver, arrived, (conn, peer[0]), None)
+
+        threading.Thread(
+            target=wait, name=f"aio-rfcomm accept {self._channel}", daemon=True
+        ).start()
+
+        try:
+            conn, address = await arrived
+        except asyncio.CancelledError:
+            # The service is being withdrawn: closing the listening socket is
+            # what makes the blocked accept return, and is wanted anyway.
+            self._sock.close()
+            raise
+
+        # accept() hands the peer back already formatted, unlike the integer
+        # addresses WinRT deals in, so _format has nothing to do here.
+        return RfcommDeviceInfo(address.upper(), None), _take(conn)
+
+
+def _deliver(
+    arrived: asyncio.Future[tuple[socket.socket, str]],
+    result: tuple[socket.socket, str] | None,
+    error: BaseException | None,
+) -> None:
+    """
+    Hand an accept thread's outcome back to whoever is waiting.
+
+    Args:
+        arrived: The future the waiter is on.
+        result: The accepted socket and the peer's address.
+        error: What went wrong instead.
+    """
+    if arrived.done():
+        if result is not None:
+            # Nobody is waiting any more, so this connection is ours to close.
+            result[0].close()
+        return
+    if error is None:
+        assert result is not None
+        arrived.set_result(result)
+    else:
+        arrived.set_exception(error)
+
+
+@asynccontextmanager
+async def _take(conn: socket.socket) -> AsyncGenerator[BackendChannel, None]:
+    """
+    Turn an accepted socket into a channel, closed on exit.
+
+    Args:
+        conn: The accepted socket.
+
+    Yields:
+        The channel.
+    """
+    async with AsyncExitStack() as stack:
+        stack.callback(conn.close)
+        reader, writer = await asyncio.open_connection(sock=conn)
+        stack.callback(writer.close)
+        yield WindowsChannel(reader, writer)
 
 
 class WindowsAdapter(BackendAdapter):
@@ -147,10 +260,38 @@ class WindowsAdapter(BackendAdapter):
     def serve(
         self, service: UUID, *, name: str, channel: int | None = None
     ) -> AbstractAsyncContextManager[BackendService]:
-        raise UnsupportedOperationError(
-            "serving a service is not implemented on Windows yet. It needs "
-            "a published SDP record, which is still being worked out. Connecting to a service from this machine works."
-        )
+        return self._serve(service, name, channel)
+
+    @asynccontextmanager
+    async def _serve(
+        self, service: UUID, name: str, channel: int | None
+    ) -> AsyncGenerator[BackendService, None]:
+        """
+        Listen on a channel and advertise it.
+
+        Binding answers which channels are free, which is the part BlueZ
+        cannot do: a channel another program holds is refused with
+        ``WSAEADDRINUSE`` rather than quietly accepted. Binding channel zero
+        does not pick one, though -- the socket stays on zero -- so a free
+        channel is found by trying them.
+        """
+        async with AsyncExitStack() as stack:
+            sock = socket.socket(
+                socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM
+            )
+            stack.callback(sock.close)
+            chosen = _bind_channel(sock, channel)
+            sock.listen(_BACKLOG)
+
+            try:
+                _service.register(service, name, chosen)
+            except OSError as error:
+                raise ConnectionFailedError(
+                    f"could not advertise {service} on channel {chosen}: {error}"
+                ) from error
+            stack.callback(_deregister, service, name, chosen)
+
+            yield WindowsService(sock, chosen)
 
     @asynccontextmanager
     async def _connect(
@@ -478,6 +619,66 @@ async def _open_socket(
         f"could not reach {address} on channel {channel} after "
         f"{_ATTEMPTS} attempts: {last}"
     )
+
+
+def _bind_channel(sock: socket.socket, channel: int | None) -> int:
+    """
+    Put a listening socket on a channel, or find it one.
+
+    Args:
+        sock: The socket to bind.
+        channel: The channel asked for, or ``None`` for any free one.
+
+    Returns:
+        The channel bound.
+
+    Raises:
+        ChannelInUseError: The requested channel is taken, or none is free.
+    """
+    if channel is not None:
+        try:
+            sock.bind((socket.BDADDR_ANY, channel))
+        except OSError as error:
+            if error.errno == errno.EADDRINUSE:
+                raise ChannelInUseError(
+                    f"channel {channel} is already in use on this machine"
+                ) from error
+            raise ConnectionFailedError(
+                f"could not listen on channel {channel}: {error}"
+            ) from error
+        return channel
+
+    # Counted down from the top, where the profiles Windows publishes itself
+    # are least likely to be.
+    for candidate in range(LAST_CHANNEL, FIRST_CHANNEL - 1, -1):
+        try:
+            sock.bind((socket.BDADDR_ANY, candidate))
+        except OSError as error:
+            if error.errno == errno.EADDRINUSE:
+                continue
+            raise ConnectionFailedError(
+                f"could not listen on channel {candidate}: {error}"
+            ) from error
+        return candidate
+
+    raise ChannelInUseError("every RFCOMM channel on this machine is in use")
+
+
+def _deregister(service: UUID, name: str, channel: int) -> None:
+    """
+    Stop advertising, and say so if Windows refuses.
+
+    Args:
+        service: The service UUID.
+        name: The name it was published under.
+        channel: The channel it was published on.
+    """
+    failure = _service.delete(service, name, channel)
+    if failure:
+        # Not raised: Windows drops the record when the process exits anyway,
+        # and the delete is refused even for a query set that registered
+        # cleanly. Worth a line in the log and nothing more.
+        logger.debug("WSASetService would not withdraw %s: error %d", service, failure)
 
 
 async def _reach(sock: socket.socket, address: str, channel: int) -> None:
