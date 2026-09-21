@@ -133,9 +133,17 @@ class IOBluetoothAdapter(BackendAdapter):
     def serve(
         self, service: UUID, *, name: str, channel: int | None = None
     ) -> AbstractAsyncContextManager[BackendService]:
+        # Measured, not assumed: a service record publishes correctly and a
+        # peer's connection to it is accepted, but IOBluetooth never delivers
+        # the opened channel -- registerForChannelOpenNotifications does not
+        # fire, filtered or not, exactly as registerForChannelCloseNotification
+        # does not. So the connection is taken and then dropped, and there is
+        # nothing here to hand a caller.
         raise UnsupportedOperationError(
-            "serving a service is not implemented on macOS yet. It needs "
-            "an SDP record encoder, which this library does not have yet. Connecting to a service from this machine works."
+            "serving is not implemented on macOS. A service record can be "
+            "published and a peer can reach it, but IOBluetooth never hands "
+            "over the opened channel, so nothing can answer. Connecting to "
+            "another machine's service from here works."
         )
 
     @asynccontextmanager
