@@ -14,6 +14,8 @@ from collections.abc import AsyncGenerator, Collection
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
+from typing_extensions import override
+
 from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel, BackendProvider
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import AdapterLostReason, CloseReason
@@ -34,11 +36,13 @@ class FakeChannel(BackendChannel):
         self.send_blocks = False
         self._incoming: asyncio.Queue[bytes] = asyncio.Queue()
 
+    @override
     async def send(self, data: bytes) -> None:
         if self.send_blocks:
             await asyncio.Event().wait()
         self.sent += data
 
+    @override
     async def receive(self, max_bytes: int | None = None) -> bytes:
         return await self._incoming.get()
 
@@ -67,16 +71,19 @@ class FakeAdapter(BackendAdapter):
         self.open_calls = 0
         self.channels: list[FakeChannel] = []
 
+    @override
     async def list_known_devices(
         self, *, service: UUID | Collection[UUID] | None = None
     ) -> list[RfcommDeviceInfo]:
         return [DEVICE]
 
+    @override
     def open_service(
         self, device: RfcommDeviceInfo | str, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._open()
 
+    @override
     def open_channel(
         self, device: RfcommDeviceInfo | str, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
@@ -111,9 +118,11 @@ class FakeProvider(BackendProvider):
     def __init__(self) -> None:
         self.adapters: list[FakeAdapter] = []
 
+    @override
     async def list_adapters(self) -> list[RfcommAdapterInfo]:
         return [ADAPTER]
 
+    @override
     def open_adapter(
         self, adapter: RfcommAdapterInfo | None = None
     ) -> AbstractAsyncContextManager[BackendAdapter]:
