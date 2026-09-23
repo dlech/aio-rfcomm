@@ -42,9 +42,14 @@ test = [
     "pytest-asyncio>=0.25",
     "pytest-timeout>=2.3",
 ]
+# Only the chat example needs a terminal UI; the library itself has no
+# dependency on one.
+demo = [
+    "prompt-toolkit>=3.0",
+]
 
 [tool.uv]
-default-groups = ["lint", "test"]
+default-groups = ["lint", "test", "demo"]
 
 # Prototypes are verbatim copies of working spikes from other repositories,
 # and typings/ holds stubs for rubicon-objc, which ships none of its own,
