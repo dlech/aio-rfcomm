@@ -54,6 +54,7 @@ __all__ = [
     "list_adapters",
     "list_known_devices",
     "open_channel",
+    "read_authorization",
     "read_power_state",
 ]
 
@@ -61,6 +62,11 @@ __all__ = [
 # not touch the radio, so it does not trigger the permission check that ends
 # the process; the first call that needs Bluetooth does.
 load_library("IOBluetooth")
+
+# CoreBluetooth is loaded only for CBManager.authorization, which is the one
+# way to tell "the user has not allowed Bluetooth" from "the radio is off".
+# Reading it does not prompt and does not touch the radio.
+load_library("CoreBluetooth")
 
 
 # --------------------------------------------------------------------------
@@ -384,6 +390,34 @@ class _ChannelDelegate(NSObject, protocols=[IOBluetoothRFCOMMChannelDelegate]):
 # --------------------------------------------------------------------------
 # Enumeration
 # --------------------------------------------------------------------------
+
+
+class _ManagerClass(Protocol):
+    """
+    The one class property we want from ``CBManager``.
+    """
+
+    @property
+    def authorization(self) -> int: ...
+
+
+CBManager = cast(_ManagerClass, _class("CBManager"))
+
+
+def read_authorization() -> int:
+    """
+    Read whether this process may use Bluetooth at all.
+
+    macOS reports an unauthorised radio as switched off, so without this a
+    program whose permission was never granted -- or was refused -- is told
+    to turn Bluetooth on, which it already is. Reading this neither prompts
+    nor touches the radio.
+
+    Returns:
+        A ``CBManagerAuthorization``. rubicon hands ``NSInteger`` back as a
+        Python ``int`` already, so there is nothing to convert.
+    """
+    return CBManager.authorization
 
 
 def read_power_state() -> bool:

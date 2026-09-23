@@ -18,6 +18,7 @@ other backends produce, so everything after the connection is shared code.
 from __future__ import annotations
 
 import asyncio
+import enum
 import os
 import socket
 from collections.abc import AsyncGenerator, Collection
@@ -40,10 +41,44 @@ from aio_rfcomm.errors import (
     AdapterOffError,
     CloseReason,
     ConnectionFailedError,
+    PermissionDeniedError,
+    RfcommError,
     UnsupportedOperationError,
 )
 
-__all__ = ["IOBluetoothBackend"]
+__all__ = ["Authorization", "IOBluetoothBackend"]
+
+
+class Authorization(enum.IntEnum):
+    """
+    Whether this program may use Bluetooth, as CoreBluetooth reports it.
+
+    macOS tells a program it may not use that the radio is switched off, so
+    this is the only thing that separates the two. The members are
+    CoreBluetooth's own ``CBManagerAuthorization`` cases without their shared
+    prefix, and carry its values because the helper sends them as numbers.
+    """
+
+    NOT_DETERMINED = 0
+    """
+    ``CBManagerAuthorizationNotDetermined`` -- nobody has been asked yet.
+    """
+
+    RESTRICTED = 1
+    """
+    ``CBManagerAuthorizationRestricted`` -- forbidden by a profile or by
+    parental controls, not by a choice the user can reverse.
+    """
+
+    DENIED = 2
+    """
+    ``CBManagerAuthorizationDenied`` -- the user said no.
+    """
+
+    ALLOWED_ALWAYS = 3
+    """
+    ``CBManagerAuthorizationAllowedAlways`` -- the user said yes.
+    """
 
 
 class IOBluetoothChannel(StreamChannel):
@@ -232,14 +267,53 @@ class IOBluetoothBackend(BackendProvider):
             if not any(a.id == chosen.id for a in available):
                 raise AdapterNotFoundError(chosen.id)
 
-            powered, _fds = await helper.ask("powered")
-            if not powered:
-                raise AdapterOffError(
-                    f"{chosen.name or 'this Mac'}'s Bluetooth is switched off; "
-                    "turn it on"
-                )
+            radio, _fds = await helper.ask("powered")
+            if not radio["powered"]:
+                raise _no_radio(radio["authorization"], chosen.name)
 
             yield IOBluetoothAdapter(helper, chosen)
+
+
+def _no_radio(authorization: int, name: str | None) -> RfcommError:
+    """
+    Say why the radio is unusable, which is not always that it is off.
+
+    macOS reports Bluetooth as switched off to a process that may not use it,
+    so the obvious message sends someone to turn on a radio that is already
+    on. The authorization is what tells the two apart.
+
+    Args:
+        authorization: A ``CBManagerAuthorization`` from the helper.
+        name: The adapter's name, if it has one.
+
+    Returns:
+        The error to raise.
+    """
+    match authorization:
+        case Authorization.DENIED:
+            return PermissionDeniedError(
+                "Bluetooth was refused for this program. Allow it under "
+                "Privacy & Security > Bluetooth in System Settings. Note that "
+                "the name passed to aio_rfcomm.macos.prompt_under_own_name() "
+                "is what the permission is remembered against, so changing it "
+                "asks again."
+            )
+        case Authorization.RESTRICTED:
+            return PermissionDeniedError(
+                "Bluetooth is not allowed on this Mac, by a profile or "
+                "parental controls rather than by a choice this program can "
+                "undo."
+            )
+        case Authorization.NOT_DETERMINED:
+            return PermissionDeniedError(
+                "Bluetooth permission for this program has not been answered. "
+                "A dialog should have appeared; if it was dismissed, run the "
+                "program again and allow it."
+            )
+        case _:
+            return AdapterOffError(
+                f"{name or 'this Mac'}'s Bluetooth is switched off; turn it on"
+            )
 
 
 async def _read_adapters(helper: Helper) -> list[RfcommAdapterInfo]:

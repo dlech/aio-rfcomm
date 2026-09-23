@@ -363,3 +363,62 @@ def test_the_cache_key_follows_what_goes_into_the_bundle(tmp_path) -> None:
     assert _key(interpreter, "Name", "Reason") == same
     assert _key(interpreter, "Other", "Reason") != same
     assert _key(interpreter, "Name", "Other reason") != same
+
+
+# --------------------------------------------------------------------------
+# Telling "not allowed" from "switched off"
+# --------------------------------------------------------------------------
+
+
+def test_a_refused_permission_is_not_reported_as_a_dead_radio() -> None:
+    """
+    macOS reports Bluetooth as switched off to a process that may not use it,
+    so the obvious message sends someone to turn on a radio that is already
+    on -- which is exactly the wrong place to look. This cost an evening
+    once.
+    """
+    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.errors import PermissionDeniedError
+
+    error = _no_radio(Authorization.DENIED, "thor")
+    assert isinstance(error, PermissionDeniedError)
+    assert "System Settings" in str(error)
+
+
+def test_an_unanswered_prompt_says_so() -> None:
+    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.errors import PermissionDeniedError
+
+    error = _no_radio(Authorization.NOT_DETERMINED, "thor")
+    assert isinstance(error, PermissionDeniedError)
+    assert "dialog" in str(error)
+
+
+def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
+    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.errors import PermissionDeniedError
+
+    assert isinstance(
+        _no_radio(Authorization.RESTRICTED, "thor"), PermissionDeniedError
+    )
+
+
+def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
+    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.errors import AdapterOffError
+
+    error = _no_radio(Authorization.ALLOWED_ALWAYS, "thor")
+    assert isinstance(error, AdapterOffError)
+    assert "thor" in str(error)
+    assert "switched off" in str(error)
+
+
+def test_the_renaming_trap_is_in_the_refusal_message() -> None:
+    """
+    The permission is remembered against the name given to
+    prompt_under_own_name, so renaming an application asks again -- and the
+    symptom points nowhere near the cause.
+    """
+    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+
+    assert "prompt_under_own_name" in str(_no_radio(Authorization.DENIED, None))

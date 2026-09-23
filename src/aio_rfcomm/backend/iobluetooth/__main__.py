@@ -137,7 +137,17 @@ async def _answer(link: Link, message: dict[str, Any]) -> None:
                 )
 
             case "powered":
-                link.send({"id": number, "ok": _native.read_power_state()})
+                # Both, because macOS reports an unauthorised radio as off
+                # and the caller cannot otherwise tell which it is looking at.
+                link.send(
+                    {
+                        "id": number,
+                        "ok": {
+                            "powered": _native.read_power_state(),
+                            "authorization": _native.read_authorization(),
+                        },
+                    }
+                )
 
             case "devices":
                 wanted = [UUID(u) for u in message.get("service") or []]
