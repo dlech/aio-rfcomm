@@ -3,7 +3,8 @@ name = "aio-rfcomm"
 version = "0.1.0"
 description = "Cross-platform asyncio RFCOMM (Bluetooth Classic serial port) for Linux, macOS and Windows"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "David Lechner", email = "david@pybricks.com" }
 ]
@@ -27,6 +28,11 @@ dependencies = [
     "winrt-windows-storage>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-storage-streams>=3.2.1 ; sys_platform == 'win32'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dlech/aio-rfcomm"
+Repository = "https://github.com/dlech/aio-rfcomm"
+Issues = "https://github.com/dlech/aio-rfcomm/issues"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.13.0"]
