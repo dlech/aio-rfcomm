@@ -1,59 +1,38 @@
 # aio-rfcomm
 
-Cross-platform asyncio RFCOMM (Bluetooth Classic serial port) for Linux, macOS
-and Windows.
-
-**Status: nothing is implemented yet.** This repository currently holds the
-working platform spikes in [`prototypes/`](prototypes/) and the project
-skeleton. The intended API and the measurements that constrain it are written
-up in the design notes:
-
-> **Design notes:** https://claude.ai/code/artifact/151501a7-da5f-4c70-aa28-f4d900dbc0bb
-
-## Goals
-
-- One RFCOMM API across Linux, macOS and Windows.
-- Native asyncio: works in the caller's own event loop, on any thread, with no
-  custom event loop and no run-loop integration required of the user.
-- Structured concurrency throughout — every resource owned by an `async with`
-  scope, cancellation treated as ordinary control flow.
-
-## Intended API
+Talk to Bluetooth Classic serial devices from asyncio — the same way on Linux,
+macOS and Windows.
 
 ```python
 async with aio_rfcomm.open_adapter() as adapter:
-    known = await adapter.list_known_devices(service=MY_UUID)
-    device = adapter.use_device(known[0])
+    device = adapter.use_device("00:16:53:11:C4:9A")
 
-    async with device.open_service(MY_UUID) as chan:
-        await chan.send(b"hello\n")
+    async with device.open_service(MY_SERVICE) as channel:
+        await channel.send(b"hello\n")
 
-        while data := await chan.receive():  # b"" ends the stream
+        while data := await channel.receive():
             print(data.decode(), end="")
 ```
 
-If you already know a device's address, you can skip the search entirely. It
-does not need to be paired, and giving the channel number directly saves a
-round trip looking the service up:
+That is the whole idea. RFCOMM is how most Bluetooth gadgets that predate BLE
+still talk — printers, GPS units, robots, serial adapters, a great many
+embedded boards — and reaching one from Python has meant a different library,
+a different API and a different set of surprises on every platform.
 
-```python
-async with adapter.use_device("00:16:53:11:C4:9A").open_channel(1) as chan:
-    ...
+This is one API for all three, running in your own event loop, with every
+connection owned by an `async with` block that cleans up after itself.
+
+## Install
+
+```console
+$ uv add aio-rfcomm
 ```
 
-## How each platform is reached
+## Serving, too
 
-| platform | mechanism |
-|---|---|
-| Linux | BlueZ over D-Bus; `Profile1.NewConnection` hands back a connected fd, so no `AF_BLUETOOTH` socket is ever constructed |
-| macOS | IOBluetooth in a spawned helper process, connected over an `AF_UNIX` socketpair |
-| Windows | WinRT for discovery and SDP, then a Winsock `AF_BLUETOOTH` socket |
+Publish a service and let devices connect to you (Linux and Windows):
 
-Every backend yields a file descriptor, so the core is platform-independent.
-The design notes explain why each of these is the way it is — in particular why
-macOS needs a separate process at all, and why Linux cannot use Bluetooth
-sockets.
-
-## License
-
-MIT
+```python
+async with adapter.serve(MY_SERVICE, handler, name="my thing") as service:
+    print(f"listening on channel {service.channel}")
+```
