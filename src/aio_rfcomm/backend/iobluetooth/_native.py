@@ -23,6 +23,7 @@ thread.
 
 import asyncio
 import ctypes
+import itertools
 import logging
 from collections.abc import AsyncGenerator, Collection, Iterable
 from contextlib import asynccontextmanager
@@ -212,6 +213,47 @@ _IO_TIMEOUT = ctypes.c_int32(0xE00002D6).value
 # frame that held it is gone. Keyed by the address the callback is handed.
 _in_flight: dict[int, "ctypes.py_object[asyncio.Future[int]]"] = {}
 
+
+class _Completion(Protocol):
+    """
+    A target handed to an asynchronous IOBluetooth call.
+    """
+
+    token: int
+
+
+# IOBluetooth stores the target of an asynchronous call unretained (Apple
+# FB13705522), so one has to be held here until its callback fires: a cancelled
+# caller's frame goes away while the call is still outstanding, and the
+# framework would then message a deallocated object. A callback that never
+# arrives leaks one small object, which is the cheaper of the two failures.
+_awaiting_completion: dict[int, _Completion] = {}
+_completion_tokens = itertools.count()
+
+
+def _hold(complete: _Completion) -> None:
+    """
+    Keep a completion object alive until its callback takes it back out.
+
+    Args:
+        complete: The target handed to an asynchronous IOBluetooth call.
+    """
+    _awaiting_completion[complete.token] = complete
+
+
+def _release(complete: _Completion) -> None:
+    """
+    Let go of one whose call never started.
+
+    Does nothing once the callback has already taken it out, so it is safe on
+    any path that is not cancellation.
+
+    Args:
+        complete: The target that was held.
+    """
+    _awaiting_completion.pop(complete.token, None)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -273,16 +315,19 @@ class _ConnectionComplete(NSObject):
     """
 
     future: asyncio.Future[None]
+    token: int
 
     # No return annotation: rubicon reads annotations to build the
     # Objective-C signature, and an initialiser's is already known.
     @objc_method
     def init(self):
         self.future = asyncio.get_running_loop().create_future()
+        self.token = next(_completion_tokens)
         return self
 
     @objc_method
     def connectionComplete_status_(self, _device: ObjCInstance, status: int) -> None:
+        _awaiting_completion.pop(self.token, None)
         if self.future.done():
             return
         if status:
@@ -301,14 +346,17 @@ class _QueryComplete(NSObject):
     """
 
     future: asyncio.Future[None]
+    token: int
 
     @objc_method
     def init(self):
         self.future = asyncio.get_running_loop().create_future()
+        self.token = next(_completion_tokens)
         return self
 
     @objc_method
     def sdpQueryComplete_status_(self, _device: ObjCInstance, status: int) -> None:
+        _awaiting_completion.pop(self.token, None)
         if self.future.done():
             return
         if status:
@@ -791,10 +839,12 @@ async def _connect(device: _Device, address: str) -> None:
         ConnectionFailedError: The link could not be brought up.
     """
     complete = _ConnectionComplete.alloc().init()
+    _hold(complete)
     try:
         _check(device.openConnection(complete))
         await complete.future
     except MachError as error:
+        _release(complete)
         raise _translate(error, address) from error
 
 
@@ -821,10 +871,12 @@ async def _look_up(device: _Device, address: str, service: UUID) -> int:
     record = device.getServiceRecordForUUID(uuid)
     if not record:
         complete = _QueryComplete.alloc().init()
+        _hold(complete)
         try:
             _check(device.performSDPQuery(complete))
             await complete.future
         except MachError as error:
+            _release(complete)
             raise ServiceNotFoundError(
                 f"could not read {address}'s services: {error}"
             ) from error
