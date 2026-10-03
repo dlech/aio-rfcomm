@@ -51,7 +51,8 @@ class RfcommAdapter:
         List the devices this adapter already knows about.
 
         A snapshot of what the OS knows, which in practice means paired
-        devices. Pairing happens in the OS's own settings, not here.
+        devices. Pairing is not something this library does yet, so for now
+        it happens in the OS's own settings.
 
         Descriptions come back rather than usable devices, because the caller
         is going to look through them and pick one. Hand the one you want to
