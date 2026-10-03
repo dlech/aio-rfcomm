@@ -1,0 +1,13 @@
+version: 2
+
+updates:
+  # Actions are pinned to commit SHAs, which do not move on their own. Without
+  # this they would simply rot at whatever was current the day they were
+  # written.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
