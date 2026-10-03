@@ -1,6 +1,6 @@
 [project]
 name = "aio-rfcomm"
-version = "0.1.0"
+version = "1.0.0"
 description = "Cross-platform asyncio RFCOMM (Bluetooth Classic serial port) for Linux, macOS and Windows"
 readme = "README.md"
 license = "MIT"
