@@ -1,0 +1,80 @@
+site_name: aio-rfcomm
+site_description: >-
+  Bluetooth Classic serial (RFCOMM) for asyncio, the same way on Linux, macOS
+  and Windows.
+site_url: https://dlech.github.io/aio-rfcomm/
+repo_url: https://github.com/dlech/aio-rfcomm
+repo_name: dlech/aio-rfcomm
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 David Lechner
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Guide:
+      - Connecting: connecting.md
+      - Channels: channels.md
+      - Serving: serving.md
+      - Lifetimes: lifetimes.md
+      - Errors: errors.md
+  - Platforms: platforms.md
+  - API reference: reference.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            # Nothing here is constructed by the caller -- every object comes
+            # out of an async with block -- so __init__ is noise in the index.
+            filters: ["!^_"]
+            docstring_section_style: table
+            heading_level: 3
+            members_order: source
+            separate_signature: true
+            show_root_heading: true
+            show_signature_annotations: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+
+markdown_extensions:
+  - admonition
+  # Both are what the Material theme's grid cards need: md_in_html for the
+  # markdown="1" attribute that lets a list inside a <div> still be Markdown,
+  # attr_list for the classes the cards are styled by.
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+watch:
+  - src/aio_rfcomm

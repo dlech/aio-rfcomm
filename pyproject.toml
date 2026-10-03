@@ -53,6 +53,14 @@ test = [
 demo = [
     "prompt-toolkit>=3.0",
 ]
+# The published documentation at https://dlech.github.io/aio-rfcomm/.
+# ProperDocs is a fork of MkDocs, so the Material theme and mkdocstrings --
+# which register themselves as MkDocs plugins -- are found as they are.
+docs = [
+    "properdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+]
 
 [tool.uv]
 default-groups = ["lint", "test", "demo"]
