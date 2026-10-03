@@ -106,7 +106,7 @@ class RfcommAdapter:
 
             async with adapter.serve(CHAT, talk, name="chat") as service:
                 print(f"listening on channel {service.channel}")
-                async with service.fail_when_gone():
+                async with adapter.fail_when_gone():
                     await asyncio.Event().wait()
 
         Handlers run concurrently, one per peer, and stop when this block
@@ -151,7 +151,6 @@ class RfcommAdapter:
             handler,
             service,
             name,
-            self.wait_until_gone,
             self._scope,
         )
 

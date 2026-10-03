@@ -24,13 +24,13 @@ async def talk(
 async with adapter.serve(CHAT, talk, name="my thing") as service:
     print(f"listening on channel {service.channel}")
 
-    async with service.fail_when_gone():
+    async with adapter.fail_when_gone():
         await asyncio.Event().wait()
 ```
 
 `asyncio.Event().wait()` is just a wait that never ends: a server has nothing
 else to do, and waiting on an event nobody sets costs nothing.
-[`fail_when_gone`][aio_rfcomm.RfcommService.fail_when_gone] is what makes it
+[`fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone] is what makes it
 safe, by raising *inside* that block if the adapter is switched off — otherwise
 the program would go on waiting just as patiently with no radio underneath it.
 See [Lifetimes](lifetimes.md).
@@ -80,13 +80,13 @@ block does. How you wait inside it is your business, but waiting on an
 `asyncio.Event` nothing ever sets costs nothing:
 
 ```python
-async with service.fail_when_gone():
+async with adapter.fail_when_gone():
     await asyncio.Event().wait()
 ```
 
 A loop that sleeps and re-checks achieves exactly the same nothing, at the
 price of a wakeup every time round. The
-[`fail_when_gone`][aio_rfcomm.RfcommService.fail_when_gone] wrapper is what
+[`fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone] wrapper is what
 turns the adapter being switched off into an exception rather than a hang —
 see [Lifetimes](lifetimes.md).
 

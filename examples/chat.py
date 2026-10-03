@@ -168,7 +168,7 @@ async def serve(adapter: aio_rfcomm.RfcommAdapter, channel: int | None) -> None:
         # Waiting on an event nothing ever sets costs nothing, and is how to
         # wait for something that will not happen. A loop that sleeps and
         # checks would burn wakeups to achieve the same nothing.
-        async with service.fail_when_gone():
+        async with adapter.fail_when_gone():
             await asyncio.Event().wait()
 
 

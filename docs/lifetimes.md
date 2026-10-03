@@ -41,13 +41,8 @@ peer hangs up, the block it is running in fails, and the task group cancels it.
 
 Adapters have the same method:
 [`RfcommAdapter.fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone]
-raises when the radio is switched off.
-
-[`RfcommService.fail_when_gone`][aio_rfcomm.RfcommService.fail_when_gone]
-watches exactly the same thing — the adapter underneath, not the service — and
-exists only so that a `serve` block, which already has the service in hand,
-does not have to reach back for the adapter. Either one will do, and
-`adapter.fail_when_gone()` is the clearer of the two if both are in scope.
+raises when the radio is switched off. That is the one a server wants, since a
+published service is only as alive as the radio under it.
 
 !!! note "One error, not a group"
 

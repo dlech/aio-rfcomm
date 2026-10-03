@@ -15,11 +15,10 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
 from aio_rfcomm._scope import Scope
-from aio_rfcomm._teardown import raise_when, unwrap_lone_error
+from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.backend.provider import BackendChannel, BackendService
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.discovery import RfcommDeviceInfo
-from aio_rfcomm.errors import AdapterLostError, AdapterLostReason, RfcommError
 
 __all__ = ["ConnectionHandler", "RfcommService"]
 
@@ -38,17 +37,13 @@ class RfcommService:
     A service published on an adapter, listening for peers.
 
     Handed to the caller so that it can say what was published -- most usefully
-    the channel number, which the caller may not have chosen -- and so that it
-    can stop work when the adapter underneath goes away.
+    the channel number, which the caller may not have chosen.
+
+    To stop serving when the radio goes away, use the adapter's
+    :meth:`~aio_rfcomm.RfcommAdapter.fail_when_gone`.
     """
 
-    def __init__(
-        self,
-        backend: BackendService,
-        service: UUID,
-        name: str,
-        lost: Callable[[], Awaitable[AdapterLostReason]],
-    ) -> None:
+    def __init__(self, backend: BackendService, service: UUID, name: str) -> None:
         """
         Not called directly. Services come from :meth:`~aio_rfcomm.RfcommAdapter.serve`.
 
@@ -56,12 +51,10 @@ class RfcommService:
             backend: The backend-specific service object.
             service: The service UUID that was published.
             name: The name that was published with it.
-            lost: Waits until the adapter underneath is gone.
         """
         self._backend = backend
         self._service = service
         self._name = name
-        self._lost = lost
 
     @property
     def service(self) -> UUID:
@@ -87,26 +80,6 @@ class RfcommService:
         caller.
         """
         return self._backend.channel
-
-    async def _lost_error(self) -> RfcommError:
-        return AdapterLostError(await self._lost())
-
-    def fail_when_gone(self) -> AbstractAsyncContextManager[None]:
-        """
-        Stop the enclosed block once the adapter goes away.
-
-        A server spends its life waiting, so without this it would wait just
-        as patiently on an adapter that has been switched off::
-
-            async with service.fail_when_gone():
-                await asyncio.Event().wait()
-
-        Returns:
-            An async context manager that raises
-            :class:`~aio_rfcomm.errors.AdapterLostError` in the enclosed block
-            once the adapter is gone.
-        """
-        return raise_when(self._lost_error)
 
 
 async def _handle(
@@ -178,7 +151,6 @@ async def serve_connections(
     handler: ConnectionHandler,
     service: UUID,
     name: str,
-    lost: Callable[[], Awaitable[AdapterLostReason]],
     parent: Scope,
 ) -> AsyncGenerator[RfcommService, None]:
     """
@@ -195,7 +167,6 @@ async def serve_connections(
         handler: What to run for each peer.
         service: The service UUID being published.
         name: The name being published with it.
-        lost: Waits until the adapter underneath is gone.
         parent: The adapter's scope, which the service's nests inside.
 
     Yields:
@@ -211,7 +182,7 @@ async def serve_connections(
                         _accept_forever(backend, handler, group, running, scope)
                     )
                     try:
-                        yield RfcommService(backend, service, name, lost)
+                        yield RfcommService(backend, service, name)
                     finally:
                         accepting.cancel()
                         for task in running:
