@@ -60,7 +60,60 @@ reason = await channel.wait_until_gone()
 print(f"finished: {reason.value}")
 ```
 
-## Cancellation and `send`
+## Cancellation
+
+Cancelling an operation stops *you* waiting for it. It does not stop the
+operation.
+
+Most of what this library sits on cannot be called off. There is no way to
+abort an SDP query on macOS, and none to withdraw a D-Bus method call BlueZ
+has already begun. What the library does on cancellation is whatever the
+platform allows — close the socket, tell the macOS helper process to give up,
+close a channel that finished opening after you had stopped waiting — and no
+more than that.
+
+How long it keeps running depends on which part you gave up on. Reaching the
+device is bounded by the radio: a peer that never answers ends in the page
+timeout, so an abandoned connect finishes by itself within seconds and would
+have told you [`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError]
+had you waited. Opening a channel has no such bound, and on macOS it can fail
+in a way that is never reported at all. So what you have given up is usually
+the answer rather than the work, but not always: some of it may simply never
+finish.
+
+Three consequences are worth knowing before you put a deadline around anything.
+
+**Assume the peer saw it.** A connect you gave up on may still arrive. RFCOMM
+allows one connection per device per channel, so retrying straight away can
+collide with your own abandoned attempt and fail in a way that looks like the
+device being busy. Waiting out the platform's own limit before trying again is
+the remedy, and the only one: nothing you can close on this side will make the
+peer forget a connection it has already accepted.
+
+**Cancelling is not always prompt.** On Windows the bindings wait for the
+underlying operation to finish before delivering the cancellation, so a
+cancelled service lookup unwinds when the lookup ends rather than when you asked.
+That is the safe behaviour — nothing is left half-done — but it is not an escape
+hatch from a slow device.
+
+**Do not reach for `asyncio.shield`.** The work carries on regardless, as
+above — what shielding costs you is the tidying up. The library's cleanup runs
+*on* the cancellation path: closing the socket, telling the macOS helper to
+give up, closing a channel that finished opening after you had stopped
+waiting. Shield stops the cancellation reaching that code at all, so none of
+it happens.
+
+!!! tip "Bound work with a scope, not a deadline"
+
+    When to give up is mostly yours to decide, with `asyncio.timeout`. The
+    library sets a bound of its own only in the few places where the platform
+    would otherwise leave it waiting for ever. But a deadline only bounds your
+    waiting. Leaving the `async with` block is what bounds the *work*: it
+    tears down everything underneath, including, on macOS, the helper process
+    that owns the framework's objects. Where a program needs a point at which
+    everything has definitely stopped, that is the construct to use.
+
+### Cancelling a send
 
 A cancelled [`send`][aio_rfcomm.RfcommChannel.send] leaves an unknown number of
 bytes on the wire. There is no way to find out how many, and no way to resume,
