@@ -37,7 +37,7 @@ from rubicon.objc import (
     ObjCProtocol,
     objc_method,
 )
-from rubicon.objc.runtime import libc, libobjc, load_library, objc_id
+from rubicon.objc.runtime import autoreleasepool, libc, load_library, objc_id
 from typing_extensions import override
 
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
@@ -676,15 +676,12 @@ class Channel:
         except TimeoutError:
             logger.warning("RFCOMM channel did not finish closing")
         finally:
-            pool = libobjc.objc_autoreleasePoolPush()
-            try:
+            with autoreleasepool():
                 # Deleted rather than set aside, because this object is
                 # finished: anything that reaches for the channel afterwards
                 # is a mistake and should say so.
                 del self._channel
                 del self._delegate
-            finally:
-                libobjc.objc_autoreleasePoolPop(pool)
 
 
 @asynccontextmanager
@@ -813,11 +810,8 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
         # Let go of inside a pool for the same reason Channel.close does it,
         # and without closing it: this is the previous channel, already on its
         # way out under its own steam.
-        pool = libobjc.objc_autoreleasePoolPush()
-        try:
+        with autoreleasepool():
             del opened, delegate
-        finally:
-            libobjc.objc_autoreleasePoolPop(pool)
         await asyncio.sleep(_SETTLE_SECONDS)
 
     raise ConnectionFailedError(
