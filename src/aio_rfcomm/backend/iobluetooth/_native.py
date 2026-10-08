@@ -201,6 +201,16 @@ _CLOSE_TIMEOUT = 5.0
 # is wedged, which is worth saying out loud rather than waiting on for ever.
 _OPEN_ATTEMPTS = 20
 _SETTLE_SECONDS = 0.1
+
+# How long to let a channel open go unreported before asking for it again, and
+# how many times to ask. macOS fails some opens internally -- a nil channel
+# with a zero status -- and then tells nobody, so silence is the only symptom
+# and no state distinguishes it from an open still in progress. Measured over
+# 64 successful opens: 58 to 498 ms, so this is twice the slowest. Asking
+# again costs nothing on the air: an open that did land leaves the channel
+# where the framework finds it and hands it straight back.
+_OPEN_REPORT_SECONDS = 1.0
+_OPEN_REPORT_ATTEMPTS = 4
 # kIOReturnTimeout, which IOKit builds from a system (0x38, I/O Kit), a
 # subsystem (0, common) and a code (0x2d6), giving 0xE00002D6. Statuses arrive
 # as signed 32-bit integers, which is why this one shows up in tracebacks as a
@@ -643,6 +653,25 @@ class Channel:
             return CloseReason.PEER_CLOSED
         return CloseReason.LINK_LOST
 
+    def release(self) -> None:
+        """
+        Let go of a channel without closing it.
+
+        For one whose open was never reported: it may in fact be open, in
+        which case ``closeChannel`` would close the channel the next attempt
+        means to pick up, and the caller would be left writing into a channel
+        the peer has already seen go away.
+
+        Calling this twice is harmless. The channel is unusable afterwards.
+        """
+        if not hasattr(self, "_channel"):
+            return
+
+        # Dropped inside a pool for the reason close() explains at length.
+        with autoreleasepool():
+            del self._channel
+            del self._delegate
+
     async def close(self) -> None:
         """
         Close the channel and let the framework have it back.
@@ -727,17 +756,7 @@ async def open_channel(
         # Guaranteed by the check above, which the type checker cannot see.
         number = await _look_up(device, address, cast(UUID, service))
 
-    opening = await _request(device, number, address)
-    try:
-        await opening.wait_until_open()
-    except MachError as error:
-        await opening.close()
-        raise ConnectionFailedError(
-            f"could not open channel {number} on {address}: {error}"
-        ) from error
-    except BaseException:
-        await opening.close()
-        raise
+    opening = await _open_reported(device, number, address)
 
     logger.debug("channel %d to %s is open", number, address)
     try:
@@ -746,15 +765,71 @@ async def open_channel(
         await opening.close()
 
 
+async def _open_reported(device: _Device, number: int, address: str) -> Channel:
+    """
+    Open a channel, asking again if the framework never says whether it did.
+
+    A failed open that reports no error reaches neither delegate method, so the
+    caller would otherwise wait for ever -- see :data:`_OPEN_REPORT_SECONDS`.
+    Asking again costs nothing on the air: an open that did land leaves the
+    channel where the framework finds it and hands it straight back, and one
+    that did not never reached the peer.
+
+    Args:
+        device: The ``IOBluetoothDevice``.
+        number: The RFCOMM channel number.
+        address: Its address, for the error messages.
+
+    Returns:
+        The channel, open.
+
+    Raises:
+        ConnectionFailedError: The channel could not be opened, or the
+            framework never reported one open.
+    """
+    for _attempt in range(_OPEN_REPORT_ATTEMPTS):
+        opening = await _request(device, number, address)
+        try:
+            async with asyncio.timeout(_OPEN_REPORT_SECONDS):
+                await opening.wait_until_open()
+        except MachError as error:
+            await opening.close()
+            raise ConnectionFailedError(
+                f"could not open channel {number} on {address}: {error}"
+            ) from error
+        except TimeoutError:
+            logger.debug(
+                "channel %d to %s was never reported open; asking again",
+                number,
+                address,
+            )
+            opening.release()
+            continue
+        except BaseException:
+            await opening.close()
+            raise
+        return opening
+
+    raise ConnectionFailedError(
+        f"the framework never reported channel {number} on {address} open, "
+        f"after {_OPEN_REPORT_ATTEMPTS} attempts"
+    )
+
+
 async def _request(device: _Device, number: int, address: str) -> Channel:
     """
     Ask the framework for a channel, waiting out the previous one if need be.
 
-    A channel that comes back already open is the previous channel to this
-    device on this number, which the framework keeps handing over until it has
-    finished tearing that one down. It sends no open-complete callback for it,
-    so waiting on one would wait for ever, and writing to it would deliver
-    this caller's bytes to whoever had it before.
+    A channel that comes back already open was not opened by this call: the
+    framework found one on that number and bound this wrapper to it instead.
+    Nothing is outstanding, so no open-complete callback is coming and
+    waiting on one would wait for ever. Such a wrapper is no use either --
+    the framework binds it and sets its delegate but never wires its
+    streams, so it can be written to and never delivers a byte, and what is
+    written goes to whoever still holds the channel. It is the previous
+    channel to this device on this number, which the framework keeps handing
+    over until it has finished tearing that one down, so the thing to do is
+    wait and ask again.
 
     Waiting and asking again is cruder than waiting for the framework to say
     the old channel is gone, but nothing says so. ``rfcommChannelClosed:``
@@ -803,7 +878,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
             return Channel(opened, delegate, device)
 
         logger.debug(
-            "channel %d on %s is still closing from an earlier use; waiting",
+            "channel %d on %s is still open from an earlier use; waiting",
             number,
             address,
         )
@@ -815,8 +890,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
         await asyncio.sleep(_SETTLE_SECONDS)
 
     raise ConnectionFailedError(
-        f"channel {number} on {address} is still open from an earlier "
-        "connection and did not finish closing"
+        f"channel {number} on {address} is already open and did not come free"
     )
 
 
