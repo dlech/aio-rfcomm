@@ -57,15 +57,17 @@ hold.
 
 ### Serving does not work
 
-Publishing a service record succeeds, and a peer connecting to it *is* accepted
-at the Bluetooth level — but the channel-open notification never reaches the
-program, filtered or not. IOBluetooth is now a shim over CoreBluetooth, and the
-classic server path appears not to have survived that.
+A service record cannot be published at all. IOBluetooth builds one from a
+dictionary of data elements, and the encoder that turns that dictionary into SDP
+corrupts every data element sequence: in place of the sequence's contents it
+writes out the dictionary's own key names, the literal strings
+`DataElementType` and `DataElementValue`. Every useful RFCOMM record needs a
+protocol descriptor list, which is a sequence, so the publish fails and the
+system logs a parse error.
 
 [`serve`][aio_rfcomm.RfcommAdapter.serve] therefore raises
 [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] on
-macOS rather than publishing a record that silently never delivers a
-connection. Connecting is unaffected.
+macOS. Connecting from this machine is unaffected, within the limit above.
 
 ## Stale service records
 
