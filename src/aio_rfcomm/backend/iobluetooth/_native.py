@@ -47,6 +47,7 @@ from aio_rfcomm.errors import (
     DeviceNotFoundError,
     RfcommError,
     ServiceNotFoundError,
+    UnsupportedOperationError,
 )
 
 __all__ = [
@@ -239,6 +240,11 @@ class _Completion(Protocol):
 # arrives leaks one small object, which is the cheaper of the two failures.
 _awaiting_completion: dict[int, _Completion] = {}
 _completion_tokens = itertools.count()
+
+# Devices a caller is using. Claimed before the link is brought up and held
+# until after the channel closes, so for part of its life there is no channel
+# yet -- see open_channel, which is the only thing that puts anything here.
+_in_use: set[str] = set()
 
 
 def _hold(complete: _Completion) -> None:
@@ -736,6 +742,7 @@ async def open_channel(
         DeviceNotFoundError: The device did not answer.
         ServiceNotFoundError: The device does not offer that service.
         ConnectionFailedError: The channel could not be opened.
+        UnsupportedOperationError: The device already has a channel open.
     """
     if (service is None) == (channel is None):
         raise TypeError("open_channel takes exactly one of service and channel")
@@ -745,24 +752,53 @@ async def open_channel(
         raise DeviceNotFoundError(f"{address} is not a Bluetooth address")
     logger.debug("%s: connected=%s", address, device.isConnected())
 
-    # Both paths need the baseband link: an SDP query runs over it, and so
-    # does the channel itself.
-    if not device.isConnected():
-        await _connect(device, address)
-
-    if channel is not None:
-        number = channel
-    else:
-        # Guaranteed by the check above, which the type checker cannot see.
-        number = await _look_up(device, address, cast(UUID, service))
-
-    opening = await _open_reported(device, number, address)
-
-    logger.debug("channel %d to %s is open", number, address)
+    # One caller at a time per device, refused rather than queued, because
+    # macOS gets a second one wrong three separate ways. Connecting keeps one
+    # completion target per device, so a second ``openConnection:`` while one
+    # is outstanding overwrites the first's and that caller waits for ever.
+    # Opening a channel likewise installs its completion in a slot the device
+    # has only one of. And closing is serviced in the order channels were
+    # opened rather than the one asked for, so with two open, closing either
+    # tears down the wrong one and writes to the other go nowhere -- measured
+    # against a peer listening on three channels: asked to close 6, then 5,
+    # then 4, and 4, 5, 6 closed in that order, with the right number on the
+    # wire each time.
+    #
+    # All three are per device. Two devices at once share nothing: measured
+    # with channels open to two at the same time, neither the channels, the
+    # delegates nor the data crossed, and both closes were reported. So this
+    # is claimed per address, and before the first await, so that two callers
+    # racing here cannot both pass.
+    key = address.upper()
+    if key in _in_use:
+        raise UnsupportedOperationError(
+            f"{address} already has an RFCOMM channel open, and macOS cannot "
+            "hold two to one device at once -- it closes them in the order "
+            "they were opened rather than the one asked for, which loses both. "
+            "Close the first channel before opening another."
+        )
+    _in_use.add(key)
     try:
-        yield opening
+        # Both paths need the baseband link: an SDP query runs over it, and so
+        # does the channel itself.
+        if not device.isConnected():
+            await _connect(device, address)
+
+        if channel is not None:
+            number = channel
+        else:
+            # Guaranteed by the check above, which the type checker cannot see.
+            number = await _look_up(device, address, cast(UUID, service))
+
+        opening = await _open_reported(device, number, address)
+
+        logger.debug("channel %d to %s is open", number, address)
+        try:
+            yield opening
+        finally:
+            await opening.close()
     finally:
-        await opening.close()
+        _in_use.discard(key)
 
 
 async def _open_reported(device: _Device, number: int, address: str) -> Channel:

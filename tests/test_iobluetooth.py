@@ -18,7 +18,7 @@ import asyncio
 import os
 import socket
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import pytest
 
@@ -28,7 +28,11 @@ if not hasattr(socket, "AF_UNIX"):
         allow_module_level=True,
     )
 
-from aio_rfcomm.backend.iobluetooth import _reason, _wanted
+from aio_rfcomm.backend.iobluetooth import (
+    IOBluetoothAdapter,
+    _reason,
+    _wanted,
+)
 from aio_rfcomm.backend.iobluetooth._bundle import _identifier, _key
 from aio_rfcomm.backend.iobluetooth._helper import (
     Helper,
@@ -36,6 +40,7 @@ from aio_rfcomm.backend.iobluetooth._helper import (
     _rebuild,
 )
 from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, ProtocolError
+from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
     CloseReason,
     ConnectionFailedError,
@@ -422,3 +427,79 @@ def test_the_renaming_trap_is_in_the_refusal_message() -> None:
     from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
 
     assert "prompt_under_own_name" in str(_no_radio(Authorization.DENIED, None))
+
+
+# --------------------------------------------------------------------------
+# Letting go of a device
+# --------------------------------------------------------------------------
+
+
+async def test_a_close_waits_for_the_helper_to_let_the_device_go() -> None:
+    """
+    Closing this end of the socket is what tells the helper to stop, but it
+    holds the device for as long as its own teardown takes and refuses another
+    channel to that device meanwhile. So the close is not over until the
+    helper says it is.
+    """
+    async with _helper() as (helper, there):
+        helper.expect(7)
+        waiting = asyncio.ensure_future(helper.wait_until_finished(7))
+        await asyncio.sleep(0.01)
+        assert not waiting.done()
+
+        there.send({"event": "finished", "handle": 7})
+        async with asyncio.timeout(1):
+            await waiting
+
+
+async def test_a_helper_that_has_gone_is_holding_nothing() -> None:
+    """
+    Waiting for a confirmation that can no longer come would wedge every later
+    open to that device.
+    """
+    async with _helper() as (helper, there):
+        helper.expect(7)
+        waiting = asyncio.ensure_future(helper.wait_until_finished(7))
+        await asyncio.sleep(0.01)
+        assert not waiting.done()
+
+        there.close()
+        async with asyncio.timeout(1):
+            await waiting
+
+
+async def test_a_channel_nobody_registered_is_not_waited_for() -> None:
+    async with _helper() as (helper, _there):
+        async with asyncio.timeout(1):
+            await helper.wait_until_finished(999)
+
+
+async def test_closing_a_channel_does_not_return_before_the_helper_is_done() -> None:
+    """
+    The whole point of the confirmation: a caller whose close has returned can
+    open another channel to that device, so the close has to outlast the
+    helper's own teardown.
+    """
+    async with _helper() as (helper, there):
+        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+        stack = AsyncExitStack()
+        # Entered as a task, because the request only goes out once it is.
+        opening = asyncio.ensure_future(
+            stack.enter_async_context(adapter.open_channel("00:11:22:33:44:55", 4))
+        )
+
+        asked = await _next(there)
+        ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        with theirs:
+            there.send({"id": asked["id"], "ok": 7}, [theirs.fileno()])
+        async with asyncio.timeout(1):
+            await opening
+
+        with ours:
+            closing = asyncio.ensure_future(stack.aclose())
+            await asyncio.sleep(0.05)
+            assert not closing.done(), "closed without waiting for the helper"
+
+            there.send({"event": "finished", "handle": 7})
+            async with asyncio.timeout(1):
+                await closing

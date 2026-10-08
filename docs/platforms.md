@@ -40,6 +40,21 @@ distinct from [`AdapterOffError`][aio_rfcomm.errors.AdapterOffError] — the
 library reads the authorization state directly rather than inferring it, so
 "you said no" and "the radio is off" never get confused for one another.
 
+### One channel at a time per device
+
+macOS closes a device's RFCOMM channels in the order they were opened rather
+than the one it was asked to close. With two open at once, closing either tears
+down the wrong one, and writes to the channel still believed open are accepted
+and never arrive.
+
+[`open_channel`][aio_rfcomm.RfcommDevice.open_channel] and
+[`open_service`][aio_rfcomm.RfcommDevice.open_service] therefore raise
+[`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] when
+the device already has one open, rather than opening a second and losing both.
+Channels one after another are fine, and so are channels to different devices at
+the same time — it is only two at once to the *same* device that macOS cannot
+hold.
+
 ### Serving does not work
 
 Publishing a service record succeeds, and a peer connecting to it *is* accepted

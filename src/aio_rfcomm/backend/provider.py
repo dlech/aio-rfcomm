@@ -157,6 +157,9 @@ class BackendAdapter(ABC):
             DeviceNotFoundError: The device could not be reached.
             ServiceNotFoundError: The device does not offer ``service``.
             ConnectionFailedError: The channel could not be opened.
+            UnsupportedOperationError: The platform cannot open a channel
+                now, though it could at another time. macOS holds only one
+                per device at once.
         """
         raise NotImplementedError
 
@@ -182,6 +185,9 @@ class BackendAdapter(ABC):
         Raises:
             DeviceNotFoundError: The device could not be reached.
             ConnectionFailedError: The channel could not be opened.
+            UnsupportedOperationError: The platform cannot open a channel
+                now, though it could at another time. macOS holds only one
+                per device at once.
         """
         raise NotImplementedError
 

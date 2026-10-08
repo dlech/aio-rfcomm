@@ -198,6 +198,27 @@ async def _open(link: Link, number: int, message: dict[str, Any]) -> None:
         message: The request.
     """
     handle = next(_handles)
+    try:
+        await _carry_channel(link, handle, number, message)
+    finally:
+        # Only now is the device free: open_channel holds its claim until it
+        # has finished closing, and refuses another channel to that device
+        # meanwhile. The parent waits for this before its close returns.
+        link.send({"event": "finished", "handle": handle})
+
+
+async def _carry_channel(
+    link: Link, handle: int, number: int, message: dict[str, Any]
+) -> None:
+    """
+    Hold one channel open and carry bytes over it until it ends.
+
+    Args:
+        link: The control socket.
+        handle: The handle this channel is known by.
+        number: The request's number, for the reply.
+        message: The request.
+    """
     service = message.get("service")
     async with _native.open_channel(
         message["address"],

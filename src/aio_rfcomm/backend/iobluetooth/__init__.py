@@ -213,13 +213,17 @@ class IOBluetoothAdapter(BackendAdapter):
             )
 
         async with AsyncExitStack() as stack:
+            ending = self._helper.expect(handle)
+            stack.callback(self._helper.forget, handle)
+            # Pushed before the socket, so that it runs after it: closing this
+            # end is what tells the helper to let the device go, and until it
+            # has, another channel to that device is refused.
+            stack.push_async_callback(self._helper.wait_until_finished, handle)
+
             sock = socket.socket(fileno=fds[0])
             stack.callback(sock.close)
             reader, writer = await asyncio.open_connection(sock=sock)
             stack.callback(writer.close)
-
-            ending = self._helper.expect(handle)
-            stack.callback(self._helper.forget, handle)
 
             yield IOBluetoothChannel(reader, writer, ending)
 

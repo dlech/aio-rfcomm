@@ -111,6 +111,7 @@ class Helper:
         self._numbers = itertools.count()
         self._waiting: dict[int, asyncio.Future[tuple[Any, list[int]]]] = {}
         self._channels: dict[int, asyncio.Future[str]] = {}
+        self._finished: dict[int, asyncio.Future[None]] = {}
         self._stopped: RfcommError | None = None
 
     async def ask(self, op: str, **fields: Any) -> tuple[Any, list[int]]:
@@ -172,7 +173,24 @@ class Helper:
         """
         ending: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._channels[handle] = ending
+        self._finished[handle] = asyncio.get_running_loop().create_future()
         return ending
+
+    async def wait_until_finished(self, handle: int) -> None:
+        """
+        Wait for the helper to let go of a channel it was asked to close.
+
+        Closing this end of the socket is what tells the helper to stop, but
+        it goes on holding the device for as long as its own teardown takes,
+        and refuses another channel to that device meanwhile. So the close is
+        not over until the helper says it is.
+
+        Args:
+            handle: The channel's handle.
+        """
+        finished = self._finished.get(handle)
+        if finished is not None:
+            await finished
 
     def forget(self, handle: int) -> None:
         """
@@ -182,6 +200,7 @@ class Helper:
             handle: The channel's handle.
         """
         self._channels.pop(handle, None)
+        self._finished.pop(handle, None)
 
     async def deliver(self) -> None:
         """
@@ -224,6 +243,10 @@ class Helper:
             ending = self._channels.get(message["handle"])
             if ending is not None and not ending.done():
                 ending.set_result(message["reason"])
+        elif message["event"] == "finished":
+            finished = self._finished.get(message["handle"])
+            if finished is not None and not finished.done():
+                finished.set_result(None)
 
     def _stop(self, error: RfcommError) -> None:
         """
@@ -243,6 +266,10 @@ class Helper:
                 # dropped. Spelled the way the helper would have spelled it,
                 # so there is only one wire format to read.
                 ending.set_result(CloseReason.LINK_LOST.name)
+        for finished in list(self._finished.values()):
+            if not finished.done():
+                # A helper that has gone is holding nothing.
+                finished.set_result(None)
 
 
 @asynccontextmanager
