@@ -35,7 +35,7 @@ from rubicon.objc.eventloop import RubiconEventLoop
 
 from aio_rfcomm.backend.iobluetooth import _native
 from aio_rfcomm.backend.iobluetooth._protocol import Link
-from aio_rfcomm.errors import CloseReason, RfcommError
+from aio_rfcomm.errors import AdapterLostReason, CloseReason, RfcommError
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ async def _serve(sock: socket.socket) -> None:
     try:
         try:
             async with asyncio.TaskGroup() as group:
+                group.create_task(_watch_radio(link))
                 while True:
                     frame = await link.receive()
                     if frame is None:
@@ -90,6 +91,25 @@ async def _serve(sock: socket.socket) -> None:
             pass
     finally:
         link.close()
+
+
+async def _watch_radio(link: Link) -> None:
+    """
+    Tell the library once the radio has been switched off.
+
+    An adapter does not come back from that: one is opened again once the
+    radio is back on.
+
+    Args:
+        link: The control socket.
+    """
+    try:
+        await _native.wait_until_switched_off()
+    except Exception:
+        # Losing the watch costs the report, not the helper and its channels.
+        logger.exception("could not watch the radio")
+        return
+    link.send({"event": "lost", "reason": AdapterLostReason.SWITCHED_OFF.name})
 
 
 def _forget(

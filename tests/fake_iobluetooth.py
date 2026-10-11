@@ -17,8 +17,9 @@ it is the real thing too.
 
 import asyncio
 import ctypes
+import threading
 from collections.abc import Generator
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 from rubicon.objc import NSObject, objc_method, objc_property
@@ -48,6 +49,58 @@ class FakeManager(NSObject):
         # a CBManagerState at all.
         self.state = int(CBManagerState.UNKNOWN)
         return self
+
+
+def change_state(manager: FakeManager, *states: int) -> None:
+    """
+    Move the manager through states the way the framework does: from a thread
+    of its own.
+
+    Measured across real toggles: every transition was delivered to the
+    observer on a framework thread, never on the main one. Key-value observing
+    notifies on the thread that sets the property, so setting it from another
+    thread reproduces that.
+
+    The loop's own thread check is turned on as well. Here the loop's thread
+    is only waiting for this one to finish and picks up a careless call on its
+    next pass; in the helper it would be asleep in its run loop, and nothing
+    would wake it.
+
+    Args:
+        manager: The fake manager.
+        states: The states to pass through, in order.
+    """
+
+    def run() -> None:
+        for state in states:
+            manager.state = int(state)
+
+    asyncio.get_running_loop().set_debug(True)
+    framework = threading.Thread(target=run)
+    framework.start()
+    framework.join()
+
+
+async def until_observed(manager: FakeManager) -> None:
+    """
+    Wait until something is observing the manager's state.
+
+    Without this a test could change the state before the observer is
+    registered, and pass on the initial notification without ever taking the
+    path a real transition takes.
+    """
+    async with asyncio.timeout(1):
+        while not is_observed(manager):
+            await asyncio.sleep(0)
+
+
+def is_observed(manager: FakeManager) -> bool:
+    """
+    Whether anything is observing the manager at all.
+    """
+    # A property, though the stubs only know it as a method.
+    info = cast(ctypes.c_void_p, manager.observationInfo)
+    return info.value is not None
 
 
 class FakeAuthorization:

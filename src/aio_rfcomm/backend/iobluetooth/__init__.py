@@ -37,6 +37,7 @@ from aio_rfcomm.backend.provider import (
 from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
+    AdapterLostReason,
     AdapterNotFoundError,
     AdapterOffError,
     CloseReason,
@@ -113,6 +114,19 @@ class IOBluetoothAdapter(BackendAdapter):
         super().__init__()
         self._helper = helper
         self._info = info
+
+    @override
+    async def wait_until_gone(self) -> AdapterLostReason:
+        """
+        Wait for the helper to report the adapter gone.
+
+        Only the helper can tell: it watches the radio, and nothing reaches
+        this side otherwise.
+
+        Returns:
+            Why the adapter went away.
+        """
+        return _adapter_reason(await self._helper.wait_until_lost())
 
     @override
     async def list_known_devices(
@@ -318,6 +332,24 @@ def _wanted(service: UUID | Collection[UUID] | None) -> list[str]:
     if isinstance(service, UUID):
         return [str(service)]
     return [str(u) for u in service]
+
+
+def _adapter_reason(name: str) -> AdapterLostReason:
+    """
+    Turn the helper's word for a lost adapter back into one of ours.
+
+    Args:
+        name: The reason's name, as the helper sent it.
+
+    Returns:
+        Why the adapter went away, or removed if the name is not one we know
+        -- which can only mean the helper is a different version, and the
+        adapter is gone either way.
+    """
+    try:
+        return AdapterLostReason[name]
+    except KeyError:
+        return AdapterLostReason.REMOVED
 
 
 def _reason(name: str) -> CloseReason:

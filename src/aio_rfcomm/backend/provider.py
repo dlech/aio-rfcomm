@@ -85,8 +85,9 @@ class BackendAdapter(ABC):
     """
     An adapter that has been opened and is ready to use.
 
-    Subclasses must call ``super().__init__()``, and must call
-    :meth:`_mark_gone` once when they notice the adapter has gone.
+    Subclasses must call ``super().__init__()``, and must either call
+    :meth:`_mark_gone` once when they notice the adapter has gone or override
+    :meth:`wait_until_gone` to ask whatever does notice.
     """
 
     def __init__(self) -> None:

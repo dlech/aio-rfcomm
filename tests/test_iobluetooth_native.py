@@ -36,7 +36,10 @@ from tests.fake_iobluetooth import (
     FakeCoordinatorClass,
     FakeDeviceClass,
     FakeManager,
+    change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    is_observed,
+    until_observed,
     wrap_channel,
 )
 
@@ -233,6 +236,89 @@ async def test_a_powered_on_in_the_middle_of_a_toggle_is_taken_at_face_value(
     manager.state = CBManagerState.POWERED_ON
     async with asyncio.timeout(1):
         await _native._wait_until_ready()
+
+
+async def test_a_power_on_from_a_framework_thread_is_heard(
+    manager: FakeManager,
+) -> None:
+    """
+    Measured at startup: the move to powered on arrived on a framework
+    thread, where nothing that belongs to the event loop may be touched.
+    """
+    waiting = asyncio.ensure_future(_native._wait_until_ready())
+    await asyncio.sleep(SETTLE)
+    assert not waiting.done()
+
+    change_state(manager, CBManagerState.POWERED_ON)
+    async with asyncio.timeout(1):
+        await waiting
+
+
+# --------------------------------------------------------------------------
+# Noticing the radio switched off
+# --------------------------------------------------------------------------
+
+
+async def test_a_radio_switched_off_is_noticed(manager: FakeManager) -> None:
+    """
+    Measured on a clean toggle: powered on, then powered off, on a framework
+    thread.
+    """
+    manager.state = CBManagerState.POWERED_ON
+    watching = asyncio.ensure_future(_native.wait_until_switched_off())
+    await asyncio.sleep(SETTLE)
+    assert not watching.done()
+
+    change_state(manager, CBManagerState.POWERED_OFF)
+    async with asyncio.timeout(1):
+        await watching
+
+
+async def test_a_restart_on_the_way_to_off_is_not_taken_for_off(
+    manager: FakeManager,
+) -> None:
+    """
+    Measured when switching off restarted bluetoothd: resetting, a powered-on
+    from the restarted daemon, and only then powered off.
+    """
+    manager.state = CBManagerState.POWERED_ON
+    watching = asyncio.ensure_future(_native.wait_until_switched_off())
+    await asyncio.sleep(SETTLE)
+
+    change_state(manager, CBManagerState.RESETTING, CBManagerState.POWERED_ON)
+    await asyncio.sleep(SETTLE)
+    assert not watching.done()
+
+    change_state(manager, CBManagerState.POWERED_OFF)
+    async with asyncio.timeout(1):
+        await watching
+
+
+async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> None:
+    """
+    An observer left registered would be called on a framework thread for the
+    rest of the process, into a loop that may have gone.
+    """
+    manager.state = CBManagerState.POWERED_ON
+    watching = asyncio.ensure_future(_native.wait_until_switched_off())
+    await until_observed(manager)
+    watching.cancel()
+    await asyncio.gather(watching, return_exceptions=True)
+    assert not is_observed(manager)
+
+
+async def test_a_manager_that_cannot_be_reached_never_says_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def gone(_name: str) -> object:
+        raise ValueError("no Objective-C class named that")
+
+    monkeypatch.setattr(_native, "ObjCClass", gone)
+    watching = asyncio.ensure_future(_native.wait_until_switched_off())
+    await asyncio.sleep(SETTLE)
+    assert not watching.done()
+    watching.cancel()
+    await asyncio.gather(watching, return_exceptions=True)
 
 
 # --------------------------------------------------------------------------

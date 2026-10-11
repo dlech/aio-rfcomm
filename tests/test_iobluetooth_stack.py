@@ -26,15 +26,24 @@ if sys.platform != "darwin":
 from aio_rfcomm.adapter import RfcommAdapter
 from aio_rfcomm.backend.iobluetooth import IOBluetoothAdapter
 from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
+from aio_rfcomm.backend.iobluetooth._codes import CBManagerState
 from aio_rfcomm.backend.iobluetooth._helper import Helper
 from aio_rfcomm.backend.iobluetooth._protocol import Link
 from aio_rfcomm.discovery import RfcommAdapterInfo
-from aio_rfcomm.errors import ChannelClosedError, CloseReason, DeviceNotFoundError
+from aio_rfcomm.errors import (
+    AdapterLostError,
+    AdapterLostReason,
+    ChannelClosedError,
+    CloseReason,
+    DeviceNotFoundError,
+)
 from tests.fake_iobluetooth import (
     FakeDeviceClass,
+    change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
     fake_framework,
     opened,
+    until_observed,
 )
 
 ADDRESS = "00:1A:7D:DA:71:0C"
@@ -149,3 +158,44 @@ async def test_a_device_that_does_not_answer_is_reported(
         with pytest.raises(DeviceNotFoundError, match="did not answer"):
             async with adapter.use_device(ADDRESS).open_channel(5):
                 pass
+
+
+async def test_a_radio_switched_off_ends_the_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    What a server waiting on nothing but the adapter needs: told, rather than
+    left waiting on a radio that is no longer there.
+    """
+    manager = fake_framework(monkeypatch)
+    async with _stack() as adapter:
+        with pytest.raises(AdapterLostError) as caught:
+            async with asyncio.timeout(1), adapter.fail_when_gone():
+                await until_observed(manager)
+                change_state(manager, CBManagerState.POWERED_OFF)
+                await asyncio.Event().wait()
+        assert caught.value.reason is AdapterLostReason.SWITCHED_OFF
+
+
+async def test_a_radio_switched_off_with_a_channel_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on a clean toggle: the manager says powered off, and a
+    millisecond later the channel hears its link drop.
+    """
+    manager = fake_framework(monkeypatch)
+    async with (
+        _stack() as adapter,
+        adapter.use_device(ADDRESS).open_channel(5) as channel,
+    ):
+        fake = opened[-1]
+        await until_observed(manager)
+        change_state(manager, CBManagerState.POWERED_OFF)
+        fake.device.connected = False
+        fake.hang_up()
+        async with asyncio.timeout(1):
+            with pytest.raises(ChannelClosedError) as closed:
+                await channel.receive()
+            assert closed.value.reason is CloseReason.LINK_LOST
+            assert await adapter.wait_until_gone() is AdapterLostReason.SWITCHED_OFF

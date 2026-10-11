@@ -26,7 +26,7 @@ import ctypes
 import itertools
 import logging
 import time
-from collections.abc import AsyncGenerator, Collection, Iterable
+from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID
@@ -69,6 +69,7 @@ __all__ = [
     "open_channel",
     "read_authorization",
     "read_power_state",
+    "wait_until_switched_off",
 ]
 
 # Loading the framework is what makes its classes findable by name. It does
@@ -310,15 +311,16 @@ _closed_at: dict[str, float] = {}
 
 class _StateObserver(NSObject):
     """
-    Reports when a ``CBManager`` stops saying its state is about to change.
+    Reports when a ``CBManager`` reaches a state being waited for.
     """
 
-    settled: asyncio.Event
+    reached: asyncio.Event
     loop: asyncio.AbstractEventLoop
+    wanted: Callable[[int], bool]
 
     @objc_method
     def init(self):
-        self.settled = asyncio.Event()
+        self.reached = asyncio.Event()
         self.loop = asyncio.get_running_loop()
         return self
 
@@ -334,8 +336,8 @@ class _StateObserver(NSObject):
         # Read from the manager, not from the change dictionary, which can
         # carry a stale value on an initial notification. Set through the loop
         # because these arrive on a framework thread.
-        if cast(_Manager, watched).state not in _UNSETTLED:
-            self.loop.call_soon_threadsafe(self.settled.set)
+        if self.wanted(cast(_Manager, watched).state):
+            self.loop.call_soon_threadsafe(self.reached.set)
 
 
 async def _wait_until_ready() -> None:
@@ -400,13 +402,44 @@ async def _wait_until_settled(manager: _Manager) -> None:
     Args:
         manager: The classic manager.
     """
+    await _wait_for_state(manager, lambda state: state not in _UNSETTLED)
+
+
+async def wait_until_switched_off() -> None:
+    """
+    Wait for the radio to be switched off.
+
+    IOBluetooth was not seen to report it any other way: a channel open at
+    the time hears its link drop, and that was all. Measured across a real
+    toggle: the manager goes from powered on to powered off, on a framework
+    thread, about a millisecond before the channel is told.
+
+    Never returns if the manager cannot be reached, since a macOS that does
+    not have it is one this can say nothing about.
+    """
+    manager = _classic_manager()
+    if manager is None:
+        await asyncio.Event().wait()
+        return
+    await _wait_for_state(manager, lambda state: state == CBManagerState.POWERED_OFF)
+
+
+async def _wait_for_state(manager: _Manager, wanted: Callable[[int], bool]) -> None:
+    """
+    Wait for the manager's state to be one that ``wanted`` accepts.
+
+    Args:
+        manager: The classic manager.
+        wanted: Says whether a state is the one being waited for.
+    """
     # KVO offers no way to say which thread to answer on -- see the observer.
     observer = _StateObserver.alloc().init()
+    observer.wanted = wanted
     manager.addObserver(
         observer, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
     )
     try:
-        await observer.settled.wait()
+        await observer.reached.wait()
     finally:
         manager.removeObserver(observer, forKeyPath="state", context=None)
 

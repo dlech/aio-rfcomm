@@ -44,6 +44,7 @@ from aio_rfcomm.backend.iobluetooth._helper import (
 from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, ProtocolError
 from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
+    AdapterLostReason,
     AdapterNotFoundError,
     AdapterOffError,
     CloseReason,
@@ -521,6 +522,45 @@ def test_the_renaming_trap_is_in_the_refusal_message() -> None:
     assert "prompt_under_own_name" in str(
         _no_radio(CBManagerAuthorization.DENIED, None)
     )
+
+
+# --------------------------------------------------------------------------
+# The adapter going away
+# --------------------------------------------------------------------------
+
+
+async def test_the_helper_saying_the_radio_went_reaches_the_adapter() -> None:
+    async with _helper() as (helper, there):
+        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+        there.send({"event": "lost", "reason": "SWITCHED_OFF"})
+        async with asyncio.timeout(1):
+            assert await adapter.wait_until_gone() is AdapterLostReason.SWITCHED_OFF
+
+
+async def test_one_waiter_giving_up_leaves_the_others_the_adapter_s_end() -> None:
+    async with _helper() as (helper, there):
+        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+        impatient = asyncio.ensure_future(adapter.wait_until_gone())
+        patient = asyncio.ensure_future(adapter.wait_until_gone())
+        await asyncio.sleep(0.01)
+        impatient.cancel()
+        await asyncio.gather(impatient, return_exceptions=True)
+
+        there.send({"event": "lost", "reason": "SWITCHED_OFF"})
+        async with asyncio.timeout(1):
+            assert await patient is AdapterLostReason.SWITCHED_OFF
+
+
+async def test_a_lost_reason_we_do_not_know_still_ends_the_adapter() -> None:
+    """
+    Only a helper of a different version could send one, and the adapter is
+    gone whatever the reason.
+    """
+    async with _helper() as (helper, there):
+        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+        there.send({"event": "lost", "reason": "EATEN_BY_A_GRUE"})
+        async with asyncio.timeout(1):
+            assert await adapter.wait_until_gone() is AdapterLostReason.REMOVED
 
 
 # --------------------------------------------------------------------------

@@ -95,7 +95,7 @@ class HelperFailedError(RfcommError):
 
 class Ending:
     """
-    Why one channel ended, once the helper has said.
+    Why a channel or the adapter ended, once the helper has said.
 
     Each waiter waits on an event of its own rather than on a shared future:
     cancelling a task that awaits a future cancels the future, which would
@@ -110,7 +110,7 @@ class Ending:
 
     def say(self, reason: str) -> None:
         """
-        Record why the channel ended. Only the first call counts.
+        Record why it ended. Only the first call counts.
 
         Args:
             reason: The reason's name, as the helper sent it.
@@ -155,6 +155,7 @@ class Helper:
         self._waiting: dict[int, asyncio.Future[tuple[Any, list[int]]]] = {}
         self._channels: dict[int, Ending] = {}
         self._finished: dict[int, asyncio.Future[None]] = {}
+        self._lost = Ending()
         self._stopped: RfcommError | None = None
 
     async def ask(self, op: str, **fields: Any) -> tuple[Any, list[int]]:
@@ -235,6 +236,15 @@ class Helper:
         if finished is not None:
             await finished
 
+    async def wait_until_lost(self) -> str:
+        """
+        Wait for the helper to report the adapter gone.
+
+        Returns:
+            The reason's name, as the helper sent it.
+        """
+        return await self._lost.wait()
+
     def forget(self, handle: int) -> None:
         """
         Stop caring how one channel ends.
@@ -290,6 +300,8 @@ class Helper:
             finished = self._finished.get(message["handle"])
             if finished is not None and not finished.done():
                 finished.set_result(None)
+        elif message["event"] == "lost":
+            self._lost.say(message["reason"])
 
     def _stop(self, error: RfcommError) -> None:
         """
