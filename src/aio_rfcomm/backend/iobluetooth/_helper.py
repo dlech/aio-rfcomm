@@ -41,7 +41,7 @@ from aio_rfcomm.errors import (
     UnsupportedOperationError,
 )
 
-__all__ = ["Helper", "prompt_under_own_name", "run_helper"]
+__all__ = ["Ending", "Helper", "prompt_under_own_name", "run_helper"]
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,49 @@ class HelperFailedError(RfcommError):
     """
 
 
+class Ending:
+    """
+    Why one channel ended, once the helper has said.
+
+    Each waiter waits on an event of its own rather than on a shared future:
+    cancelling a task that awaits a future cancels the future, which would
+    take the answer away from everyone else waiting for it. A future awaited
+    through ``asyncio.shield`` would do as well, but only where every await
+    remembers the shield; here the safe wait is the only one there is.
+    """
+
+    def __init__(self) -> None:
+        self._said = asyncio.Event()
+        self._reason = ""
+
+    def say(self, reason: str) -> None:
+        """
+        Record why the channel ended. Only the first call counts.
+
+        Args:
+            reason: The reason's name, as the helper sent it.
+        """
+        if not self._said.is_set():
+            self._reason = reason
+            self._said.set()
+
+    def said(self) -> bool:
+        """
+        Whether the reason has arrived.
+        """
+        return self._said.is_set()
+
+    async def wait(self) -> str:
+        """
+        Wait for the reason.
+
+        Returns:
+            The reason's name, as the helper sent it.
+        """
+        await self._said.wait()
+        return self._reason
+
+
 class Helper:
     """
     A running helper process, and the requests in flight to it.
@@ -110,7 +153,7 @@ class Helper:
         self._link = link
         self._numbers = itertools.count()
         self._waiting: dict[int, asyncio.Future[tuple[Any, list[int]]]] = {}
-        self._channels: dict[int, asyncio.Future[str]] = {}
+        self._channels: dict[int, Ending] = {}
         self._finished: dict[int, asyncio.Future[None]] = {}
         self._stopped: RfcommError | None = None
 
@@ -161,7 +204,7 @@ class Helper:
         finally:
             self._waiting.pop(number, None)
 
-    def expect(self, handle: int) -> asyncio.Future[str]:
+    def expect(self, handle: int) -> Ending:
         """
         Register interest in how one channel ends.
 
@@ -169,9 +212,9 @@ class Helper:
             handle: The channel's handle, from the reply that opened it.
 
         Returns:
-            A future resolved with the reason once the channel ends.
+            Where the reason arrives once the channel ends.
         """
-        ending: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        ending = Ending()
         self._channels[handle] = ending
         self._finished[handle] = asyncio.get_running_loop().create_future()
         return ending
@@ -241,8 +284,8 @@ class Helper:
         """
         if message["event"] == "gone":
             ending = self._channels.get(message["handle"])
-            if ending is not None and not ending.done():
-                ending.set_result(message["reason"])
+            if ending is not None:
+                ending.say(message["reason"])
         elif message["event"] == "finished":
             finished = self._finished.get(message["handle"])
             if finished is not None and not finished.done():
@@ -260,12 +303,12 @@ class Helper:
             if not answer.done():
                 answer.set_exception(error)
         for ending in list(self._channels.values()):
-            if not ending.done():
+            if not ending.said():
                 # The helper is not there to say why, and from out here a
                 # helper that stopped is indistinguishable from a link that
                 # dropped. Spelled the way the helper would have spelled it,
                 # so there is only one wire format to read.
-                ending.set_result(CloseReason.LINK_LOST.name)
+                ending.say(CloseReason.LINK_LOST.name)
         for finished in list(self._finished.values()):
             if not finished.done():
                 # A helper that has gone is holding nothing.

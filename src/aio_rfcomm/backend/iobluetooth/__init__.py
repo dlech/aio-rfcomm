@@ -27,7 +27,7 @@ from uuid import UUID
 from typing_extensions import override
 
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-from aio_rfcomm.backend.iobluetooth._helper import Helper, run_helper
+from aio_rfcomm.backend.iobluetooth._helper import Ending, Helper, run_helper
 from aio_rfcomm.backend.provider import (
     BackendAdapter,
     BackendChannel,
@@ -58,28 +58,29 @@ class IOBluetoothChannel(StreamChannel):
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        ending: asyncio.Future[str],
+        ending: Ending,
     ) -> None:
         """
         Args:
             reader: Reads bytes the device sent.
             writer: Writes bytes to send.
-            ending: Resolved with the reason once the helper reports the
-                channel has ended.
+            ending: Where the helper's report of the channel's end arrives.
         """
         super().__init__(reader, writer)
         self._ending = ending
-        ending.add_done_callback(self._ended)
 
-    def _ended(self, ending: asyncio.Future[str]) -> None:
+    @override
+    async def wait_until_gone(self) -> CloseReason:
         """
-        Record the reason as soon as the helper reports it.
+        Wait for the helper to report the channel's end.
 
-        Args:
-            ending: The future the reason arrived on.
+        Asked of the helper rather than of the stream, which says nothing
+        until somebody reads it: a channel nobody is reading still ends.
+
+        Returns:
+            Why the channel went away.
         """
-        if not ending.cancelled() and ending.exception() is None:
-            self._mark_gone(_reason(ending.result()))
+        return await self.explain_end()
 
     @override
     async def explain_end(self) -> CloseReason:
@@ -95,7 +96,7 @@ class IOBluetoothChannel(StreamChannel):
         Returns:
             Why the channel went away.
         """
-        return _reason(await self._ending)
+        return _reason(await self._ending.wait())
 
 
 class IOBluetoothAdapter(BackendAdapter):

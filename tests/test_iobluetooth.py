@@ -31,6 +31,7 @@ if not hasattr(socket, "AF_UNIX"):
 
 from aio_rfcomm.backend.iobluetooth import (
     IOBluetoothAdapter,
+    IOBluetoothChannel,
     _reason,
     _wanted,
 )
@@ -261,7 +262,7 @@ async def test_the_end_of_a_channel_reaches_that_channel() -> None:
         ending = helper.expect(3)
         there.send({"event": "gone", "handle": 3, "reason": "PEER_CLOSED"})
 
-        assert await ending == "PEER_CLOSED"
+        assert await ending.wait() == "PEER_CLOSED"
 
 
 async def test_another_channels_ending_is_not_mistaken_for_this_one() -> None:
@@ -270,7 +271,7 @@ async def test_another_channels_ending_is_not_mistaken_for_this_one() -> None:
         there.send({"event": "gone", "handle": 4, "reason": "PEER_CLOSED"})
         await asyncio.sleep(0)
 
-        assert not ending.done()
+        assert not ending.said()
 
 
 async def test_a_helper_that_dies_ends_every_channel() -> None:
@@ -282,7 +283,75 @@ async def test_a_helper_that_dies_ends_every_channel() -> None:
         ending = helper.expect(3)
         there.close()
 
-        assert await ending == "LINK_LOST"
+        assert await ending.wait() == "LINK_LOST"
+
+
+@asynccontextmanager
+async def _channel(
+    helper: Helper, there: Link, handle: int
+) -> AsyncGenerator[tuple[IOBluetoothChannel, socket.socket], None]:
+    """
+    A channel opened through the library, with the test as the helper.
+
+    Args:
+        helper: The library's end of the control socket.
+        there: The test's end, standing in for the helper.
+        handle: The handle the test hands back for the channel.
+
+    Yields:
+        The open channel, and the far end of its socket.
+    """
+    adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+    async with AsyncExitStack() as stack:
+        opening = asyncio.ensure_future(
+            stack.enter_async_context(adapter.open_channel("00:11:22:33:44:55", 4))
+        )
+        asked = await _next(there)
+        ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        stack.callback(ours.close)
+        with theirs:
+            there.send({"id": asked["id"], "ok": handle}, [theirs.fileno()])
+        async with asyncio.timeout(1):
+            channel = await opening
+        assert isinstance(channel, IOBluetoothChannel)
+        try:
+            yield channel, ours
+        finally:
+            # Let the close finish, as the helper would once it had let go.
+            there.send({"event": "finished", "handle": handle})
+
+
+async def test_a_channel_nobody_reads_still_ends() -> None:
+    async with (
+        _helper() as (helper, there),
+        _channel(helper, there, 7) as (channel, _far),
+    ):
+        there.send({"event": "gone", "handle": 7, "reason": "PEER_CLOSED"})
+        async with asyncio.timeout(1):
+            assert await channel.wait_until_gone() is CloseReason.PEER_CLOSED
+
+
+async def test_a_reader_giving_up_leaves_the_others_their_answer() -> None:
+    """
+    The stream and the reason for its end come over different sockets, so a
+    reader can see the end first and wait for the reason. Cancelling a task
+    that awaits a future cancels the future, so a reason shared that way was
+    lost to everyone else the moment that reader gave up.
+    """
+    async with (
+        _helper() as (helper, there),
+        _channel(helper, there, 7) as (channel, far),
+    ):
+        far.close()
+        reading = asyncio.ensure_future(channel.receive())
+        await asyncio.sleep(0.01)
+        assert not reading.done(), "the reader should be waiting for the reason"
+        reading.cancel()
+        await asyncio.gather(reading, return_exceptions=True)
+
+        there.send({"event": "gone", "handle": 7, "reason": "LINK_LOST"})
+        async with asyncio.timeout(1):
+            assert await channel.wait_until_gone() is CloseReason.LINK_LOST
 
 
 async def test_giving_up_on_a_request_tells_the_helper_to_stop() -> None:

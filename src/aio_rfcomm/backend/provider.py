@@ -227,8 +227,9 @@ class BackendChannel(ABC):
     """
     An open RFCOMM channel, as the backend sees it.
 
-    Subclasses must call ``super().__init__()``, and must call
-    :meth:`_mark_gone` once when they notice the channel has ended.
+    Subclasses must call ``super().__init__()``, and must either call
+    :meth:`_mark_gone` once when they notice the channel has ended or override
+    :meth:`wait_until_gone` to ask whatever does notice.
     """
 
     def __init__(self) -> None:
