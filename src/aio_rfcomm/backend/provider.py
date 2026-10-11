@@ -154,6 +154,9 @@ class BackendAdapter(ABC):
             An async context manager yielding the open channel, closed on exit.
 
         Raises:
+            AdapterOffError: The radio was switched off after the adapter
+                was opened.
+            PermissionDeniedError: This program may not use Bluetooth.
             DeviceNotFoundError: The device could not be reached.
             ServiceNotFoundError: The device does not offer ``service``.
             ConnectionFailedError: The channel could not be opened.
@@ -183,6 +186,9 @@ class BackendAdapter(ABC):
             An async context manager yielding the open channel, closed on exit.
 
         Raises:
+            AdapterOffError: The radio was switched off after the adapter
+                was opened.
+            PermissionDeniedError: This program may not use Bluetooth.
             DeviceNotFoundError: The device could not be reached.
             ConnectionFailedError: The channel could not be opened.
             UnsupportedOperationError: The platform cannot open a channel

@@ -17,6 +17,7 @@ descriptors -- which is why the whole module steps aside on Windows.
 import asyncio
 import os
 import socket
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -42,9 +43,12 @@ from aio_rfcomm.backend.iobluetooth._helper import (
 from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, ProtocolError
 from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
+    AdapterNotFoundError,
+    AdapterOffError,
     CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
+    PermissionDeniedError,
     ServiceNotFoundError,
 )
 
@@ -310,6 +314,20 @@ def test_a_known_error_comes_back_as_itself() -> None:
     assert isinstance(_rebuild("DeviceNotFoundError", "gone"), DeviceNotFoundError)
 
 
+@pytest.mark.parametrize(
+    "kind",
+    [AdapterOffError, PermissionDeniedError, AdapterNotFoundError],
+)
+def test_the_adapter_errors_survive_the_socket(kind: type[Exception]) -> None:
+    """
+    A channel open can fail because the radio went away, and the helper is
+    where that is noticed, so these have to cross the socket as themselves.
+    """
+    rebuilt = _rebuild(kind.__name__, "the radio went away")
+    assert isinstance(rebuilt, kind)
+    assert "the radio went away" in str(rebuilt)
+
+
 def test_an_error_we_do_not_know_is_still_a_failure() -> None:
     error = _rebuild("SomethingFromTheFuture", "who knows")
     assert isinstance(error, ConnectionFailedError)
@@ -503,3 +521,28 @@ async def test_closing_a_channel_does_not_return_before_the_helper_is_done() -> 
             there.send({"event": "finished", "handle": 7})
             async with asyncio.timeout(1):
                 await closing
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="IOBluetooth is macOS only")
+async def test_the_helper_says_so_when_it_has_let_the_device_go() -> None:
+    """
+    The other half of the confirmation, which the library side cannot show:
+    that the helper says it has let go, and says it even when the open failed
+    and there was never a channel at all.
+
+    Everything from the helper's request handling down through the native
+    layer runs; only the framework is stood in for.
+    """
+    from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
+    from tests.test_iobluetooth_native import fake_framework
+
+    async with _pair() as (here, there):
+        with pytest.MonkeyPatch.context() as patch:
+            fake_framework(patch, answers=False, connected=False)
+            with pytest.raises(DeviceNotFoundError):
+                await helper_main._open(
+                    here, 1, {"address": "00:11:22:33:44:55", "channel": 4}
+                )
+
+        said, _fds = await there.receive() or ({}, [])
+        assert said["event"] == "finished"

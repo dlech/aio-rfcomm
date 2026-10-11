@@ -23,6 +23,7 @@ thread.
 
 import asyncio
 import ctypes
+import enum
 import itertools
 import logging
 import time
@@ -44,9 +45,12 @@ from typing_extensions import override
 
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
+    AdapterNotFoundError,
+    AdapterOffError,
     CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
+    PermissionDeniedError,
     RfcommError,
     ServiceNotFoundError,
     UnsupportedOperationError,
@@ -129,6 +133,39 @@ class _Controller(Protocol):
     def nameAsString(self) -> NSString | None: ...
 
 
+class _Observable(Protocol):
+    """
+    Key-value observing, which every ``NSObject`` has.
+
+    From the ``NSKeyValueObserverRegistration`` category rather than from the
+    ``NSObject`` protocol.
+    """
+
+    def addObserver(
+        self, observer: NSObject, /, *, forKeyPath: str, options: int, context: Any
+    ) -> None: ...
+    # The context form, which Apple asks for: the two-argument one has to guess
+    # which registration to drop when an observer is registered more than once.
+    def removeObserver(
+        self, observer: NSObject, /, *, forKeyPath: str, context: Any
+    ) -> None: ...
+
+
+class _Manager(_Observable, Protocol):
+    # Reached privately, but a ``CBManager``, and its state is public API.
+    @property
+    def state(self) -> int: ...
+
+
+class _Coordinator(Protocol):
+    @property
+    def classicManager(self) -> _Manager: ...
+
+
+class _CoordinatorClass(Protocol):
+    def sharedInstance(self) -> _Coordinator: ...
+
+
 class _DeviceClass(Protocol):
     def deviceWithAddressString(self, address: str, /) -> _Device | None: ...
     def pairedDevices(self) -> Iterable[_Device] | None: ...
@@ -171,6 +208,10 @@ IOBluetoothHostController = cast(_ControllerClass, _class("IOBluetoothHostContro
 IOBluetoothSDPUUID = cast(_UUIDClass, _class("IOBluetoothSDPUUID"))
 IOBluetoothRFCOMMChannel = cast(_ChannelClass, _class("IOBluetoothRFCOMMChannel"))
 IOBluetoothRFCOMMChannelDelegate = ObjCProtocol("IOBluetoothRFCOMMChannelDelegate")
+
+# Looked up where it is used rather than beside the others above: it is private,
+# and at module scope a class a future macOS lacks would take the backend down.
+_COORDINATOR = "IOBluetoothCoreBluetoothCoordinator"
 
 if TYPE_CHECKING:
 
@@ -215,6 +256,65 @@ _SETTLE_SECONDS = 0.1
 # where the framework finds it and hands it straight back.
 _OPEN_REPORT_SECONDS = 1.0
 _OPEN_REPORT_ATTEMPTS = 4
+
+
+class CBManagerState(enum.IntEnum):
+    """
+    What a ``CBManager`` says about itself.
+
+    The members are CoreBluetooth's own ``CBManagerState`` cases without their
+    shared prefix, and carry its values because the framework reports them as
+    numbers. The two temporary ones are kept apart in :data:`_UNSETTLED`, since
+    they are not answers.
+    """
+
+    UNKNOWN = 0
+    """
+    ``CBManagerStateUnknown`` -- nothing yet, and an update is promised.
+    """
+
+    RESETTING = 1
+    """
+    ``CBManagerStateResetting`` -- the connection to the system service was
+    lost and is being remade. Also temporary, also followed by an update.
+    """
+
+    UNSUPPORTED = 2
+    """
+    ``CBManagerStateUnsupported`` -- this machine cannot do it at all. Apple
+    words this for the Bluetooth Low Energy roles, but the property is
+    ``CBManager``'s rather than its central subclass's, so it is read here as
+    the general statement it appears to be.
+    """
+
+    UNAUTHORIZED = 3
+    """
+    ``CBManagerStateUnauthorized`` -- this program may not use Bluetooth.
+    """
+
+    POWERED_OFF = 4
+    """
+    ``CBManagerStatePoweredOff`` -- the radio is switched off.
+    """
+
+    POWERED_ON = 5
+    """
+    ``CBManagerStatePoweredOn`` -- usable.
+    """
+
+
+# CBManagerAuthorizationAllowedAlways. The others are all a refusal of some
+# kind, which this module does not need to tell apart.
+_ALLOWED_ALWAYS = 3
+
+# The two the documentation calls temporary, promising another value after.
+# Everything else is an answer, which is not the same as a usable one.
+_UNSETTLED = (CBManagerState.UNKNOWN, CBManagerState.RESETTING)
+
+# NSKeyValueObservingOptionNew | NSKeyValueObservingOptionInitial. The initial
+# notification is what lets the state go unchecked before observing, and with
+# it the race between checking and registering.
+_OBSERVE_INITIAL = 1 | 4
 
 # How long a device is left alone after a channel on it closes. Closing the
 # last channel tears down the RFCOMM session, and the L2CAP link underneath it
@@ -261,6 +361,141 @@ _in_use: set[str] = set()
 
 # When each device last had a channel closed -- see _RELINK_SECONDS.
 _closed_at: dict[str, float] = {}
+
+
+class _StateObserver(NSObject):
+    """
+    Reports when a ``CBManager`` stops saying its state is about to change.
+    """
+
+    settled: asyncio.Event
+    loop: asyncio.AbstractEventLoop
+
+    @objc_method
+    def init(self):
+        self.settled = asyncio.Event()
+        self.loop = asyncio.get_running_loop()
+        return self
+
+    # Annotated as what rubicon assumes anyway, so the selector is unchanged.
+    @objc_method
+    def observeValueForKeyPath_ofObject_change_context_(
+        self,
+        _path: ObjCInstance,
+        watched: ObjCInstance,
+        _change: ObjCInstance,
+        _context: ObjCInstance,
+    ) -> None:
+        # Read from the manager, not from the change dictionary, which can
+        # carry a stale value on an initial notification. Set through the loop
+        # because these arrive on a framework thread.
+        if cast(_Manager, watched).state not in _UNSETTLED:
+            self.loop.call_soon_threadsafe(self.settled.set)
+
+
+async def _wait_until_ready() -> None:
+    """
+    Wait for CoreBluetooth to settle, and object if it settled unusably.
+
+    CoreBluetooth discards every command until its manager reaches the
+    powered-on state, and IOBluetooth issues ours without waiting: for the
+    first tens of milliseconds of a process an open is dropped, logged only as
+    "API MISUSE", and never reported. Nothing bounds the wait, because a
+    manager that never settles is one no open would have worked on either.
+
+    Returns without waiting if the manager cannot be reached at all, since a
+    macOS that does not have it is one this can say nothing about.
+
+    Raises:
+        AdapterOffError: The radio is switched off.
+        PermissionDeniedError: This program may not use Bluetooth.
+        AdapterNotFoundError: The machine has no usable Bluetooth.
+        ConnectionFailedError: The manager settled on a state with no meaning
+            here, which is a macOS this code has not been taught about.
+    """
+    manager = _classic_manager()
+    if manager is None:
+        return
+
+    await _wait_until_settled(manager)
+
+    # Settling is not the same as being usable: a refused or switched-off radio
+    # settles just as firmly as a working one, and waiting for powered-on alone
+    # would wait for ever.
+    state = manager.state
+    if state != CBManagerState.POWERED_ON:
+        raise _unusable(state)
+
+
+def _classic_manager() -> _Manager | None:
+    """
+    Reach CoreBluetooth's classic manager, if this macOS has one.
+
+    Returns:
+        The manager, or ``None`` if the private path to it has gone.
+    """
+    try:
+        coordinator = cast(_CoordinatorClass, ObjCClass(_COORDINATOR))
+        return coordinator.sharedInstance().classicManager
+    except Exception:  # noqa: BLE001
+        logger.debug("CoreBluetooth's classic manager could not be reached")
+        return None
+
+
+async def _wait_until_settled(manager: _Manager) -> None:
+    """
+    Wait for the manager's state to stop being provisional.
+
+    Done on every call rather than once per process, because the state can go
+    back to being provisional -- the radio being switched off and on again
+    passes through resetting -- and because it costs nothing when it has not:
+    an observer registered with the initial option is told the current value
+    before ``addObserver`` returns, measured at 50 to 800 microseconds.
+
+    Args:
+        manager: The classic manager.
+    """
+    # KVO offers no way to say which thread to answer on -- see the observer.
+    observer = _StateObserver.alloc().init()
+    manager.addObserver(
+        observer, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
+    )
+    try:
+        await observer.settled.wait()
+    finally:
+        manager.removeObserver(observer, forKeyPath="state", context=None)
+
+
+def _unusable(state: int) -> RfcommError:
+    """
+    Say why a settled manager is no use.
+
+    Args:
+        state: The ``CBManagerState`` it settled on.
+
+    Returns:
+        The error to raise.
+    """
+    match state:
+        case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED:
+            # Both, because macOS reports a radio this program may not use as
+            # switched off -- so telling someone to turn Bluetooth on would
+            # send them to a switch that is already on. The authorization is
+            # what separates the two, as it does when the adapter is opened.
+            if read_authorization() == _ALLOWED_ALWAYS:
+                return AdapterOffError(
+                    "this Mac's Bluetooth is switched off; turn it on"
+                )
+            return PermissionDeniedError(
+                "Bluetooth is not allowed for this program; check Privacy & "
+                "Security > Bluetooth in System Settings"
+            )
+        case CBManagerState.UNSUPPORTED:
+            return AdapterNotFoundError("this Mac has no usable Bluetooth")
+        case _:
+            return ConnectionFailedError(
+                f"CoreBluetooth settled in state {state}, which this does not know"
+            )
 
 
 def _hold(complete: _Completion) -> None:
@@ -755,6 +990,9 @@ async def open_channel(
         The open channel, closed on exit.
 
     Raises:
+        AdapterOffError: The radio is switched off.
+        PermissionDeniedError: This program may not use Bluetooth.
+        AdapterNotFoundError: The machine has no usable Bluetooth.
         DeviceNotFoundError: The device did not answer.
         ServiceNotFoundError: The device does not offer that service.
         ConnectionFailedError: The channel could not be opened.
@@ -762,6 +1000,11 @@ async def open_channel(
     """
     if (service is None) == (channel is None):
         raise TypeError("open_channel takes exactly one of service and channel")
+
+    # Before anything else touches the framework. That is the discipline
+    # CoreBluetooth asks of its own callers, and reaching for a device first
+    # measurably delays the manager coming up.
+    await _wait_until_ready()
 
     device = IOBluetoothDevice.deviceWithAddressString(address)
     if not device:

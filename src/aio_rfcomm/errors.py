@@ -8,8 +8,10 @@ Every failure surfaces as an :class:`RfcommError`. Backends wrap the platform
 exception rather than letting it through, so error handling is the same on
 every platform; the original is kept as ``__cause__`` for diagnosis.
 
-Grouped below by what raises them: opening an adapter, using one, opening a
-channel, using one, and finally misuse of the API itself.
+Grouped below by what raises them first: opening an adapter, using one, opening
+a channel, using one, and finally misuse of the API itself. The grouping is a
+reading aid rather than a promise -- a radio switched off part way through a
+session surfaces the adapter errors from a channel open, for instance.
 """
 
 import enum
@@ -75,9 +77,11 @@ class AdapterOffError(RfcommError):
     Distinct from :class:`AdapterNotFoundError`, which means there is no such
     adapter at all: this one the user can fix by turning Bluetooth on.
 
-    Every platform can see this -- ``Adapter1.Powered`` on Linux,
-    ``IOBluetoothHostController.powerState`` on macOS, and the radio state on
-    Windows.
+    Every platform can see this -- ``Adapter1.Powered`` on Linux, the state of
+    CoreBluetooth's manager on macOS, and the radio state on Windows.
+
+    Also raised by opening a channel, since the radio can be switched off while
+    an adapter is held.
     """
 
 
