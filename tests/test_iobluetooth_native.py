@@ -21,7 +21,8 @@ if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
 from aio_rfcomm.backend.iobluetooth import _native
-from aio_rfcomm.backend.iobluetooth._native import CBManagerState, _Device
+from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
+from aio_rfcomm.backend.iobluetooth._native import _Device
 from aio_rfcomm.errors import (
     AdapterNotFoundError,
     AdapterOffError,
@@ -31,8 +32,6 @@ from aio_rfcomm.errors import (
     UnsupportedOperationError,
 )
 from tests.fake_iobluetooth import (
-    ALLOWED,
-    DENIED,
     FakeAuthorization,
     FakeCoordinatorClass,
     FakeDeviceClass,
@@ -60,7 +59,9 @@ def manager(monkeypatch: pytest.MonkeyPatch) -> FakeManager:
     fake = FakeManager.alloc().init()
     found = FakeCoordinatorClass(fake)
     monkeypatch.setattr(_native, "ObjCClass", lambda _name: found)
-    monkeypatch.setattr(_native, "CBManager", FakeAuthorization(ALLOWED))
+    monkeypatch.setattr(
+        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+    )
     return fake
 
 
@@ -166,7 +167,9 @@ async def test_a_refused_radio_does_not_look_switched_off(
     macOS reports a radio this program may not use as switched off, and
     telling someone to turn on Bluetooth that is already on helps nobody.
     """
-    monkeypatch.setattr(_native, "CBManager", FakeAuthorization(DENIED))
+    monkeypatch.setattr(
+        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
+    )
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(PermissionDeniedError):
         await _native._wait_until_ready()
@@ -175,7 +178,9 @@ async def test_a_refused_radio_does_not_look_switched_off(
 async def test_an_unauthorized_state_is_a_permission_error(
     manager: FakeManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_native, "CBManager", FakeAuthorization(DENIED))
+    monkeypatch.setattr(
+        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
+    )
     manager.state = CBManagerState.UNAUTHORIZED
     with pytest.raises(PermissionDeniedError):
         await _native._wait_until_ready()

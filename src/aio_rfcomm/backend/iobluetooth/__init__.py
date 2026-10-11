@@ -18,7 +18,6 @@ other backends produce, so everything after the connection is shared code.
 from __future__ import annotations
 
 import asyncio
-import enum
 import os
 import socket
 from collections.abc import AsyncGenerator, Collection
@@ -27,6 +26,7 @@ from uuid import UUID
 
 from typing_extensions import override
 
+from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
 from aio_rfcomm.backend.iobluetooth._helper import Helper, run_helper
 from aio_rfcomm.backend.provider import (
     BackendAdapter,
@@ -46,39 +46,7 @@ from aio_rfcomm.errors import (
     UnsupportedOperationError,
 )
 
-__all__ = ["Authorization", "IOBluetoothBackend"]
-
-
-class Authorization(enum.IntEnum):
-    """
-    Whether this program may use Bluetooth, as CoreBluetooth reports it.
-
-    macOS tells a program it may not use that the radio is switched off, so
-    this is the only thing that separates the two. The members are
-    CoreBluetooth's own ``CBManagerAuthorization`` cases without their shared
-    prefix, and carry its values because the helper sends them as numbers.
-    """
-
-    NOT_DETERMINED = 0
-    """
-    ``CBManagerAuthorizationNotDetermined`` -- nobody has been asked yet.
-    """
-
-    RESTRICTED = 1
-    """
-    ``CBManagerAuthorizationRestricted`` -- forbidden by a profile or by
-    parental controls, not by a choice the user can reverse.
-    """
-
-    DENIED = 2
-    """
-    ``CBManagerAuthorizationDenied`` -- the user said no.
-    """
-
-    ALLOWED_ALWAYS = 3
-    """
-    ``CBManagerAuthorizationAllowedAlways`` -- the user said yes.
-    """
+__all__ = ["IOBluetoothBackend"]
 
 
 class IOBluetoothChannel(StreamChannel):
@@ -294,7 +262,7 @@ def _no_radio(authorization: int, name: str | None) -> RfcommError:
         The error to raise.
     """
     match authorization:
-        case Authorization.DENIED:
+        case CBManagerAuthorization.DENIED:
             return PermissionDeniedError(
                 "Bluetooth was refused for this program. Allow it under "
                 "Privacy & Security > Bluetooth in System Settings. Note that "
@@ -302,13 +270,13 @@ def _no_radio(authorization: int, name: str | None) -> RfcommError:
                 "is what the permission is remembered against, so changing it "
                 "asks again."
             )
-        case Authorization.RESTRICTED:
+        case CBManagerAuthorization.RESTRICTED:
             return PermissionDeniedError(
                 "Bluetooth is not allowed on this Mac, by a profile or "
                 "parental controls rather than by a choice this program can "
                 "undo."
             )
-        case Authorization.NOT_DETERMINED:
+        case CBManagerAuthorization.NOT_DETERMINED:
             return PermissionDeniedError(
                 "Bluetooth permission for this program has not been answered. "
                 "A dialog should have appeared; if it was dismissed, run the "

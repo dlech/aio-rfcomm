@@ -27,20 +27,12 @@ from rubicon.objc.runtime import load_library
 load_library("AppKit")
 
 from aio_rfcomm.backend.iobluetooth import _native
-from aio_rfcomm.backend.iobluetooth._native import CBManagerState
-
-# CBManagerAuthorization, as read_authorization reports it.
-ALLOWED = 3
-DENIED = 2
-
-# CBErrorConnectionFailed, which is how an unanswered page is reported:
-# measured as "Inform delegate connectionComplete: 10" 15.4 s after
-# openConnection: had already returned success. The controller said Page
-# Timeout; CoreBluetooth passes on only the code of the error it makes of it.
-CONNECTION_FAILED = 10
-
-# kIOReturnNotOpen, what writeAsync returned once the channel had closed.
-NOT_OPEN = ctypes.c_int32(0xE00002CD).value
+from aio_rfcomm.backend.iobluetooth._codes import (
+    CBError,
+    CBManagerAuthorization,
+    CBManagerState,
+    IOReturn,
+)
 
 
 class FakeManager(NSObject):
@@ -116,7 +108,7 @@ class FakeChannel:
 
     def writeAsync(self, data: bytes, /, *, length: int, refcon: int) -> int:
         if not self.open:
-            return NOT_OPEN
+            return IOReturn.NOT_OPEN
         self.written += data[:length]
         asyncio.get_running_loop().call_soon(
             self.delegate.rfcommChannelWriteComplete_refcon_status_bytesWritten_,  # pyright: ignore[reportAttributeAccessIssue]
@@ -177,9 +169,11 @@ class FakeDevice:
         return self.connected
 
     def openConnection(self, target: object, /) -> int:
-        # Success either way: an unanswered page is reported later, through
-        # the target, as a CoreBluetooth error code.
-        status = 0 if self.answers else CONNECTION_FAILED
+        # Success either way. An unanswered page is reported later, through
+        # the target, as a CoreBluetooth error code rather than an IOKit
+        # status: measured as "Inform delegate connectionComplete: 10" 15.4 s
+        # after the call returned. The controller said Page Timeout.
+        status = 0 if self.answers else CBError.CONNECTION_FAILED
         if self.answers:
             self.connected = True
         asyncio.get_running_loop().call_soon(
@@ -237,7 +231,7 @@ def fake_framework(
     monkeypatch: pytest.MonkeyPatch,
     *,
     state: int = CBManagerState.POWERED_ON,
-    authorization: int = ALLOWED,
+    authorization: int = CBManagerAuthorization.ALLOWED_ALWAYS,
     answers: bool = True,
     connected: bool = True,
 ) -> FakeManager:

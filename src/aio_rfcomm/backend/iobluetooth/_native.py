@@ -23,7 +23,6 @@ thread.
 
 import asyncio
 import ctypes
-import enum
 import itertools
 import logging
 import time
@@ -43,6 +42,12 @@ from rubicon.objc.api import NSString
 from rubicon.objc.runtime import autoreleasepool, libc, load_library, objc_id
 from typing_extensions import override
 
+from aio_rfcomm.backend.iobluetooth._codes import (
+    CBError,
+    CBManagerAuthorization,
+    CBManagerState,
+    IOReturn,
+)
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     AdapterNotFoundError,
@@ -222,10 +227,6 @@ else:
         ("mach_error_string", libc), ((1, "code"),)
     )
 
-# IOBluetooth reports a page timeout as this bare HCI status rather than as an
-# IOKit error, and the framework's description of it is unhelpful.
-_HCI_PAGE_TIMEOUT = 10
-
 # kBluetoothHCIPowerStateON. The framework's power states are C enum
 # constants rather than exported symbols, so there is nothing to read out of
 # the dylib at runtime and the value has to be written down.
@@ -257,56 +258,6 @@ _SETTLE_SECONDS = 0.1
 _OPEN_REPORT_SECONDS = 1.0
 _OPEN_REPORT_ATTEMPTS = 4
 
-
-class CBManagerState(enum.IntEnum):
-    """
-    What a ``CBManager`` says about itself.
-
-    The members are CoreBluetooth's own ``CBManagerState`` cases without their
-    shared prefix, and carry its values because the framework reports them as
-    numbers. The two temporary ones are kept apart in :data:`_UNSETTLED`, since
-    they are not answers.
-    """
-
-    UNKNOWN = 0
-    """
-    ``CBManagerStateUnknown`` -- nothing yet, and an update is promised.
-    """
-
-    RESETTING = 1
-    """
-    ``CBManagerStateResetting`` -- the connection to the system service was
-    lost and is being remade. Also temporary, also followed by an update.
-    """
-
-    UNSUPPORTED = 2
-    """
-    ``CBManagerStateUnsupported`` -- this machine cannot do it at all. Apple
-    words this for the Bluetooth Low Energy roles, but the property is
-    ``CBManager``'s rather than its central subclass's, so it is read here as
-    the general statement it appears to be.
-    """
-
-    UNAUTHORIZED = 3
-    """
-    ``CBManagerStateUnauthorized`` -- this program may not use Bluetooth.
-    """
-
-    POWERED_OFF = 4
-    """
-    ``CBManagerStatePoweredOff`` -- the radio is switched off.
-    """
-
-    POWERED_ON = 5
-    """
-    ``CBManagerStatePoweredOn`` -- usable.
-    """
-
-
-# CBManagerAuthorizationAllowedAlways. The others are all a refusal of some
-# kind, which this module does not need to tell apart.
-_ALLOWED_ALWAYS = 3
-
 # The two the documentation calls temporary, promising another value after.
 # Everything else is an answer, which is not the same as a usable one.
 _UNSETTLED = (CBManagerState.UNKNOWN, CBManagerState.RESETTING)
@@ -324,12 +275,6 @@ _OBSERVE_INITIAL = 1 | 4
 # at 50, so twice that. A deadline rather than a delay: a caller that did
 # anything at all in between waits for none of it.
 _RELINK_SECONDS = 0.1
-
-# kIOReturnTimeout, which IOKit builds from a system (0x38, I/O Kit), a
-# subsystem (0, common) and a code (0x2d6), giving 0xE00002D6. Statuses arrive
-# as signed 32-bit integers, which is why this one shows up in tracebacks as a
-# large negative number rather than as anything recognisable.
-_IO_TIMEOUT = ctypes.c_int32(0xE00002D6).value
 
 # A write's refcon is the address of the object holding its future, and that
 # object has to stay alive until the completion callback reads it back out --
@@ -482,7 +427,7 @@ def _unusable(state: int) -> RfcommError:
             # switched off -- so telling someone to turn Bluetooth on would
             # send them to a switch that is already on. The authorization is
             # what separates the two, as it does when the adapter is opened.
-            if read_authorization() == _ALLOWED_ALWAYS:
+            if read_authorization() == CBManagerAuthorization.ALLOWED_ALWAYS:
                 return AdapterOffError(
                     "this Mac's Bluetooth is switched off; turn it on"
                 )
@@ -598,10 +543,14 @@ class _ConnectionComplete(NSObject):
         if self.future.done():
             return
         if status:
-            # A device that is switched off reports a bare 10 rather than an
-            # IOKit status, which renders as a meaningless message. The I/O
-            # timeout it really is says something a caller can act on.
-            raise_as = _IO_TIMEOUT if status == _HCI_PAGE_TIMEOUT else status
+            # Not the IOKit status the header promises but CoreBluetooth's
+            # error code: the daemon's result made into an NSError, of which
+            # only the code is passed on. An unanswered page arrives as
+            # CONNECTION_FAILED, which mach_error_string renders as nonsense,
+            # so it is reported as the timeout it really is.
+            raise_as = (
+                IOReturn.TIMEOUT if status == CBError.CONNECTION_FAILED else status
+            )
             self.future.set_exception(MachError(raise_as))
         else:
             self.future.set_result(None)
@@ -1290,7 +1239,7 @@ def _translate(error: MachError, address: str) -> RfcommError:
     Returns:
         The error to raise instead.
     """
-    if error.code == _IO_TIMEOUT:
+    if error.code == IOReturn.TIMEOUT:
         return DeviceNotFoundError(
             f"{address} did not answer; it may be switched off or out of range"
         )

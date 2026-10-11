@@ -400,37 +400,41 @@ def test_a_refused_permission_is_not_reported_as_a_dead_radio() -> None:
     on -- which is exactly the wrong place to look. This cost an evening
     once.
     """
-    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.backend.iobluetooth import _no_radio
+    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
     from aio_rfcomm.errors import PermissionDeniedError
 
-    error = _no_radio(Authorization.DENIED, "thor")
+    error = _no_radio(CBManagerAuthorization.DENIED, "thor")
     assert isinstance(error, PermissionDeniedError)
     assert "System Settings" in str(error)
 
 
 def test_an_unanswered_prompt_says_so() -> None:
-    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.backend.iobluetooth import _no_radio
+    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
     from aio_rfcomm.errors import PermissionDeniedError
 
-    error = _no_radio(Authorization.NOT_DETERMINED, "thor")
+    error = _no_radio(CBManagerAuthorization.NOT_DETERMINED, "thor")
     assert isinstance(error, PermissionDeniedError)
     assert "dialog" in str(error)
 
 
 def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
-    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.backend.iobluetooth import _no_radio
+    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
     from aio_rfcomm.errors import PermissionDeniedError
 
     assert isinstance(
-        _no_radio(Authorization.RESTRICTED, "thor"), PermissionDeniedError
+        _no_radio(CBManagerAuthorization.RESTRICTED, "thor"), PermissionDeniedError
     )
 
 
 def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
-    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.backend.iobluetooth import _no_radio
+    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
     from aio_rfcomm.errors import AdapterOffError
 
-    error = _no_radio(Authorization.ALLOWED_ALWAYS, "thor")
+    error = _no_radio(CBManagerAuthorization.ALLOWED_ALWAYS, "thor")
     assert isinstance(error, AdapterOffError)
     assert "thor" in str(error)
     assert "switched off" in str(error)
@@ -442,9 +446,12 @@ def test_the_renaming_trap_is_in_the_refusal_message() -> None:
     prompt_under_own_name, so renaming an application asks again -- and the
     symptom points nowhere near the cause.
     """
-    from aio_rfcomm.backend.iobluetooth import Authorization, _no_radio
+    from aio_rfcomm.backend.iobluetooth import _no_radio
+    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
 
-    assert "prompt_under_own_name" in str(_no_radio(Authorization.DENIED, None))
+    assert "prompt_under_own_name" in str(
+        _no_radio(CBManagerAuthorization.DENIED, None)
+    )
 
 
 # --------------------------------------------------------------------------
