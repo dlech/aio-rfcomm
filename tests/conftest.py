@@ -3,6 +3,16 @@
 
 """
 Fixtures wiring the fake backend into the public API.
+
+What a test may stand in for is only what CI cannot have: Bluetooth hardware,
+and the operating system frameworks that need it. Our own functions, methods
+and classes are never replaced -- a test that patches one is testing the
+patch. Where a platform layer has to be exercised, the stand-in goes at the
+boundary with the OS, so everything from there up is the code under test.
+
+Process-wide state is cleared rather than substituted. The macOS layer cannot
+be reloaded to get it back, because the Objective-C runtime registers classes
+by name and refuses a second one.
 """
 
 from collections.abc import AsyncGenerator
