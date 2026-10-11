@@ -25,6 +25,7 @@ import asyncio
 import ctypes
 import itertools
 import logging
+import time
 from collections.abc import AsyncGenerator, Collection, Iterable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -214,6 +215,16 @@ _SETTLE_SECONDS = 0.1
 # where the framework finds it and hands it straight back.
 _OPEN_REPORT_SECONDS = 1.0
 _OPEN_REPORT_ATTEMPTS = 4
+
+# How long a device is left alone after a channel on it closes. Closing the
+# last channel tears down the RFCOMM session, and the L2CAP link underneath it
+# goes about thirty milliseconds after the close is reported finished; an open
+# issued inside that window is handed the dying link and fails as a nil channel
+# with a zero status, reported to nobody. Measured swallowed at 25 ms and never
+# at 50, so twice that. A deadline rather than a delay: a caller that did
+# anything at all in between waits for none of it.
+_RELINK_SECONDS = 0.1
+
 # kIOReturnTimeout, which IOKit builds from a system (0x38, I/O Kit), a
 # subsystem (0, common) and a code (0x2d6), giving 0xE00002D6. Statuses arrive
 # as signed 32-bit integers, which is why this one shows up in tracebacks as a
@@ -247,6 +258,9 @@ _completion_tokens = itertools.count()
 # until after the channel closes, so for part of its life there is no channel
 # yet -- see open_channel, which is the only thing that puts anything here.
 _in_use: set[str] = set()
+
+# When each device last had a channel closed -- see _RELINK_SECONDS.
+_closed_at: dict[str, float] = {}
 
 
 def _hold(complete: _Completion) -> None:
@@ -781,6 +795,8 @@ async def open_channel(
         )
     _in_use.add(key)
     try:
+        await _wait_for_relink(key)
+
         # Both paths need the baseband link: an SDP query runs over it, and so
         # does the channel itself.
         if not device.isConnected():
@@ -798,9 +814,28 @@ async def open_channel(
         try:
             yield opening
         finally:
-            await opening.close()
+            try:
+                await opening.close()
+            finally:
+                _closed_at[key] = time.monotonic()
     finally:
         _in_use.discard(key)
+
+
+async def _wait_for_relink(key: str) -> None:
+    """
+    Wait out the previous channel's teardown, if it is still going on.
+
+    Args:
+        key: The device's address, upper case.
+    """
+    closed = _closed_at.get(key)
+    if closed is None:
+        return
+    left = _RELINK_SECONDS - (time.monotonic() - closed)
+    if left > 0:
+        logger.debug("letting %s's last channel finish going away", key)
+        await asyncio.sleep(left)
 
 
 async def _open_reported(device: _Device, number: int, address: str) -> Channel:
