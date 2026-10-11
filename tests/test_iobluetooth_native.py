@@ -13,18 +13,12 @@ key-value observable property, which is all the real one is from here.
 import asyncio
 import sys
 import time
-from collections.abc import Generator
 from typing import cast
 
 import pytest
 
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
-
-from rubicon.objc import NSObject, objc_method, objc_property
-from rubicon.objc.runtime import load_library
-
-load_library("AppKit")
 
 from aio_rfcomm.backend.iobluetooth import _native
 from aio_rfcomm.backend.iobluetooth._native import CBManagerState, _Device
@@ -36,109 +30,20 @@ from aio_rfcomm.errors import (
     PermissionDeniedError,
     UnsupportedOperationError,
 )
-
-# CBManagerAuthorization, as read_authorization reports it.
-ALLOWED = 3
-DENIED = 2
+from tests.fake_iobluetooth import (
+    ALLOWED,
+    DENIED,
+    FakeAuthorization,
+    FakeCoordinatorClass,
+    FakeDeviceClass,
+    FakeManager,
+    clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    wrap_channel,
+)
 
 # Long enough for a notification to cross the run loop, short enough that a
 # test which hangs is still a quick failure.
 SETTLE = 0.05
-
-
-class FakeManager(NSObject):
-    """
-    A stand-in for ``CBClassicManager``, observable the same way.
-    """
-
-    state = objc_property(int)
-
-    @objc_method
-    def init(self):
-        # Held as a plain int, because a test needs to set a value that is not
-        # a CBManagerState at all.
-        self.state = int(CBManagerState.UNKNOWN)
-        return self
-
-
-class FakeAuthorization:
-    """
-    Stands in for ``CBManager``, which is only ever asked one thing.
-    """
-
-    def __init__(self, authorization: int) -> None:
-        self.authorization = authorization
-
-
-class FakeCoordinator:
-    """
-    Stands in for ``IOBluetoothCoreBluetoothCoordinator``'s shared instance.
-    """
-
-    def __init__(self, manager: FakeManager) -> None:
-        self.classicManager = manager
-
-
-class FakeCoordinatorClass:
-    """
-    Stands in for the coordinator class itself, as rubicon hands it over.
-    """
-
-    def __init__(self, manager: FakeManager) -> None:
-        self.shared = FakeCoordinator(manager)
-
-    def sharedInstance(self) -> FakeCoordinator:
-        return self.shared
-
-
-@pytest.fixture(autouse=True)
-def clean_state() -> Generator[None, None, None]:
-    """
-    Clear the state the module keeps per process.
-
-    Objective-C registers its classes by name, so the module cannot be
-    reloaded to get this back; clearing what it holds is the nearest thing to
-    the fresh process each of these tests is written as though it had.
-    """
-    _native._in_use.clear()
-    _native._closed_at.clear()
-    yield
-    _native._in_use.clear()
-    _native._closed_at.clear()
-
-
-def fake_framework(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    state: int = CBManagerState.POWERED_ON,
-    authorization: int = ALLOWED,
-    answers: bool = True,
-    connected: bool = True,
-) -> FakeManager:
-    """
-    Stand in for IOBluetooth and CoreBluetooth, and nothing else.
-
-    Everything in the library and in the native layer runs for real; only what
-    needs a radio is replaced.
-
-    Args:
-        monkeypatch: Where to record the replacements.
-        state: What the manager says about itself.
-        authorization: What CBManager reports.
-        answers: Whether the device answers when paged.
-        connected: Whether the link is already up.
-
-    Returns:
-        The fake manager, so a test can move it on afterwards.
-    """
-    fake = FakeManager.alloc().init()
-    fake.state = int(state)
-    monkeypatch.setattr(_native, "ObjCClass", lambda _name: FakeCoordinatorClass(fake))
-    monkeypatch.setattr(_native, "CBManager", FakeAuthorization(authorization))
-    monkeypatch.setattr(_native, "IOBluetoothDevice", FakeDeviceClass)
-    monkeypatch.setattr(FakeDeviceClass, "answers", answers)
-    monkeypatch.setattr(FakeDeviceClass, "connected", connected)
-    return fake
 
 
 @pytest.fixture
@@ -387,51 +292,6 @@ async def test_a_window_long_gone_is_not_waited_for(
 # --------------------------------------------------------------------------
 
 
-class FakeDevice:
-    """
-    An ``IOBluetoothDevice`` that opens a channel and reports it at once.
-    """
-
-    def __init__(self, connected: bool = True, answers: bool = True) -> None:
-        self.connected = connected
-        self.answers = answers
-
-    def isConnected(self) -> bool:
-        return self.connected
-
-    def openConnection(self, target: object, /) -> int:
-        if self.answers:
-            future = target.future  # pyright: ignore[reportAttributeAccessIssue]
-            asyncio.get_running_loop().call_soon(future.set_result, None)
-            return 0
-        return _native._IO_TIMEOUT
-
-    def openRFCOMMChannelAsync(
-        self, _out: object, /, *, withChannelID: int, delegate: object
-    ) -> int:
-        opened = delegate.opened  # pyright: ignore[reportAttributeAccessIssue]
-        asyncio.get_running_loop().call_soon(opened.set_result, None)
-        return 0
-
-
-class FakeDeviceClass:
-    """
-    Hands back a device for any address, or nothing for the unknown one.
-    """
-
-    unknown = "not an address"
-    #: Set by a test that wants the device not to answer its page.
-    answers = True
-    #: Set by a test that wants the link brought up rather than already there.
-    connected = True
-
-    @classmethod
-    def deviceWithAddressString(cls, address: str, /) -> FakeDevice | None:
-        if address == cls.unknown:
-            return None
-        return FakeDevice(connected=cls.connected, answers=cls.answers)
-
-
 @pytest.fixture
 def devices(manager: FakeManager, monkeypatch: pytest.MonkeyPatch) -> None:
     """
@@ -439,6 +299,7 @@ def devices(manager: FakeManager, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     manager.state = CBManagerState.POWERED_ON
     monkeypatch.setattr(_native, "IOBluetoothDevice", FakeDeviceClass)
+    monkeypatch.setattr(_native, "IOBluetoothRFCOMMChannel", wrap_channel)
 
 
 async def test_an_address_that_is_not_one_is_refused(devices: None) -> None:
@@ -493,7 +354,7 @@ async def test_the_claim_is_let_go_of_when_the_open_fails(
 # --------------------------------------------------------------------------
 
 
-class FakeChannel:
+class HandedBack:
     """
     An ``IOBluetoothRFCOMMChannel`` that is only ever asked two things.
     """
@@ -550,7 +411,7 @@ def quick(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _native,
         "IOBluetoothRFCOMMChannel",
-        lambda _handle: FakeChannel(bool(_pending.pop(0)) if _pending else False),
+        lambda _handle: HandedBack(bool(_pending.pop(0)) if _pending else False),
     )
 
 
