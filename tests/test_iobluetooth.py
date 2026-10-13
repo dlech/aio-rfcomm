@@ -513,15 +513,13 @@ def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
 def test_the_renaming_trap_is_in_the_refusal_message() -> None:
     """
     The permission is remembered against the name given to
-    prompt_under_own_name, so renaming an application asks again -- and the
+    prompt_under_name, so renaming an application asks again -- and the
     symptom points nowhere near the cause.
     """
     from aio_rfcomm.backend.iobluetooth import _no_radio
     from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
 
-    assert "prompt_under_own_name" in str(
-        _no_radio(CBManagerAuthorization.DENIED, None)
-    )
+    assert "prompt_under_name" in str(_no_radio(CBManagerAuthorization.DENIED, None))
 
 
 # --------------------------------------------------------------------------

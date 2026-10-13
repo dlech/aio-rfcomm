@@ -227,7 +227,7 @@ async def opened() -> AsyncGenerator[aio_rfcomm.RfcommAdapter, None]:
     # asks the user again. A library cannot pick a name on its caller's
     # behalf, which is why a program that is not a bundled application gives
     # its own here. Everywhere else the call does nothing.
-    aio_rfcomm.macos.prompt_under_own_name(
+    aio_rfcomm.macos.prompt_under_name(
         name="aio-rfcomm chat", reason="to chat over Bluetooth"
     )
     async with aio_rfcomm.open_adapter() as adapter:

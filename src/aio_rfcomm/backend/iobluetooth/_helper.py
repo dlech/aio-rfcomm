@@ -41,7 +41,7 @@ from aio_rfcomm.errors import (
     UnsupportedOperationError,
 )
 
-__all__ = ["Ending", "Helper", "prompt_under_own_name", "run_helper"]
+__all__ = ["Ending", "Helper", "prompt_under_name", "run_helper"]
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ _own_name: str | None = None
 _own_reason: str | None = None
 
 
-def prompt_under_own_name(*, name: str, reason: str) -> None:
+def prompt_under_name(*, name: str, reason: str) -> None:
     """
     Let the helper ask for Bluetooth permission as itself.
 
@@ -426,7 +426,7 @@ def _died(pid: int) -> RfcommError:
             "process, which must carry NSBluetoothAlwaysUsageDescription in "
             "its Info.plist. If this program is not a bundled application -- "
             "a script, a REPL or a command line tool -- call "
-            "aio_rfcomm.macos.prompt_under_own_name() before opening an "
+            "aio_rfcomm.macos.prompt_under_name() before opening an "
             "adapter, so the helper can ask for permission itself."
         )
     return HelperFailedError(

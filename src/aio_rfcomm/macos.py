@@ -18,13 +18,13 @@ other platform these do nothing.
 
 import sys
 
-__all__ = ["prompt_under_own_name"]
+__all__ = ["prompt_under_name"]
 
 if sys.platform == "darwin":
-    from aio_rfcomm.backend.iobluetooth._helper import prompt_under_own_name
+    from aio_rfcomm.backend.iobluetooth._helper import prompt_under_name
 else:
 
-    def prompt_under_own_name(*, name: str, reason: str) -> None:
+    def prompt_under_name(*, name: str, reason: str) -> None:
         """
         Do nothing. Only macOS asks a program to identify itself this way.
 

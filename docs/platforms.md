@@ -21,7 +21,7 @@ its caller's behalf. Declare it yourself, before opening an adapter:
 ```python
 import aio_rfcomm.macos
 
-aio_rfcomm.macos.prompt_under_own_name(name="my program", reason="to talk to the robot")
+aio_rfcomm.macos.prompt_under_name(name="my program", reason="to talk to the robot")
 ```
 
 The call does nothing on Linux and Windows, so it needs no `sys.platform`

@@ -2,7 +2,7 @@
 
 Everything in this page is importable from the top-level `aio_rfcomm` package,
 except the errors, which live in `aio_rfcomm.errors`, and
-[`prompt_under_own_name`][aio_rfcomm.macos.prompt_under_own_name], which lives
+[`prompt_under_name`][aio_rfcomm.macos.prompt_under_name], which lives
 in `aio_rfcomm.macos`.
 
 ## Opening
@@ -28,7 +28,7 @@ in `aio_rfcomm.macos`.
 
 ## macOS
 
-::: aio_rfcomm.macos.prompt_under_own_name
+::: aio_rfcomm.macos.prompt_under_name
 
 ## Errors
 

@@ -281,7 +281,7 @@ def _no_radio(authorization: int, name: str | None) -> RfcommError:
             return PermissionDeniedError(
                 "Bluetooth was refused for this program. Allow it under "
                 "Privacy & Security > Bluetooth in System Settings. Note that "
-                "the name passed to aio_rfcomm.macos.prompt_under_own_name() "
+                "the name passed to aio_rfcomm.macos.prompt_under_name() "
                 "is what the permission is remembered against, so changing it "
                 "asks again."
             )
