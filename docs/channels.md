@@ -29,7 +29,7 @@ and so does every call to `send`. That is what ends the loop above.
 
 One task can send while another task receives. Two tasks receiving at the same
 time, or two tasks sending, is a bug, and raises
-[`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError].
+[`BusyResourceError`][aio_rfcomm.errors.BusyResourceError].
 
 ## Reading messages
 

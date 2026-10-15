@@ -15,7 +15,7 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
-    ChannelBusyError,
+    BusyResourceError,
     ChannelClosedError,
     CloseReason,
     DelimiterNotFoundError,
@@ -173,7 +173,7 @@ async def test_every_way_of_receiving_shares_one_reader(
     channel, _fake = opened
     waiting = asyncio.ensure_future(channel.receive_until(b"\n", max_bytes=10))
     await asyncio.sleep(0)
-    with pytest.raises(ChannelBusyError):
+    with pytest.raises(BusyResourceError):
         await second(channel)
     # A mistake in the arguments is still reported as that.
     with pytest.raises(ValueError):

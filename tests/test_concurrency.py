@@ -14,7 +14,7 @@ import asyncio
 import pytest
 
 from aio_rfcomm.channel import RfcommChannel
-from aio_rfcomm.errors import ChannelBusyError
+from aio_rfcomm.errors import BusyResourceError
 from tests.fake import FakeChannel
 
 
@@ -25,7 +25,7 @@ async def test_two_receivers_is_an_error(
     first = asyncio.ensure_future(channel.receive())
     await asyncio.sleep(0)
 
-    with pytest.raises(ChannelBusyError):
+    with pytest.raises(BusyResourceError):
         await channel.receive()
 
     first.cancel()
@@ -39,7 +39,7 @@ async def test_two_senders_is_an_error(
     first = asyncio.ensure_future(channel.send(b"one"))
     await asyncio.sleep(0)
 
-    with pytest.raises(ChannelBusyError):
+    with pytest.raises(BusyResourceError):
         await channel.send(b"two")
 
     first.cancel()

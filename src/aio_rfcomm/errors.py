@@ -22,7 +22,7 @@ from aio_rfcomm.availability import Availability, UnavailableReason
 __all__ = [
     "BluetoothAlreadyOpenError",
     "BluetoothUnavailableError",
-    "ChannelBusyError",
+    "BusyResourceError",
     "ChannelClosedError",
     "ChannelInUseError",
     "CloseReason",
@@ -197,7 +197,7 @@ class BluetoothAlreadyOpenError(RuntimeError):
     """
 
 
-class ChannelBusyError(RuntimeError):
+class BusyResourceError(RuntimeError):
     """
     Two tasks received on one channel at the same time, or two tasks sent.
 

@@ -71,7 +71,7 @@ These are `RuntimeError`, not `RfcommError`.
 | Error | Means |
 | --- | --- |
 | `RuntimeError` | A connection request was accepted or declined twice. |
-| [`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError] | Two tasks received at the same time on one channel, or two tasks sent. |
+| [`BusyResourceError`][aio_rfcomm.errors.BusyResourceError] | Two tasks received at the same time on one channel, or two tasks sent. |
 | [`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError] | Something was used after its `async with` block ended. |
 | [`BluetoothAlreadyOpenError`][aio_rfcomm.errors.BluetoothAlreadyOpenError] | Bluetooth was opened while it was already open. |
 

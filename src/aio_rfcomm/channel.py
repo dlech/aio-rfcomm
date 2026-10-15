@@ -13,7 +13,7 @@ from aio_rfcomm._scope import Scope
 from aio_rfcomm.backend.provider import BackendChannel
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
-    ChannelBusyError,
+    BusyResourceError,
     ChannelClosedError,
     DelimiterNotFoundError,
     RfcommError,
@@ -36,7 +36,7 @@ class RfcommChannel:
     being usable.
 
     One task can send while another receives. Two tasks receiving at once, or two
-    sending, raises :class:`~aio_rfcomm.errors.ChannelBusyError`.
+    sending, raises [`BusyResourceError`][aio_rfcomm.errors.BusyResourceError].
     """
 
     def __init__(self, backend: BackendChannel, scope: Scope) -> None:
@@ -73,7 +73,7 @@ class RfcommChannel:
         """
         self._scope.check()
         if self._sending:
-            raise ChannelBusyError("another task is already sending on this channel")
+            raise BusyResourceError("another task is already sending on this channel")
 
         self._sending = True
         try:
@@ -194,11 +194,11 @@ class RfcommChannel:
 
         Raises:
             ScopeClosedError: The channel's block has ended.
-            ChannelBusyError: Another task is receiving.
+            BusyResourceError: Another task is receiving.
         """
         self._scope.check()
         if self._receiving:
-            raise ChannelBusyError("another task is already receiving on this channel")
+            raise BusyResourceError("another task is already receiving on this channel")
 
         self._receiving = True
         try:

@@ -67,7 +67,7 @@ before retrying.
 **Do not use `asyncio.shield`.** A shielded call keeps running after you stop
 waiting for it. A shielded `receive`, for example, still holds the channel, so
 your next `receive` raises
-[`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError].
+[`BusyResourceError`][aio_rfcomm.errors.BusyResourceError].
 
 **Cancelling `send` loses nothing.** `send` queues all its bytes before it
 waits. If it is cancelled, the bytes are still sent, in order, unless the
