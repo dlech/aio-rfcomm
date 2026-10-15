@@ -59,7 +59,12 @@ from aio_rfcomm.backend.provider import (
     BackendService,
     NoBluetooth,
 )
-from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
+from aio_rfcomm.backend.stream import (
+    StreamChannel,
+    StreamProtocol,
+    hang_up,
+    open_stream,
+)
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     ChannelInUseError,
@@ -442,7 +447,8 @@ class _Request(BackendRequest):
     def close(self) -> None:
         fd, self._fd = self._fd, None
         if fd is not None:
-            os.close(fd)
+            with socket.socket(fileno=fd) as sock:
+                hang_up(sock)
 
 
 def _peer_from_path(device_path: str) -> RfcommDeviceInfo:

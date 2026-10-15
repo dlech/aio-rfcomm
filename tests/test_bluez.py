@@ -27,6 +27,8 @@ from aio_rfcomm.backend.bluez import (
     _powered,
     _Profile,
     _Profiles,
+    _Request,
+    _take_connection,
     _translate_connect,
     _translate_registration,
     _translate_socket_connect,
@@ -98,6 +100,50 @@ def test_a_uuid_held_elsewhere_says_so() -> None:
     assert isinstance(error, ConnectionFailedError)
     assert "another program" in str(error)
     assert SERVICE in str(error)
+
+
+# --------------------------------------------------------------------------
+# Hanging up
+#
+# Measured on BlueZ 5.85 (kernel 7.0.0-38): closing a descriptor BlueZ handed
+# over does not hang up, because another copy of it stays open. Each test
+# keeps that copy open, so only a real hang-up reaches the peer.
+# --------------------------------------------------------------------------
+
+
+async def _nothing() -> None:
+    pass
+
+
+def _served() -> tuple[socket.socket, socket.socket, int]:
+    """
+    A connection as BlueZ hands it over.
+
+    Returns:
+        The peer's end, the copy BlueZ keeps, and the descriptor handed over.
+    """
+    ours, peer = socket.socketpair()
+    return peer, ours, os.dup(ours.fileno())
+
+
+def test_declining_hangs_up_on_the_peer() -> None:
+    peer, kept, fd = _served()
+    with peer, kept:
+        _Request(RfcommDeviceInfo("00:11:22:33:44:55"), fd, _nothing).close()
+
+        peer.settimeout(5)
+        assert peer.recv(1) == b""
+
+
+async def test_closing_a_channel_hangs_up_on_the_peer() -> None:
+    peer, kept, fd = _served()
+    with peer, kept:
+        async with _take_connection(fd, _nothing) as channel:
+            await channel.send(b"bye")
+
+        peer.settimeout(5)
+        assert peer.recv(3) == b"bye"
+        assert peer.recv(1) == b""
 
 
 # --------------------------------------------------------------------------

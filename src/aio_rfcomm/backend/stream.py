@@ -22,6 +22,7 @@ the peer's last words would be lost.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
 from typing import cast
 
@@ -30,11 +31,26 @@ from typing_extensions import override
 from aio_rfcomm.backend.provider import BackendChannel
 from aio_rfcomm.errors import ChannelClosedError, CloseReason
 
-__all__ = ["StreamChannel", "StreamProtocol", "open_stream"]
+__all__ = ["StreamChannel", "StreamProtocol", "hang_up", "open_stream"]
 
 # How much may arrive unread before reading from the socket pauses, leaving the
 # rest to the kernel's buffer and the peer's flow control. asyncio's default.
 _HIGH_WATER = 64 * 1024
+
+
+def hang_up(sock: socket.socket) -> None:
+    """
+    End the connection a socket carries, for every copy of it.
+
+    Args:
+        sock: The socket, still open. Closing it is left to the caller.
+    """
+    # Closing a descriptor BlueZ handed over does not hang up: measured on
+    # BlueZ 5.85 (kernel 7.0.0-38), the peer heard nothing until it closed its
+    # own end, so another copy stays open, presumably in bluetoothd. Shutting
+    # down ends the connection however many copies there are.
+    with contextlib.suppress(OSError):
+        sock.shutdown(socket.SHUT_RDWR)
 
 
 class StreamProtocol(asyncio.Protocol):
@@ -91,6 +107,13 @@ class StreamProtocol(asyncio.Protocol):
         # about why, and the backend is asked instead.
         self._end()
         self._closed.set()
+
+        # The transport closes the socket as soon as this returns.
+        if self._transport is not None:
+            sock = self._transport.get_extra_info("socket")
+
+            if sock is not None:
+                hang_up(sock)
 
     @override
     def pause_writing(self) -> None:
