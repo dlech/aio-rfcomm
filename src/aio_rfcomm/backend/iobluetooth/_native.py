@@ -42,6 +42,7 @@ from rubicon.objc.api import NSString
 from rubicon.objc.runtime import autoreleasepool, libc, load_library, objc_id
 from typing_extensions import override
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth._codes import (
     CBError,
     CBManagerAuthorization,
@@ -50,12 +51,10 @@ from aio_rfcomm.backend.iobluetooth._codes import (
 )
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    AdapterNotFoundError,
-    AdapterOffError,
+    BluetoothUnavailableError,
     CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
-    PermissionDeniedError,
     RfcommError,
     ServiceNotFoundError,
     UnsupportedOperationError,
@@ -354,9 +353,8 @@ async def _wait_until_ready() -> None:
     macOS that does not have it is one this can say nothing about.
 
     Raises:
-        AdapterOffError: The radio is switched off.
-        PermissionDeniedError: This program may not use Bluetooth.
-        AdapterNotFoundError: The machine has no usable Bluetooth.
+        BluetoothUnavailableError: The radio is switched off, this program
+            may not use Bluetooth, or the machine has none that works.
         ConnectionFailedError: The manager settled on a state with no meaning
             here, which is a macOS this code has not been taught about.
     """
@@ -461,15 +459,19 @@ def _unusable(state: int) -> RfcommError:
             # send them to a switch that is already on. The authorization is
             # what separates the two, as it does when the adapter is opened.
             if read_authorization() == CBManagerAuthorization.ALLOWED_ALWAYS:
-                return AdapterOffError(
-                    "this Mac's Bluetooth is switched off; turn it on"
+                return BluetoothUnavailableError(
+                    Availability.SWITCHED_OFF,
+                    "this Mac's Bluetooth is switched off; turn it on",
                 )
-            return PermissionDeniedError(
+            return BluetoothUnavailableError(
+                Availability.NOT_ALLOWED,
                 "Bluetooth is not allowed for this program; check Privacy & "
-                "Security > Bluetooth in System Settings"
+                "Security > Bluetooth in System Settings",
             )
         case CBManagerState.UNSUPPORTED:
-            return AdapterNotFoundError("this Mac has no usable Bluetooth")
+            return BluetoothUnavailableError(
+                Availability.UNSUPPORTED, "this Mac has no usable Bluetooth"
+            )
         case _:
             return ConnectionFailedError(
                 f"CoreBluetooth settled in state {state}, which this does not know"
@@ -972,9 +974,8 @@ async def open_channel(
         The open channel, closed on exit.
 
     Raises:
-        AdapterOffError: The radio is switched off.
-        PermissionDeniedError: This program may not use Bluetooth.
-        AdapterNotFoundError: The machine has no usable Bluetooth.
+        BluetoothUnavailableError: The radio is switched off, this program
+            may not use Bluetooth, or the machine has none that works.
         DeviceNotFoundError: The device did not answer.
         ServiceNotFoundError: The device does not offer that service.
         ConnectionFailedError: The channel could not be opened.

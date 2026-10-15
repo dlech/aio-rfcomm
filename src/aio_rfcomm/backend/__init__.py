@@ -3,8 +3,9 @@
 
 import sys
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import BackendProvider
-from aio_rfcomm.errors import UnsupportedPlatformError
+from aio_rfcomm.errors import BluetoothUnavailableError
 
 __all__ = ["get_backend"]
 
@@ -19,7 +20,7 @@ def get_backend() -> BackendProvider:
     Raises:
         NotImplementedError: This platform will be supported, but its backend
             is not written yet.
-        UnsupportedPlatformError: This platform has no RFCOMM support.
+        BluetoothUnavailableError: This platform has no RFCOMM support.
     """
     if sys.platform == "linux":
         from aio_rfcomm.backend.bluez import BlueZBackend
@@ -36,4 +37,6 @@ def get_backend() -> BackendProvider:
 
         return WindowsBackend()
 
-    raise UnsupportedPlatformError(f"no Bluetooth backend for {sys.platform}")
+    raise BluetoothUnavailableError(
+        Availability.UNSUPPORTED, f"no Bluetooth backend for {sys.platform}"
+    )

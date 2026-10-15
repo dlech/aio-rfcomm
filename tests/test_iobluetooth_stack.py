@@ -24,6 +24,7 @@ if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
 from aio_rfcomm.adapter import RfcommAdapter
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import IOBluetoothAdapter
 from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerState
@@ -33,6 +34,7 @@ from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
     AdapterLostError,
     AdapterLostReason,
+    BluetoothUnavailableError,
     ChannelClosedError,
     CloseReason,
     DeviceNotFoundError,
@@ -199,3 +201,19 @@ async def test_a_radio_switched_off_with_a_channel_open(
                 await channel.receive()
             assert closed.value.reason is CloseReason.LINK_LOST
             assert await adapter.wait_until_gone() is AdapterLostReason.SWITCHED_OFF
+
+
+async def test_an_open_with_the_radio_off_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The helper notices the radio is off; the reason has to survive the trip
+    back across the socket for the caller to say what to do about it.
+    """
+    manager = fake_framework(monkeypatch)
+    manager.state = CBManagerState.POWERED_OFF
+    async with _stack() as adapter:
+        with pytest.raises(BluetoothUnavailableError) as caught:
+            async with asyncio.timeout(1), adapter.use_device(ADDRESS).open_channel(5):
+                pass
+        assert caught.value.reason is Availability.SWITCHED_OFF

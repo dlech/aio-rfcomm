@@ -42,6 +42,7 @@ from winrt.windows.devices.bluetooth.rfcomm import RfcommServiceId
 from winrt.windows.devices.enumeration import DeviceInformation
 from winrt.windows.devices.radios import RadioState
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
     FIRST_CHANNEL,
     LAST_CHANNEL,
@@ -55,8 +56,7 @@ from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.backend.windows import _service
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    AdapterNotFoundError,
-    AdapterOffError,
+    BluetoothUnavailableError,
     ChannelInUseError,
     ConnectionFailedError,
     DeviceNotFoundError,
@@ -154,7 +154,13 @@ class WindowsService(BackendService):
 
         # accept() hands the peer back already formatted, unlike the integer
         # addresses WinRT deals in, so _format has nothing to do here.
-        return RfcommDeviceInfo(address.upper(), None), _take(conn)
+        try:
+            peer = RfcommDeviceInfo(address)
+        except ValueError:
+            # The socket is ours until a channel takes it.
+            conn.close()
+            raise
+        return peer, _take(conn)
 
 
 def _deliver(
@@ -366,16 +372,19 @@ class WindowsBackend(BackendProvider):
         """
         available = await _list_adapters()
         if not available:
-            raise AdapterNotFoundError("this machine has no Bluetooth adapter")
+            raise BluetoothUnavailableError(Availability.NO_ADAPTER)
 
         chosen = available[0] if adapter is None else adapter
         if not any(a.id == chosen.id for a in available):
-            raise AdapterNotFoundError(chosen.id)
+            raise BluetoothUnavailableError(
+                Availability.NO_ADAPTER, f"there is no adapter {chosen.id}"
+            )
 
         radio = await (await _adapter(chosen.id)).get_radio_async()
         if radio.state != RadioState.ON:
-            raise AdapterOffError(
-                f"{chosen.name or chosen.id} is switched off; turn Bluetooth on"
+            raise BluetoothUnavailableError(
+                Availability.SWITCHED_OFF,
+                f"{chosen.name or chosen.id} is switched off; turn Bluetooth on",
             )
 
         yield WindowsAdapter(chosen)
@@ -443,11 +452,13 @@ async def _adapter(identifier: str) -> BluetoothAdapter:
         The adapter.
 
     Raises:
-        AdapterNotFoundError: It has gone since it was listed.
+        BluetoothUnavailableError: It has gone since it was listed.
     """
     adapter = await BluetoothAdapter.from_id_async(identifier)
     if adapter is None:
-        raise AdapterNotFoundError(identifier)
+        raise BluetoothUnavailableError(
+            Availability.NO_ADAPTER, f"adapter {identifier} has gone"
+        )
     return adapter
 
 
@@ -764,7 +775,9 @@ def _translate(error: BluetoothError, address: str) -> RfcommError:
     if error == BluetoothError.DEVICE_NOT_CONNECTED:
         return DeviceNotFoundError(f"{address} did not answer")
     if error == BluetoothError.RADIO_NOT_AVAILABLE:
-        return AdapterOffError("the Bluetooth radio is not available")
+        return BluetoothUnavailableError(
+            Availability.SWITCHED_OFF, "the Bluetooth radio is not available"
+        )
     return ConnectionFailedError(f"could not read {address}'s services: {error.name}")
 
 

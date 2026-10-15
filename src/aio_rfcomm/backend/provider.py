@@ -32,6 +32,7 @@ __all__ = [
     "BackendChannel",
     "BackendProvider",
     "BackendService",
+    "check_channel",
 ]
 
 # RFCOMM addresses a channel with five bits and reserves 0 and 31, so a server
@@ -39,6 +40,24 @@ __all__ = [
 # one platform, so every backend and the layer above share these.
 FIRST_CHANNEL = 1
 LAST_CHANNEL = 30
+
+
+def check_channel(channel: int) -> None:
+    """
+    Refuse a number that cannot be an RFCOMM channel, before anything is
+    contacted.
+
+    Args:
+        channel: The channel number a caller gave.
+
+    Raises:
+        ValueError: It is outside 1 to 30.
+    """
+    if not FIRST_CHANNEL <= channel <= LAST_CHANNEL:
+        raise ValueError(
+            f"channel {channel} is not an RFCOMM channel; they run from "
+            f"{FIRST_CHANNEL} to {LAST_CHANNEL}"
+        )
 
 
 class BackendProvider(ABC):
@@ -74,9 +93,8 @@ class BackendProvider(ABC):
             An async context manager yielding the open adapter.
 
         Raises:
-            AdapterNotFoundError: No such adapter, or the machine has none.
-            AdapterOffError: The adapter is present but switched off.
-            PermissionDeniedError: The OS refused access to Bluetooth.
+            BluetoothUnavailableError: No such adapter, the machine has none,
+                it is switched off, or the OS refused access to Bluetooth.
         """
         raise NotImplementedError
 
@@ -155,9 +173,8 @@ class BackendAdapter(ABC):
             An async context manager yielding the open channel, closed on exit.
 
         Raises:
-            AdapterOffError: The radio was switched off after the adapter
-                was opened.
-            PermissionDeniedError: This program may not use Bluetooth.
+            BluetoothUnavailableError: The radio was switched off after the
+                adapter was opened, or this program may not use Bluetooth.
             DeviceNotFoundError: The device could not be reached.
             ServiceNotFoundError: The device does not offer ``service``.
             ConnectionFailedError: The channel could not be opened.
@@ -187,9 +204,8 @@ class BackendAdapter(ABC):
             An async context manager yielding the open channel, closed on exit.
 
         Raises:
-            AdapterOffError: The radio was switched off after the adapter
-                was opened.
-            PermissionDeniedError: This program may not use Bluetooth.
+            BluetoothUnavailableError: The radio was switched off after the
+                adapter was opened, or this program may not use Bluetooth.
             DeviceNotFoundError: The device could not be reached.
             ConnectionFailedError: The channel could not be opened.
             UnsupportedOperationError: The platform cannot open a channel

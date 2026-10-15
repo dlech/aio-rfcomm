@@ -20,6 +20,7 @@ import uuid
 
 from winrt.windows.devices.bluetooth import BluetoothError
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.windows import (
     _each,
     _format,
@@ -27,7 +28,7 @@ from aio_rfcomm.backend.windows import (
     _translate,
 )
 from aio_rfcomm.errors import (
-    AdapterOffError,
+    BluetoothUnavailableError,
     ConnectionFailedError,
     DeviceNotFoundError,
 )
@@ -95,7 +96,8 @@ def test_a_device_that_is_not_there_is_not_a_connection_failure() -> None:
 
 def test_a_radio_that_is_gone_is_reported_as_the_adapter() -> None:
     error = _translate(BluetoothError.RADIO_NOT_AVAILABLE, "00:11")
-    assert isinstance(error, AdapterOffError)
+    assert isinstance(error, BluetoothUnavailableError)
+    assert error.reason is Availability.SWITCHED_OFF
 
 
 def test_anything_else_is_a_connection_failure_naming_what_happened() -> None:

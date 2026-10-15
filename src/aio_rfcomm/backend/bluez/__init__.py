@@ -40,6 +40,7 @@ from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
 from dbus_fast.service import ServiceInterface, method
 from typing_extensions import override
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
     BackendAdapter,
     BackendChannel,
@@ -49,8 +50,7 @@ from aio_rfcomm.backend.provider import (
 from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    AdapterNotFoundError,
-    AdapterOffError,
+    BluetoothUnavailableError,
     ChannelInUseError,
     ConnectionFailedError,
     DeviceNotFoundError,
@@ -337,7 +337,13 @@ class BlueZService(BackendService):
         self,
     ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
         device_path, fd = await self._profile.next_connection()
-        return _peer_from_path(device_path), _take_connection(fd)
+        try:
+            peer = _peer_from_path(device_path)
+        except ValueError:
+            # The descriptor is ours until a channel takes it.
+            os.close(fd)
+            raise
+        return peer, _take_connection(fd)
 
 
 def _peer_from_path(device_path: str) -> RfcommDeviceInfo:
@@ -742,7 +748,7 @@ class BlueZBackend(BackendProvider):
         async with _bus(negotiate_unix_fd=True) as bus:
             available = await _list_adapters(bus)
             if not available:
-                raise AdapterNotFoundError("this machine has no Bluetooth adapter")
+                raise BluetoothUnavailableError(Availability.NO_ADAPTER)
 
             # REVISIT: taking the first is a poor default on a machine with
             # more than one radio. It should prefer a powered adapter over an
@@ -751,12 +757,15 @@ class BlueZBackend(BackendProvider):
             # bleak has a worked-out algorithm for this worth following.
             chosen = available[0] if adapter is None else adapter
             if not any(a.id == chosen.id for a in available):
-                raise AdapterNotFoundError(chosen.id)
+                raise BluetoothUnavailableError(
+                    Availability.NO_ADAPTER, f"there is no adapter {chosen.id}"
+                )
 
             radio = await _get(bus, chosen.id, _ADAPTER, _AdapterProxy)
             if not await radio.get_powered():
-                raise AdapterOffError(
-                    f"{chosen.name or chosen.id} is switched off; turn Bluetooth on"
+                raise BluetoothUnavailableError(
+                    Availability.SWITCHED_OFF,
+                    f"{chosen.name or chosen.id} is switched off; turn Bluetooth on",
                 )
 
             manager = await _get(

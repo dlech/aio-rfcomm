@@ -35,7 +35,12 @@ from rubicon.objc.eventloop import RubiconEventLoop
 
 from aio_rfcomm.backend.iobluetooth import _native
 from aio_rfcomm.backend.iobluetooth._protocol import Link
-from aio_rfcomm.errors import AdapterLostReason, CloseReason, RfcommError
+from aio_rfcomm.errors import (
+    AdapterLostReason,
+    BluetoothUnavailableError,
+    CloseReason,
+    RfcommError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -187,13 +192,10 @@ async def _answer(link: Link, message: dict[str, Any]) -> None:
             case unknown:
                 raise RfcommError(f"the helper does not understand {unknown!r}")
     except RfcommError as error:
-        link.send(
-            {
-                "id": number,
-                "error": type(error).__name__,
-                "message": str(error),
-            }
-        )
+        reply = {"id": number, "error": type(error).__name__, "message": str(error)}
+        if isinstance(error, BluetoothUnavailableError):
+            reply["reason"] = error.reason.name
+        link.send(reply)
     except Exception as error:
         logger.exception("helper failed to answer %r", message.get("op"))
         link.send(

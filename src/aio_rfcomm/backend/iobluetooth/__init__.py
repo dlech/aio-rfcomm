@@ -26,6 +26,7 @@ from uuid import UUID
 
 from typing_extensions import override
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
 from aio_rfcomm.backend.iobluetooth._helper import Ending, Helper, run_helper
 from aio_rfcomm.backend.provider import (
@@ -38,12 +39,9 @@ from aio_rfcomm.backend.stream import StreamChannel
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     AdapterLostReason,
-    AdapterNotFoundError,
-    AdapterOffError,
+    BluetoothUnavailableError,
     CloseReason,
     ConnectionFailedError,
-    PermissionDeniedError,
-    RfcommError,
     UnsupportedOperationError,
 )
 
@@ -246,13 +244,15 @@ class IOBluetoothBackend(BackendProvider):
         async with run_helper() as helper:
             available = await _read_adapters(helper)
             if not available:
-                raise AdapterNotFoundError("this machine has no Bluetooth adapter")
+                raise BluetoothUnavailableError(Availability.NO_ADAPTER)
 
             # macOS exposes a single controller and no way to choose between
             # radios, so there is nothing to be clever about here.
             chosen = available[0] if adapter is None else adapter
             if not any(a.id == chosen.id for a in available):
-                raise AdapterNotFoundError(chosen.id)
+                raise BluetoothUnavailableError(
+                    Availability.NO_ADAPTER, f"there is no adapter {chosen.id}"
+                )
 
             radio, _fds = await helper.ask("powered")
             if not radio["powered"]:
@@ -261,7 +261,7 @@ class IOBluetoothBackend(BackendProvider):
             yield IOBluetoothAdapter(helper, chosen)
 
 
-def _no_radio(authorization: int, name: str | None) -> RfcommError:
+def _no_radio(authorization: int, name: str | None) -> BluetoothUnavailableError:
     """
     Say why the radio is unusable, which is not always that it is off.
 
@@ -278,28 +278,32 @@ def _no_radio(authorization: int, name: str | None) -> RfcommError:
     """
     match authorization:
         case CBManagerAuthorization.DENIED:
-            return PermissionDeniedError(
+            return BluetoothUnavailableError(
+                Availability.NOT_ALLOWED,
                 "Bluetooth was refused for this program. Allow it under "
                 "Privacy & Security > Bluetooth in System Settings. Note that "
                 "the name passed to aio_rfcomm.macos.prompt_under_name() "
                 "is what the permission is remembered against, so changing it "
-                "asks again."
+                "asks again.",
             )
         case CBManagerAuthorization.RESTRICTED:
-            return PermissionDeniedError(
+            return BluetoothUnavailableError(
+                Availability.NOT_ALLOWED,
                 "Bluetooth is not allowed on this Mac, by a profile or "
                 "parental controls rather than by a choice this program can "
-                "undo."
+                "undo.",
             )
         case CBManagerAuthorization.NOT_DETERMINED:
-            return PermissionDeniedError(
+            return BluetoothUnavailableError(
+                Availability.NOT_ALLOWED,
                 "Bluetooth permission for this program has not been answered. "
                 "A dialog should have appeared; if it was dismissed, run the "
-                "program again and allow it."
+                "program again and allow it.",
             )
         case _:
-            return AdapterOffError(
-                f"{name or 'this Mac'}'s Bluetooth is switched off; turn it on"
+            return BluetoothUnavailableError(
+                Availability.SWITCHED_OFF,
+                f"{name or 'this Mac'}'s Bluetooth is switched off; turn it on",
             )
 
 

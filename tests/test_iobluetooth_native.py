@@ -20,15 +20,14 @@ import pytest
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import _native
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth._native import _Device
 from aio_rfcomm.errors import (
-    AdapterNotFoundError,
-    AdapterOffError,
+    BluetoothUnavailableError,
     ConnectionFailedError,
     DeviceNotFoundError,
-    PermissionDeniedError,
     UnsupportedOperationError,
 )
 from tests.fake_iobluetooth import (
@@ -158,9 +157,10 @@ async def test_a_switched_off_radio_is_reported_not_waited_for(
     alone would wait for ever.
     """
     manager.state = CBManagerState.POWERED_OFF
-    with pytest.raises(AdapterOffError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         async with asyncio.timeout(1):
             await _native._wait_until_ready()
+    assert raised.value.reason is Availability.SWITCHED_OFF
 
 
 async def test_a_refused_radio_does_not_look_switched_off(
@@ -174,8 +174,9 @@ async def test_a_refused_radio_does_not_look_switched_off(
         _native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
     )
     manager.state = CBManagerState.POWERED_OFF
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         await _native._wait_until_ready()
+    assert raised.value.reason is Availability.NOT_ALLOWED
 
 
 async def test_an_unauthorized_state_is_a_permission_error(
@@ -185,16 +186,18 @@ async def test_an_unauthorized_state_is_a_permission_error(
         _native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
     )
     manager.state = CBManagerState.UNAUTHORIZED
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         await _native._wait_until_ready()
+    assert raised.value.reason is Availability.NOT_ALLOWED
 
 
 async def test_a_machine_with_no_bluetooth_is_not_an_adapter_that_is_off(
     manager: FakeManager,
 ) -> None:
     manager.state = CBManagerState.UNSUPPORTED
-    with pytest.raises(AdapterNotFoundError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         await _native._wait_until_ready()
+    assert raised.value.reason is Availability.UNSUPPORTED
 
 
 async def test_a_state_from_the_future_is_still_a_failure(
@@ -230,8 +233,9 @@ async def test_a_powered_on_in_the_middle_of_a_toggle_is_taken_at_face_value(
 
     # The radio really does go, a moment later.
     manager.state = CBManagerState.POWERED_OFF
-    with pytest.raises(AdapterOffError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         await _native._wait_until_ready()
+    assert raised.value.reason is Availability.SWITCHED_OFF
 
     manager.state = CBManagerState.POWERED_ON
     async with asyncio.timeout(1):
@@ -560,9 +564,10 @@ async def test_a_radio_switched_off_after_a_connection_is_reported(
         pass
 
     manager.state = CBManagerState.POWERED_OFF
-    with pytest.raises(AdapterOffError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         async with _native.open_channel(ADDRESS, channel=4):
             pass
+    assert raised.value.reason is Availability.SWITCHED_OFF
 
     manager.state = CBManagerState.POWERED_ON
     async with _native.open_channel(ADDRESS, channel=4):
@@ -579,7 +584,8 @@ async def test_a_radio_switched_off_does_not_strand_the_device_claim(
         pass
 
     manager.state = CBManagerState.POWERED_OFF
-    with pytest.raises(AdapterOffError):
+    with pytest.raises(BluetoothUnavailableError) as raised:
         async with _native.open_channel(ADDRESS, channel=4):
             pass
+    assert raised.value.reason is Availability.SWITCHED_OFF
     assert _native._in_use == set()

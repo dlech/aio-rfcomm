@@ -11,11 +11,7 @@ from uuid import UUID
 
 from aio_rfcomm._scope import Scope
 from aio_rfcomm._teardown import raise_when
-from aio_rfcomm.backend.provider import (
-    FIRST_CHANNEL,
-    LAST_CHANNEL,
-    BackendAdapter,
-)
+from aio_rfcomm.backend.provider import BackendAdapter, check_channel
 from aio_rfcomm.device import RfcommDevice
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import AdapterLostError, AdapterLostReason, RfcommError
@@ -82,6 +78,9 @@ class RfcommAdapter:
 
         Returns:
             The device, ready to open a channel to.
+
+        Raises:
+            ValueError: ``device`` is a string that is not a Bluetooth address.
         """
         self._scope.check()
         info = RfcommDeviceInfo(device, None) if isinstance(device, str) else device
@@ -141,11 +140,8 @@ class RfcommAdapter:
                 channel was given and this one cannot be chosen for you.
         """
         self._scope.check()
-        if channel is not None and not FIRST_CHANNEL <= channel <= LAST_CHANNEL:
-            raise ValueError(
-                f"channel {channel} is not an RFCOMM channel; they run from "
-                f"{FIRST_CHANNEL} to {LAST_CHANNEL}"
-            )
+        if channel is not None:
+            check_channel(channel)
         return serve_connections(
             self._backend.serve(service, name=name, channel=channel),
             handler,

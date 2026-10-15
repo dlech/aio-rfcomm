@@ -13,6 +13,7 @@ from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from aio_rfcomm.adapter import RfcommAdapter
+from aio_rfcomm.availability import Availability, UnavailableReason
 from aio_rfcomm.backend import get_backend
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.device import RfcommDevice
@@ -20,6 +21,7 @@ from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.service import ConnectionHandler, RfcommService
 
 __all__ = [
+    "Availability",
     "ConnectionHandler",
     "RfcommAdapter",
     "RfcommAdapterInfo",
@@ -27,6 +29,7 @@ __all__ = [
     "RfcommDevice",
     "RfcommDeviceInfo",
     "RfcommService",
+    "UnavailableReason",
     "list_adapters",
     "open_adapter",
 ]

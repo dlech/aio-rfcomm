@@ -12,7 +12,11 @@ from uuid import UUID
 from typing_extensions import override
 
 from aio_rfcomm._scope import Scope
-from aio_rfcomm.backend.provider import BackendAdapter, BackendChannel
+from aio_rfcomm.backend.provider import (
+    BackendAdapter,
+    BackendChannel,
+    check_channel,
+)
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.discovery import RfcommDeviceInfo
 
@@ -84,13 +88,17 @@ class RfcommDevice:
         discovery is a slow round trip.
 
         Args:
-            channel: The RFCOMM channel number.
+            channel: The RFCOMM channel number, 1 to 30.
 
         Returns:
             An async context manager yielding the open channel, closed on
             exit.
+
+        Raises:
+            ValueError: ``channel`` is not an RFCOMM channel number.
         """
         self._scope.check()
+        check_channel(channel)
         return self._open(self._backend.open_channel(self._info, channel), self._scope)
 
     @staticmethod

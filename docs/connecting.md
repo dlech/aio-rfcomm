@@ -28,7 +28,8 @@ bricks = await adapter.list_known_devices(service=SERIAL_PORT)
 
 If you already know the address you do not need to list anything at all.
 [`use_device`][aio_rfcomm.RfcommAdapter.use_device] contacts nothing, so it
-succeeds for a device that is switched off, out of range, or not even paired.
+succeeds for a device that is switched off, out of range, or not even paired;
+it fails only for a string that is not a Bluetooth address, with `ValueError`.
 The address is only resolved when you open a channel, which is where those
 failures turn up:
 

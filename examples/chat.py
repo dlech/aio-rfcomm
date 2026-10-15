@@ -271,6 +271,22 @@ async def main(arguments: Arguments) -> int:
     return 0
 
 
+def _address(text: str) -> str:
+    """
+    Check that a command-line argument is a Bluetooth address.
+
+    Args:
+        text: What was typed.
+
+    Returns:
+        The address, normalised.
+
+    Raises:
+        ValueError: It is not one, which argparse turns into a usage message.
+    """
+    return aio_rfcomm.RfcommDeviceInfo(text).address
+
+
 def parse() -> Arguments:
     """
     Read the command line.
@@ -288,15 +304,22 @@ def parse() -> Arguments:
     serving.add_argument(
         "--channel",
         type=int,
+        choices=range(1, 31),
+        metavar="1-30",
         default=None,
-        help="RFCOMM channel to listen on (1-30); chosen for you if omitted",
+        help="RFCOMM channel to listen on; chosen for you if omitted",
     )
 
     connecting = commands.add_parser("connect", help="connect to someone serving")
-    connecting.add_argument("address", help="the peer's Bluetooth address")
+    # Checked here so a mistyped address gets argparse's own message.
+    connecting.add_argument(
+        "address", type=_address, help="the peer's Bluetooth address"
+    )
     connecting.add_argument(
         "--channel",
         type=int,
+        choices=range(1, 31),
+        metavar="1-30",
         default=None,
         help=(
             "skip service discovery and use this channel. Worth having on "

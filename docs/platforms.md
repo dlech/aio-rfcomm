@@ -35,10 +35,10 @@ guard.
     it.
 
 A refusal raises
-[`PermissionDeniedError`][aio_rfcomm.errors.PermissionDeniedError], which is
-distinct from [`AdapterOffError`][aio_rfcomm.errors.AdapterOffError] — the
-library reads the authorization state directly rather than inferring it, so
-"you said no" and "the radio is off" never get confused for one another.
+[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError] with
+the reason `NOT_ALLOWED`, which is distinct from `SWITCHED_OFF` — the library
+reads the authorization state directly rather than inferring it, so "you said
+no" and "the radio is off" never get confused for one another.
 
 ### One channel at a time per device
 

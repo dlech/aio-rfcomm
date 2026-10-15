@@ -29,6 +29,7 @@ if not hasattr(socket, "AF_UNIX"):
         allow_module_level=True,
     )
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import (
     IOBluetoothAdapter,
     IOBluetoothChannel,
@@ -45,12 +46,10 @@ from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, Protocol
 from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
     AdapterLostReason,
-    AdapterNotFoundError,
-    AdapterOffError,
+    BluetoothUnavailableError,
     CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
-    PermissionDeniedError,
     ServiceNotFoundError,
 )
 
@@ -385,16 +384,34 @@ def test_a_known_error_comes_back_as_itself() -> None:
 
 
 @pytest.mark.parametrize(
-    "kind",
-    [AdapterOffError, PermissionDeniedError, AdapterNotFoundError],
+    "reason",
+    [
+        Availability.SWITCHED_OFF,
+        Availability.NOT_ALLOWED,
+        Availability.NO_ADAPTER,
+        Availability.SERVICE_UNAVAILABLE,
+        Availability.UNSUPPORTED,
+    ],
 )
-def test_the_adapter_errors_survive_the_socket(kind: type[Exception]) -> None:
+def test_bluetooth_being_unusable_survives_the_socket(
+    reason: Availability,
+) -> None:
     """
     A channel open can fail because the radio went away, and the helper is
-    where that is noticed, so these have to cross the socket as themselves.
+    where that is noticed, so the reason has to cross the socket too.
     """
-    rebuilt = _rebuild(kind.__name__, "the radio went away")
-    assert isinstance(rebuilt, kind)
+    rebuilt = _rebuild("BluetoothUnavailableError", "the radio went away", reason.name)
+    assert isinstance(rebuilt, BluetoothUnavailableError)
+    assert rebuilt.reason is reason
+    assert "the radio went away" in str(rebuilt)
+
+
+@pytest.mark.parametrize("reason", [None, "USABLE", "SOMETHING_NEW"])
+def test_an_unavailability_without_a_reason_is_still_a_failure(
+    reason: str | None,
+) -> None:
+    rebuilt = _rebuild("BluetoothUnavailableError", "the radio went away", reason)
+    assert isinstance(rebuilt, ConnectionFailedError)
     assert "the radio went away" in str(rebuilt)
 
 
@@ -472,40 +489,35 @@ def test_a_refused_permission_is_not_reported_as_a_dead_radio() -> None:
     """
     from aio_rfcomm.backend.iobluetooth import _no_radio
     from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-    from aio_rfcomm.errors import PermissionDeniedError
 
     error = _no_radio(CBManagerAuthorization.DENIED, "thor")
-    assert isinstance(error, PermissionDeniedError)
+    assert error.reason is Availability.NOT_ALLOWED
     assert "System Settings" in str(error)
 
 
 def test_an_unanswered_prompt_says_so() -> None:
     from aio_rfcomm.backend.iobluetooth import _no_radio
     from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-    from aio_rfcomm.errors import PermissionDeniedError
 
     error = _no_radio(CBManagerAuthorization.NOT_DETERMINED, "thor")
-    assert isinstance(error, PermissionDeniedError)
+    assert error.reason is Availability.NOT_ALLOWED
     assert "dialog" in str(error)
 
 
 def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
     from aio_rfcomm.backend.iobluetooth import _no_radio
     from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-    from aio_rfcomm.errors import PermissionDeniedError
 
-    assert isinstance(
-        _no_radio(CBManagerAuthorization.RESTRICTED, "thor"), PermissionDeniedError
-    )
+    error = _no_radio(CBManagerAuthorization.RESTRICTED, "thor")
+    assert error.reason is Availability.NOT_ALLOWED
 
 
 def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
     from aio_rfcomm.backend.iobluetooth import _no_radio
     from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-    from aio_rfcomm.errors import AdapterOffError
 
     error = _no_radio(CBManagerAuthorization.ALLOWED_ALWAYS, "thor")
-    assert isinstance(error, AdapterOffError)
+    assert error.reason is Availability.SWITCHED_OFF
     assert "thor" in str(error)
     assert "switched off" in str(error)
 

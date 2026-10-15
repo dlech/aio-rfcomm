@@ -21,6 +21,11 @@ in `aio_rfcomm.macos`.
 ::: aio_rfcomm.RfcommService
 ::: aio_rfcomm.ConnectionHandler
 
+## Availability
+
+::: aio_rfcomm.Availability
+::: aio_rfcomm.UnavailableReason
+
 ## Descriptions
 
 ::: aio_rfcomm.RfcommAdapterInfo

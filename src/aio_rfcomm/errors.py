@@ -4,23 +4,30 @@
 """
 Errors raised by aio-rfcomm.
 
-Every failure surfaces as an :class:`RfcommError`. Backends wrap the platform
-exception rather than letting it through, so error handling is the same on
-every platform; the original is kept as ``__cause__`` for diagnosis.
+Every failure that Bluetooth or the peer causes surfaces as an
+:class:`RfcommError`, which is what a program catches. Backends wrap the
+platform exception rather than letting it through, so error handling is the
+same on every platform; the original is kept as ``__cause__`` for diagnosis.
 
-Grouped below by what raises them first: opening an adapter, using one, opening
-a channel, using one, and finally misuse of the API itself. The grouping is a
-reading aid rather than a promise -- a radio switched off part way through a
-session surfaces the adapter errors from a channel open, for instance.
+Mistakes in the calling code are not :class:`RfcommError`: they are
+:class:`RuntimeError` subclasses, grouped at the end, so that catching
+:class:`RfcommError` never hides a bug.
+
+Grouped below by what raises them first. The grouping is a reading aid rather
+than a promise.
 """
 
 import enum
+from typing import Self
+
+from typing_extensions import override
+
+from aio_rfcomm.availability import Availability, UnavailableReason
 
 __all__ = [
     "AdapterLostError",
     "AdapterLostReason",
-    "AdapterNotFoundError",
-    "AdapterOffError",
+    "BluetoothUnavailableError",
     "ChannelBrokenError",
     "ChannelBusyError",
     "ChannelClosedError",
@@ -28,12 +35,10 @@ __all__ = [
     "CloseReason",
     "ConnectionFailedError",
     "DeviceNotFoundError",
-    "PermissionDeniedError",
     "RfcommError",
     "ScopeClosedError",
     "ServiceNotFoundError",
     "UnsupportedOperationError",
-    "UnsupportedPlatformError",
 ]
 
 
@@ -44,45 +49,45 @@ class RfcommError(Exception):
 
 
 # --------------------------------------------------------------------------
-# Opening an adapter
+# Bluetooth itself
 # --------------------------------------------------------------------------
 
+# What to say about each reason when the platform has nothing more specific.
+_DESCRIPTIONS: dict[UnavailableReason, str] = {
+    Availability.SWITCHED_OFF: "Bluetooth is switched off",
+    Availability.NO_ADAPTER: "this computer has no Bluetooth adapter",
+    Availability.NOT_ALLOWED: "this program may not use Bluetooth",
+    Availability.SERVICE_UNAVAILABLE: "the Bluetooth service is not running",
+    Availability.UNSUPPORTED: "this system has no Bluetooth",
+}
 
-class UnsupportedPlatformError(RfcommError):
+
+class BluetoothUnavailableError(RfcommError):
     """
-    This platform has no RFCOMM support.
-    """
+    Bluetooth cannot be used.
 
-
-class PermissionDeniedError(RfcommError):
-    """
-    The OS refused access to Bluetooth.
-
-    On macOS this is also what a missing ``NSBluetoothAlwaysUsageDescription``
-    looks like once the helper process has been reaped, since the abort itself
-    is not catchable in the calling process.
-    """
-
-
-class AdapterNotFoundError(RfcommError):
-    """
-    No Bluetooth adapter matched, or the machine has none.
+    Raised by anything attempted while Bluetooth is unusable. :attr:`reason`
+    says why.
     """
 
+    def __init__(self, reason: UnavailableReason, detail: str | None = None) -> None:
+        """
+        Args:
+            reason: Why Bluetooth cannot be used.
+            detail: What the platform said, when it says more than the reason
+                does -- what to do about a refused permission, say.
+        """
+        super().__init__(detail or _DESCRIPTIONS[reason])
+        self.reason: UnavailableReason = reason
+        """
+        Why Bluetooth cannot be used.
+        """
 
-class AdapterOffError(RfcommError):
-    """
-    The adapter is present but switched off.
-
-    Distinct from :class:`AdapterNotFoundError`, which means there is no such
-    adapter at all: this one the user can fix by turning Bluetooth on.
-
-    Every platform can see this -- ``Adapter1.Powered`` on Linux, the state of
-    CoreBluetooth's manager on macOS, and the radio state on Windows.
-
-    Also raised by opening a channel, since the radio can be switched off while
-    an adapter is held.
-    """
+    @override
+    def __reduce__(self) -> tuple[type[Self], tuple[UnavailableReason, str]]:
+        # Rebuilt from the reason, not from the message alone, so that copying
+        # or pickling one gives back the same error.
+        return type(self), (self.reason, str(self))
 
 
 # --------------------------------------------------------------------------
@@ -179,11 +184,6 @@ class CloseReason(enum.Enum):
     power, or dropped the link.
     """
 
-    ADAPTER_OFF = "the adapter was switched off"
-    """
-    The local radio was turned off while the channel was open.
-    """
-
 
 class ChannelClosedError(RfcommError):
     """
@@ -210,30 +210,14 @@ class ChannelClosedError(RfcommError):
         Why the channel is gone.
         """
 
-
-class ChannelBrokenError(RfcommError):
-    """
-    The channel is no longer usable because a send was cancelled.
-
-    A cancelled :meth:`~aio_rfcomm.RfcommChannel.send` leaves an unknown
-    number of bytes delivered, so the channel cannot be trusted afterwards.
-    Close it.
-    """
-
-
-class ChannelBusyError(RfcommError):
-    """
-    Two tasks used one direction of a channel at the same time.
-
-    One task sends and one task receives; the two directions are independent
-    and do not block each other. Sharing a single direction interleaves the
-    two callers' data unpredictably, so it is reported as the caller's bug
-    rather than tolerated as a race.
-    """
+    @override
+    def __reduce__(self) -> tuple[type[Self], tuple[CloseReason]]:
+        # Rebuilt from the reason, not from the message it was turned into.
+        return type(self), (self.reason,)
 
 
 # --------------------------------------------------------------------------
-# Misuse
+# Limits
 # --------------------------------------------------------------------------
 
 
@@ -259,7 +243,33 @@ class UnsupportedOperationError(RfcommError):
     """
 
 
-class ScopeClosedError(RfcommError):
+# --------------------------------------------------------------------------
+# Mistakes in the calling code
+# --------------------------------------------------------------------------
+
+
+class ChannelBrokenError(RuntimeError):
+    """
+    A channel was sent on after an earlier send on it was cancelled.
+
+    Whether the peer received the cancelled send's data is unknown, so a
+    protocol with any framing cannot trust what follows. Leave the channel's
+    block and open a new one.
+    """
+
+
+class ChannelBusyError(RuntimeError):
+    """
+    Two tasks used one direction of a channel at the same time.
+
+    One task sends and one task receives; the two directions are independent
+    and do not block each other. Sharing a single direction interleaves the
+    two callers' data unpredictably, so it is reported as the caller's bug
+    rather than tolerated as a race.
+    """
+
+
+class ScopeClosedError(RuntimeError):
     """
     A handle was used after the block that produced it ended.
 

@@ -31,14 +31,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from aio_rfcomm._teardown import unwrap_lone_error
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth._bundle import build_helper
 from aio_rfcomm.backend.iobluetooth._protocol import Link
 from aio_rfcomm.errors import (
+    BluetoothUnavailableError,
     CloseReason,
     ConnectionFailedError,
-    PermissionDeniedError,
     RfcommError,
-    UnsupportedOperationError,
 )
 
 __all__ = ["Ending", "Helper", "prompt_under_name", "run_helper"]
@@ -281,7 +281,11 @@ class Helper:
                 continue
 
             if "error" in message:
-                answer.set_exception(_rebuild(message["error"], message["message"]))
+                answer.set_exception(
+                    _rebuild(
+                        message["error"], message["message"], message.get("reason")
+                    )
+                )
             else:
                 answer.set_result((message.get("ok"), fds))
 
@@ -336,11 +340,11 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
         The helper, ready for requests.
 
     Raises:
-        PermissionDeniedError: macOS refused Bluetooth to the helper.
+        BluetoothUnavailableError: macOS refused Bluetooth to the helper.
         HelperFailedError: The helper could not be started.
     """
     if sys.platform != "darwin":
-        raise UnsupportedOperationError("the helper process is macOS only")
+        raise RuntimeError("the helper process is macOS only")
 
     # Left to its defaults the bundle is never the one macOS asks about:
     # it inherits the responsibility of whatever started this process.
@@ -395,7 +399,7 @@ async def _wait_until_ready(helper: Helper, pid: int) -> None:
         pid: Its process id.
 
     Raises:
-        PermissionDeniedError: macOS refused Bluetooth to the helper.
+        BluetoothUnavailableError: macOS refused Bluetooth to the helper.
         HelperFailedError: The helper stopped before answering.
     """
     try:
@@ -420,33 +424,43 @@ def _died(pid: int) -> RfcommError:
         status = 0
 
     if os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGABRT:
-        return PermissionDeniedError(
+        return BluetoothUnavailableError(
+            Availability.NOT_ALLOWED,
             "macOS refused Bluetooth to the helper process and ended it. "
             "Bluetooth is granted to the application responsible for this "
             "process, which must carry NSBluetoothAlwaysUsageDescription in "
             "its Info.plist. If this program is not a bundled application -- "
             "a script, a REPL or a command line tool -- call "
             "aio_rfcomm.macos.prompt_under_name() before opening an "
-            "adapter, so the helper can ask for permission itself."
+            "adapter, so the helper can ask for permission itself.",
         )
     return HelperFailedError(
         f"the macOS Bluetooth helper stopped during startup (status {status})"
     )
 
 
-def _rebuild(name: str, message: str) -> RfcommError:
+def _rebuild(name: str, message: str, reason: str | None = None) -> RfcommError:
     """
     Turn an error the helper reported back into an exception.
 
     Args:
         name: The exception's class name.
         message: Its message.
+        reason: The :class:`~aio_rfcomm.Availability` member's name, for an
+            error built from one.
 
     Returns:
         The error, or a generic connection failure if the name is not one of
-        ours.
+        ours, or names an unavailability without a reason this library has.
     """
     from aio_rfcomm import errors
+
+    if name == BluetoothUnavailableError.__name__:
+        match Availability.__members__.get(reason or ""):
+            case None | Availability.USABLE:
+                return ConnectionFailedError(message)
+            case unavailable:
+                return BluetoothUnavailableError(unavailable, message)
 
     kind = getattr(errors, name, None)
     if isinstance(kind, type) and issubclass(kind, RfcommError):
