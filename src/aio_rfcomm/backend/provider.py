@@ -145,6 +145,13 @@ class AvailabilityState:
         self._changed.set()
         self._changed = asyncio.Event()
 
+    @property
+    def is_known(self) -> bool:
+        """
+        Whether the first report has been made.
+        """
+        return self._known.is_set()
+
     async def known(self) -> None:
         """
         Wait for the first report.

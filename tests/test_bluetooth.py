@@ -13,6 +13,7 @@ import pytest
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend import _Unsupported
+from aio_rfcomm.backend.provider import AvailabilityState
 from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.errors import (
@@ -45,6 +46,14 @@ async def test_opening_waits_for_the_first_reading() -> None:
 async def _enter(provider: FakeProvider) -> Availability:
     async with _open_bluetooth(provider) as bluetooth:
         return await anext(bluetooth.watch_availability())
+
+
+async def test_the_first_reading_is_known_once_reported() -> None:
+    state = AvailabilityState()
+    assert not state.is_known
+
+    state.set(Availability.SWITCHED_OFF)
+    assert state.is_known
 
 
 async def test_opening_succeeds_whatever_bluetooth_is_doing() -> None:

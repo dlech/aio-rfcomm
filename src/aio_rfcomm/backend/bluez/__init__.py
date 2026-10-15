@@ -33,7 +33,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from typing import NamedTuple, TypeVar, cast
 from uuid import UUID
 
-from dbus_fast import BusType, Variant
+from dbus_fast import BusType, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.aio.proxy_object import ProxyInterface
 from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
@@ -41,6 +41,7 @@ from dbus_fast.errors import DBusError
 from dbus_fast.service import ServiceInterface, method
 from typing_extensions import override
 
+from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
     AvailabilityState,
@@ -843,10 +844,7 @@ class BlueZBackend(BackendProvider):
         self, state: AvailabilityState
     ) -> AsyncGenerator[BackendBluetooth, None]:
         """
-        Connect to the system bus, and read whether Bluetooth is usable.
-
-        REVISIT: availability is read only when Bluetooth is opened. Following
-        BlueZ and its adapters as they change comes next.
+        Connect to the system bus, and follow BlueZ and its adapters on it.
 
         Args:
             state: Where to report availability.
@@ -881,9 +879,27 @@ class BlueZBackend(BackendProvider):
                     ),
                 ),
             )
+            changed = asyncio.Event()
+
+            def notice(message: Message) -> None:
+                if message.message_type is MessageType.SIGNAL:
+                    changed.set()
+
             bluetooth.refresh = lambda: _read(bus, bluetooth, state)
-            await _read(bus, bluetooth, state)
-            yield bluetooth
+            bus.add_message_handler(notice)
+            stack.callback(bus.remove_message_handler, notice)
+            for rule in _WATCHED:
+                await _add_match(bus, rule)
+
+            with unwrap_lone_error():
+                async with asyncio.TaskGroup() as group:
+                    following = group.create_task(
+                        _follow(bus, bluetooth, state, changed)
+                    )
+                    try:
+                        yield bluetooth
+                    finally:
+                        following.cancel()
 
 
 async def _nothing() -> None:
@@ -896,6 +912,86 @@ _NOBODY_THERE = (
     "org.freedesktop.DBus.Error.ServiceUnknown",
     "org.freedesktop.DBus.Error.NameHasNoOwner",
 )
+
+
+# What can change whether Bluetooth is usable: an adapter's properties, which
+# include whether it is powered; adapters arriving and leaving; and BlueZ
+# itself starting and stopping. The first was measured against a radio being
+# switched off and on (BlueZ 5.72); the others are only documented.
+_WATCHED = (
+    (
+        "type='signal',sender='org.bluez',"
+        "interface='org.freedesktop.DBus.Properties',"
+        "member='PropertiesChanged',arg0='org.bluez.Adapter1'"
+    ),
+    "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager'",
+    (
+        "type='signal',sender='org.freedesktop.DBus',"
+        "interface='org.freedesktop.DBus',"
+        "member='NameOwnerChanged',arg0='org.bluez'"
+    ),
+)
+
+
+async def _add_match(bus: MessageBus, rule: str) -> None:
+    """
+    Ask the bus to deliver the signals a rule matches.
+
+    Args:
+        bus: A connected system bus.
+        rule: The match rule.
+    """
+    reply = await bus.call(
+        Message(
+            destination="org.freedesktop.DBus",
+            path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus",
+            member="AddMatch",
+            signature="s",
+            body=[rule],
+        )
+    )
+    if reply is None or reply.message_type is MessageType.ERROR:
+        # Not fatal: Bluetooth still works, but changes to it go unnoticed.
+        logger.warning("the system bus refused %s: %s", rule, reply and reply.body)
+
+
+async def _follow(
+    bus: MessageBus,
+    bluetooth: BlueZBluetooth,
+    state: AvailabilityState,
+    changed: asyncio.Event,
+) -> None:
+    """
+    Read whether Bluetooth is usable, and again after anything that may have
+    changed it.
+
+    Everything is read afresh each time rather than worked out from what the
+    signal said, so that a signal missed or misread costs nothing beyond its
+    own moment.
+
+    Args:
+        bus: A connected system bus.
+        bluetooth: Where the adapter in use is kept.
+        state: Where to report availability.
+        changed: Set by every signal that may matter.
+    """
+    while True:
+        changed.clear()
+        try:
+            await _read(bus, bluetooth, state)
+        except Exception as error:
+            # A failed read says nothing about Bluetooth, so what was last
+            # known stands until the next signal. With nothing known yet,
+            # opening Bluetooth would wait for ever.
+            logger.exception("could not read whether Bluetooth is usable")
+
+            if not state.is_known:
+                state.set(
+                    Availability.SERVICE_UNAVAILABLE,
+                    f"could not read whether Bluetooth is usable: {error}",
+                )
+        await changed.wait()
 
 
 class _Adapter(NamedTuple):
