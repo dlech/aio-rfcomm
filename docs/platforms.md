@@ -16,7 +16,7 @@ differences do not reach you. These are the places where they do.
 macOS asks the user before any program may use Bluetooth, and the answer is
 remembered against the program's identity. A bundled application has one; a
 Python script run from a terminal does not, so the library cannot invent one on
-its caller's behalf. Declare it yourself, before opening an adapter:
+its caller's behalf. Declare it yourself, before opening Bluetooth:
 
 ```python
 import aio_rfcomm.macos
@@ -34,11 +34,17 @@ guard.
     an answer that may be sitting behind other windows. Pick a name and keep
     it.
 
-A refusal raises
+A refusal is reported as the availability `NOT_ALLOWED`, and anything
+attempted raises
 [`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError] with
-the reason `NOT_ALLOWED`, which is distinct from `SWITCHED_OFF` — the library
-reads the authorization state directly rather than inferring it, so "you said
-no" and "the radio is off" never get confused for one another.
+that reason. It is distinct from `SWITCHED_OFF` — the library reads the
+authorization state directly rather than inferring it, so "you said no" and
+"the radio is off" never get confused for one another.
+
+When macOS refuses by ending the helper process, as it does for a program with
+no declared reason, the library does not start another, since it would be
+ended the same way. Allowing Bluetooth then takes effect the next time the
+program starts.
 
 ### One channel at a time per device
 
@@ -47,8 +53,8 @@ than the one it was asked to close. With two open at once, closing either tears
 down the wrong one, and writes to the channel still believed open are accepted
 and never arrive.
 
-[`open_channel`][aio_rfcomm.RfcommDevice.open_channel] and
-[`open_service`][aio_rfcomm.RfcommDevice.open_service] therefore raise
+[`open_channel`][aio_rfcomm.Bluetooth.open_channel] and
+[`open_service`][aio_rfcomm.Bluetooth.open_service] therefore raise
 [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] when
 the device already has one open, rather than opening a second and losing both.
 Channels one after another are fine, and so are channels to different devices at
@@ -65,7 +71,7 @@ writes out the dictionary's own key names, the literal strings
 protocol descriptor list, which is a sequence, so the publish fails and the
 system logs a parse error.
 
-[`serve`][aio_rfcomm.RfcommAdapter.serve] therefore raises
+[`serve`][aio_rfcomm.Bluetooth.serve] therefore raises
 [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] on
 macOS. Connecting from this machine is unaffected, within the limit above.
 
@@ -79,11 +85,11 @@ For the great majority of devices this never matters, because what they offer
 is fixed in firmware and was cached correctly the first time. It matters when a
 record *changes* — most obviously when the peer is itself running an
 [aio-rfcomm server](serving.md) and published its service after the two were
-first introduced. Then [`open_service`][aio_rfcomm.RfcommDevice.open_service]
+first introduced. Then [`open_service`][aio_rfcomm.Bluetooth.open_service]
 can raise [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] for
 a service that is demonstrably there.
 
-The way past it is [`open_channel`][aio_rfcomm.RfcommDevice.open_channel] with
+The way past it is [`open_channel`][aio_rfcomm.Bluetooth.open_channel] with
 the channel number, which does no lookup at all. That only helps when the
 channel is stable and known, though — it is no use against a peer that lets the
 library choose a free channel, since the number can differ every time the
@@ -100,7 +106,7 @@ publish it on. Picking a free one means probing with a Bluetooth socket, since
 BlueZ offers no way to ask over D-Bus and a channel collision fails *silently*.
 Almost every Python build can open such a socket. On the rare one built without
 Bluetooth socket support the library refuses to guess, and
-[`serve`][aio_rfcomm.RfcommAdapter.serve] raises
+[`serve`][aio_rfcomm.Bluetooth.serve] raises
 [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError]
 asking you to name a channel — see [Serving](serving.md).
 
@@ -110,6 +116,13 @@ by service UUID goes over D-Bus and always works.
 ## Windows
 
 Connecting and serving both work through WinRT.
+
+**Availability is read once,** when Bluetooth is opened. Windows reports a
+radio's changes and adapters arriving, but those reports have not yet been
+measured, so the library does not follow them yet: a radio switched on later
+is not noticed until the program opens Bluetooth again, and one switched off
+later is noticed by the channels it ends rather than by
+[`watch_availability`][aio_rfcomm.Bluetooth.watch_availability].
 
 **Serving accepts connections on its own thread** rather than through asyncio.
 Windows' default event loop cannot accept Bluetooth connections: to accept, it

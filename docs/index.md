@@ -11,20 +11,21 @@ import aio_rfcomm
 from aio_rfcomm.errors import ChannelClosedError
 
 SERIAL_PORT = UUID("00001101-0000-1000-8000-00805f9b34fb")
+DEVICE = aio_rfcomm.RfcommDeviceInfo("00:16:53:11:C4:9A")
 
 
 async def main() -> None:
-    async with aio_rfcomm.open_adapter() as adapter:
-        device = adapter.use_device("00:16:53:11:C4:9A")
+    async with (
+        aio_rfcomm.open_bluetooth() as bluetooth,
+        bluetooth.open_service(DEVICE, SERIAL_PORT) as channel,
+    ):
+        await channel.send(b"hello\n")
 
-        async with device.open_service(SERIAL_PORT) as channel:
-            await channel.send(b"hello\n")
-
-            try:
-                while True:
-                    print((await channel.receive()).decode(), end="")
-            except ChannelClosedError:
-                print("the other end hung up")
+        try:
+            while True:
+                print((await channel.receive()).decode(), end="")
+        except ChannelClosedError:
+            print("the other end hung up")
 
 
 asyncio.run(main())
@@ -45,12 +46,14 @@ $ uv add aio-rfcomm
 
 <div class="grid cards" markdown>
 
+- **[Bluetooth](bluetooth.md)** — open it, find out whether it can be used,
+  and wait for it when it cannot.
 - **[Connecting](connecting.md)** — find a device, open a channel, and split
   what arrives back into messages. RFCOMM delivers bytes, not messages.
 - **[Serving](serving.md)** — publish a service and let devices connect to
   you.
 - **[Lifetimes](lifetimes.md)** — why everything is an `async with`, and how a
-  channel that dies takes your tasks down with it.
+  channel that ends takes your tasks down with it.
 - **[Platforms](platforms.md)** — what each operating system can and cannot
   do, and the permission macOS will ask for.
 - **[API reference](reference.md)** — every public name.

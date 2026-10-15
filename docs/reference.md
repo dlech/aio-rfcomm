@@ -5,30 +5,26 @@ except the errors, which live in `aio_rfcomm.errors`, and
 [`prompt_under_name`][aio_rfcomm.macos.prompt_under_name], which lives
 in `aio_rfcomm.macos`.
 
-## Opening
+## Bluetooth
 
-::: aio_rfcomm.list_adapters
-::: aio_rfcomm.open_adapter
+::: aio_rfcomm.open_bluetooth
+::: aio_rfcomm.Bluetooth
+::: aio_rfcomm.AvailabilityWatcher
+::: aio_rfcomm.Availability
+::: aio_rfcomm.UnavailableReason
 
-## Adapters, devices and channels
+## Channels
 
-::: aio_rfcomm.RfcommAdapter
-::: aio_rfcomm.RfcommDevice
 ::: aio_rfcomm.RfcommChannel
 
 ## Serving
 
 ::: aio_rfcomm.RfcommService
-::: aio_rfcomm.ConnectionHandler
-
-## Availability
-
-::: aio_rfcomm.Availability
-::: aio_rfcomm.UnavailableReason
+::: aio_rfcomm.ConnectionRequests
+::: aio_rfcomm.RfcommConnectionRequest
 
 ## Descriptions
 
-::: aio_rfcomm.RfcommAdapterInfo
 ::: aio_rfcomm.RfcommDeviceInfo
 
 ## macOS

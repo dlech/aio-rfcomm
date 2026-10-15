@@ -34,6 +34,7 @@ theme:
 nav:
   - Home: index.md
   - Guide:
+      - Bluetooth: bluetooth.md
       - Connecting: connecting.md
       - Channels: channels.md
       - Serving: serving.md

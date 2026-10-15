@@ -9,9 +9,8 @@ something undefined.
 The blocks nest the way the objects depend on each other:
 
 ```python
-async with aio_rfcomm.open_adapter() as adapter:  # the radio
-    device = adapter.use_device(address)  # just a name; no resource
-    async with device.open_service(SERVICE) as channel:  # the connection
+async with aio_rfcomm.open_bluetooth() as bluetooth:  # Bluetooth on this machine
+    async with bluetooth.open_service(device, SERVICE) as channel:  # the connection
         ...
 ```
 
@@ -48,15 +47,10 @@ is the place to turn a group made only of the channel's ending back into the
 ending itself. The chat example's `unwrap_ending` does exactly that, and lets
 anything else go on up untouched.
 
-Adapters have a method for the same purpose:
-[`RfcommAdapter.fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone]
-raises when the radio is switched off. That is the one a server wants, since a
-published service is only as alive as the radio under it.
-
-!!! note "One error, not a group"
-
-    `fail_when_gone` runs a task group internally, but reports its lone failure
-    as itself. Callers catch `AdapterLostError`, not `except*`.
+Bluetooth going away ends a channel the same way, with
+[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError]
+from `receive` and `send`, so the same task group notices it. See
+[Bluetooth](bluetooth.md).
 
 ## Cancellation
 

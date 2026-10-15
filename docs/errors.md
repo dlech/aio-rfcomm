@@ -67,6 +67,10 @@ arrived before the end — and [`send`][aio_rfcomm.RfcommChannel.send] raise it,
 with the same reason every time, so a reader and a writer that both notice
 agree on what happened.
 
+A channel that Bluetooth going away ended raises
+[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError]
+instead, in the same way: the connection did not fail, Bluetooth did.
+
 ## Limits
 
 | Error | Means |
@@ -83,6 +87,7 @@ These are `RuntimeError`, not `RfcommError`.
 | [`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError] | Two tasks used the same direction of one channel at once, which is reported as your bug rather than tolerated as a race. |
 | [`ChannelBrokenError`][aio_rfcomm.errors.ChannelBrokenError] | A channel was sent on after an earlier send on it was cancelled; see [Lifetimes](lifetimes.md). |
 | [`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError] | A handle was used after the block that produced it ended. |
+| [`BluetoothAlreadyOpenError`][aio_rfcomm.errors.BluetoothAlreadyOpenError] | Bluetooth was opened while it was already open in this process. |
 
 A channel number outside 1 to 30, or a string that is not a Bluetooth address,
 raises `ValueError` where it is passed in.

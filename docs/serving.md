@@ -2,8 +2,9 @@
 
 Most programs connect *to* something. Sometimes you want to be the thing that
 is connected to — a robot waiting for a laptop, a desktop tool a handheld talks
-to. [`serve`][aio_rfcomm.RfcommAdapter.serve] publishes a service record and
-runs a handler for every peer that arrives.
+to. [`serve`][aio_rfcomm.Bluetooth.serve] publishes a service record and
+listens, the way a listening socket does: each peer that connects arrives as a
+request, which your program accepts or declines.
 
 !!! info "Linux and Windows only"
 
@@ -12,44 +13,76 @@ runs a handler for every peer that arrives.
     something the library can work around.
 
 ```python
-async def talk(
-    peer: aio_rfcomm.RfcommDeviceInfo, channel: aio_rfcomm.RfcommChannel
-) -> None:
-    await channel.send(b"hello\n")
-
+async def talk(request: aio_rfcomm.RfcommConnectionRequest) -> None:
     try:
-        while True:
-            print(f"{peer.address}: {await channel.receive()!r}")
+        async with request.accept() as channel:
+            await channel.send(b"hello\n")
+            while True:
+                print(f"{request.info.address}: {await channel.receive()!r}")
     except ChannelClosedError:
-        print(f"{peer.address} hung up")
+        print(f"{request.info.address} hung up")
 
 
-async with adapter.serve(CHAT, talk, name="my thing") as service:
+async with bluetooth.serve(CHAT, name="my thing") as service:
     print(f"listening on channel {service.channel}")
 
-    async with adapter.fail_when_gone():
-        await asyncio.Event().wait()
+    async with asyncio.TaskGroup() as group:
+        async for request in service.connection_requests():
+            group.create_task(talk(request))
 ```
 
-`asyncio.Event().wait()` is just a wait that never ends: a server has nothing
-else to do, and waiting on an event nobody sets costs nothing.
-[`fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone] is what makes it
-safe, by raising *inside* that block if the adapter is switched off — otherwise
-the program would go on waiting just as patiently with no radio underneath it.
-See [Lifetimes](lifetimes.md).
+Each conversation is a task in your own task group, so nothing runs that you
+did not start, and a conversation that fails takes down whatever its task
+group says it does. Catch what one conversation should survive — a peer
+hanging up, say — inside that conversation.
 
-## The handler
+## Requests
 
-The handler is called once per peer, with the peer's description and its open
-channel. The channel is closed when the handler returns, so there is nothing
-to clean up. Handlers run concurrently — one per peer — and all of them stop
-when the `serve` block ends.
+[`connection_requests`][aio_rfcomm.RfcommService.connection_requests] hands
+over each peer as an
+[`RfcommConnectionRequest`][aio_rfcomm.RfcommConnectionRequest]: who is asking,
+in [`info`][aio_rfcomm.RfcommConnectionRequest.info], and two things to do
+about it.
 
-An exception escaping a handler has nobody to be raised to: the peer is gone
-and the `serve` block is elsewhere, quite possibly waiting forever on purpose.
-Rather than tear down the whole service because one peer misbehaved, the
-library hands the exception to the event loop's exception handler, the same
-place an unhandled task exception goes.
+- [`accept`][aio_rfcomm.RfcommConnectionRequest.accept] takes the connection,
+  as a channel in a block of its own. A peer that already hung up still gets a
+  channel, whose first `receive` raises, so every ending arrives the same way.
+- [`decline`][aio_rfcomm.RfcommConnectionRequest.decline] turns the peer away.
+  It hangs up before it awaits anything, so it takes effect even if cancelled,
+  and it never raises for a hang-up that failed.
+
+Declining is not a refusal. On BlueZ and Windows the peer's channel appears to
+be open before the request reaches your program, so the peer should see its
+open succeed and the channel then end; this has not yet been measured.
+
+A request that is neither accepted nor declined is a bug. When it is
+garbage-collected it raises `ResourceWarning`, shown under `python -X dev`, and
+is hung up on then, the way an unclosed socket is. Leaving the `serve` block
+closes any that remain.
+
+Each request goes to exactly one reader of `connection_requests`, and the
+iterator never ends by itself. When Bluetooth stops being usable it raises
+[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError], and
+goes on raising it: the service is over, and serving again means a new `serve`
+block once Bluetooth is back.
+
+## How long things last
+
+Leaving the `serve` block withdraws the service and closes the requests nobody
+answered. Channels already accepted belong to their own blocks, and outlive
+it, as connections accepted from a listening socket do. With the task group
+inside the `serve` block, as above, every conversation finishes before serving
+stops. With it outside, serving can stop while the conversations finish:
+
+```python
+async with asyncio.TaskGroup() as group:
+    async with bluetooth.serve(CHAT, name="my thing") as service:
+        async for request in service.connection_requests():
+            group.create_task(talk(request))
+            if enough():
+                break
+    # No new peers from here on; the conversations carry on.
+```
 
 ## Choosing a channel
 
@@ -60,12 +93,13 @@ you which it got, and peers find it by looking up the service UUID.
 Set it explicitly when the peer cannot do a lookup and expects a fixed number:
 
 ```python
-async with adapter.serve(CHAT, talk, name="my thing", channel=5) as service:
+async with bluetooth.serve(CHAT, name="my thing", channel=5) as service:
     ...
 ```
 
-A channel already taken — by another program or by another service in this one
-— raises [`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError].
+A number outside 1 to 30 raises `ValueError`. A channel already taken — by
+another program or by another service in this one — raises
+[`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError].
 
 !!! note "One Linux case where the choice has to be yours"
 
@@ -76,22 +110,10 @@ A channel already taken — by another program or by another service in this one
     Everywhere else, and on any normal Linux build, the automatic choice
     works.
 
-## Waiting
-
-`serve` returns a context manager, and the service lives for as long as that
-block does. How you wait inside it is your business, but waiting on an
-`asyncio.Event` nothing ever sets costs nothing:
-
-```python
-async with adapter.fail_when_gone():
-    await asyncio.Event().wait()
-```
-
-A loop that sleeps and re-checks achieves exactly the same nothing, at the
-price of a wakeup every time round. The
-[`fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone] wrapper is what
-turns the adapter being switched off into an exception rather than a hang —
-see [Lifetimes](lifetimes.md).
+    On such a Python a channel you name is used unchecked, and a collision is
+    silent: BlueZ logs `rfcomm_bind: Address already in use` and publishes
+    nothing, and peers reach whatever already holds the channel. Channel 9,
+    for instance, is commonly taken by Object Push.
 
 ## One peer per device
 

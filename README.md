@@ -4,14 +4,14 @@ Talk to Bluetooth Classic serial devices from asyncio — the same way on Linux,
 macOS and Windows.
 
 ```python
-async with aio_rfcomm.open_adapter() as adapter:
-    device = adapter.use_device("00:16:53:11:C4:9A")
+async with (
+    aio_rfcomm.open_bluetooth() as bluetooth,
+    bluetooth.open_service(DEVICE, MY_SERVICE) as channel,
+):
+    await channel.send(b"hello\n")
 
-    async with device.open_service(MY_SERVICE) as channel:
-        await channel.send(b"hello\n")
-
-        while True:  # until the device hangs up, raising ChannelClosedError
-            print((await channel.receive()).decode(), end="")
+    while True:  # until the device hangs up, raising ChannelClosedError
+        print((await channel.receive()).decode(), end="")
 ```
 
 That is the whole idea. RFCOMM is how most Bluetooth gadgets that predate BLE
@@ -33,6 +33,7 @@ $ uv add aio-rfcomm
 Publish a service and let devices connect to you (Linux and Windows):
 
 ```python
-async with adapter.serve(MY_SERVICE, handler, name="my thing") as service:
-    print(f"listening on channel {service.channel}")
+async with bluetooth.serve(MY_SERVICE, name="my thing") as service:
+    async for request in service.connection_requests():
+        ...  # accept it, in a task of your own, or decline it
 ```
