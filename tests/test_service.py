@@ -2,256 +2,320 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-Serving: what happens to a handler, and to the connections it is given.
-
-A server differs from a client in who is in charge of a channel's lifetime.
-The library opens the channel, calls the handler, and closes it again, so
-these check that the handler gets what it should and that nothing is left
-behind when it -- or the service -- ends.
+Serving, like a listening socket: each peer arrives as a request the program
+accepts or declines, in task groups of its own.
 """
 
 import asyncio
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
-from typing import Any
+import gc
 from uuid import UUID
 
 import pytest
 
-from aio_rfcomm.adapter import RfcommAdapter
-from aio_rfcomm.channel import RfcommChannel
-from aio_rfcomm.discovery import RfcommDeviceInfo
-from aio_rfcomm.errors import ChannelInUseError, ScopeClosedError
-from aio_rfcomm.service import ConnectionHandler, RfcommService
-from tests.fake import DEVICE, FakeAdapter, FakeService
+from aio_rfcomm.availability import Availability
+from aio_rfcomm.bluetooth import Bluetooth
+from aio_rfcomm.errors import (
+    BluetoothUnavailableError,
+    ChannelInUseError,
+    ScopeClosedError,
+)
+from aio_rfcomm.service import ConnectionRequests
+from tests.fake import DEVICE, FakeProvider, FakeService
 
-SERVICE = UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
-
-
-@asynccontextmanager
-async def serving(
-    backend: FakeAdapter, handler: ConnectionHandler, **kwargs: Any
-) -> AsyncGenerator[tuple[RfcommService, FakeService], None]:
-    """
-    A published service, with the fake behind it.
-    """
-    adapter = RfcommAdapter(backend)
-    kwargs.setdefault("name", "fake service")
-    async with adapter.serve(SERVICE, handler, **kwargs) as service:
-        yield service, backend.services[-1]
+CHAT = UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
 
 
-async def noop(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-    return None
+def _published(provider: FakeProvider) -> FakeService:
+    return provider.backend.services[-1]
 
 
-# -- what the service says about itself ------------------------------------
-
-
-async def test_the_service_reports_what_was_published(backend: FakeAdapter) -> None:
-    async with serving(backend, noop, name="chat") as (service, _):
-        assert service.service == SERVICE
+async def test_the_service_reports_what_was_published(
+    bluetooth: Bluetooth,
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat", channel=7) as service:
+        assert service.service == CHAT
         assert service.name == "chat"
-        assert service.channel == 30
-
-
-async def test_an_explicit_channel_is_used(backend: FakeAdapter) -> None:
-    async with serving(backend, noop, channel=7) as (service, _):
         assert service.channel == 7
 
 
-async def test_a_second_service_gets_a_different_channel(
-    backend: FakeAdapter,
+async def test_a_channel_is_chosen_when_none_is_asked_for(
+    bluetooth: Bluetooth,
 ) -> None:
-    async with serving(backend, noop) as (first, _):  # noqa: SIM117
-        async with serving(backend, noop) as (second, _):
-            assert first.channel != second.channel
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        assert 1 <= service.channel <= 30
 
 
-async def test_a_taken_channel_is_refused(backend: FakeAdapter) -> None:
-    async with serving(backend, noop) as (first, _):
+async def test_a_taken_channel_is_refused(bluetooth: Bluetooth) -> None:
+    async with bluetooth.serve(CHAT, name="chat", channel=7):
         with pytest.raises(ChannelInUseError):
-            async with serving(backend, noop, channel=first.channel):
+            async with bluetooth.serve(CHAT, name="other", channel=7):
                 pass
 
 
-async def test_the_service_is_withdrawn_on_the_way_out(backend: FakeAdapter) -> None:
-    async with serving(backend, noop) as (_, fake):
-        assert not fake.withdrawn
-    assert fake.withdrawn
-
-
-# -- what the handler is given ---------------------------------------------
-
-
-async def test_the_handler_gets_the_peer_then_the_channel(
-    backend: FakeAdapter,
+@pytest.mark.parametrize("channel", [0, 31])
+async def test_a_channel_number_out_of_range_is_refused(
+    bluetooth: Bluetooth, channel: int
 ) -> None:
-    seen: list[tuple[RfcommDeviceInfo, RfcommChannel]] = []
-    done = asyncio.Event()
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        seen.append((peer, channel))
-        done.set()
-
-    async with serving(backend, handler) as (_, fake):
-        fake.connect()
-        await asyncio.wait_for(done.wait(), 1)
-
-    peer, channel = seen[0]
-    assert peer == DEVICE
-    assert isinstance(channel, RfcommChannel)
+    with pytest.raises(ValueError, match="not an RFCOMM channel"):
+        bluetooth.serve(CHAT, name="chat", channel=channel)
 
 
-async def test_the_handler_can_talk_on_its_channel(backend: FakeAdapter) -> None:
-    done = asyncio.Event()
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        await channel.send(b"hello")
-        done.set()
-
-    async with serving(backend, handler) as (_, fake):
-        channel = fake.connect()
-        await asyncio.wait_for(done.wait(), 1)
-        assert bytes(channel.sent) == b"hello"
-
-
-async def test_each_peer_gets_its_own_handler(backend: FakeAdapter) -> None:
-    started = asyncio.Semaphore(0)
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        started.release()
-        await asyncio.Event().wait()
-
-    async with serving(backend, handler) as (_, fake):
-        fake.connect()
-        fake.connect()
-        await asyncio.wait_for(started.acquire(), 1)
-        await asyncio.wait_for(started.acquire(), 1)
-
-
-# -- what happens at the end -----------------------------------------------
-
-
-async def test_the_channel_closes_when_the_handler_returns(
-    backend: FakeAdapter,
+async def test_the_service_is_withdrawn_on_the_way_out(
+    bluetooth: Bluetooth, provider: FakeProvider
 ) -> None:
-    done = asyncio.Event()
+    async with bluetooth.serve(CHAT, name="chat"):
+        assert not _published(provider).withdrawn
+    assert _published(provider).withdrawn
 
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        done.set()
 
-    async with serving(backend, handler) as (_, fake):
-        channel = fake.connect()
-        await asyncio.wait_for(done.wait(), 1)
+async def test_an_accepted_request_is_a_channel(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+        assert request.info is DEVICE
+
+        async with request.accept() as channel:
+            fake.deliver(b"hello")
+            assert await channel.receive() == b"hello"
+            await channel.send(b"hi")
+            assert fake.sent == b"hi"
+        assert fake.closed
+
+
+async def test_each_request_goes_to_one_reader(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        first = asyncio.ensure_future(anext(service.connection_requests()))
+        second = asyncio.ensure_future(anext(service.connection_requests()))
         await asyncio.sleep(0)
-        assert channel.closed
 
-
-async def test_the_handler_s_channel_is_dead_afterwards(backend: FakeAdapter) -> None:
-    escaped: list[RfcommChannel] = []
-    done = asyncio.Event()
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        escaped.append(channel)
-        done.set()
-
-    async with serving(backend, handler) as (_, fake):
-        fake.connect()
-        await asyncio.wait_for(done.wait(), 1)
+        _published(provider).connect()
         await asyncio.sleep(0)
+        assert first.done() != second.done()
+
+        _published(provider).connect()
+        async with asyncio.timeout(1):
+            for request in (await first, await second):
+                await request.decline()
+
+
+async def test_declining_hangs_up(bluetooth: Bluetooth, provider: FakeProvider) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+        await request.decline()
+        assert fake.closed
+
+        # Twice is harmless; taking it after all is not.
+        await request.decline()
+        with pytest.raises(RuntimeError, match="declined"):
+            request.accept()
+
+
+async def test_a_request_cannot_be_declined_once_accepted(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        _published(provider).connect()
+        request = await anext(service.connection_requests())
+        async with request.accept():
+            with pytest.raises(RuntimeError, match="accepted"):
+                await request.decline()
+            with pytest.raises(RuntimeError, match="accepted"):
+                request.accept()
+
+
+async def _take_and_drop(requests: ConnectionRequests) -> None:
+    # Dropped as this returns, the way a request nobody kept is.
+    await anext(requests)
+    gc.collect()
+
+
+async def test_a_forgotten_request_is_hung_up_on_with_a_warning(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        requests = service.connection_requests()
+
+        with pytest.warns(ResourceWarning, match="neither accepted nor declined"):
+            await _take_and_drop(requests)
+        assert fake.closed
+
+
+async def test_requests_left_unanswered_are_closed_with_the_service(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+    assert fake.closed
+
+    # Answered by the service's exit, so nothing is left to warn about.
+    del request
+    gc.collect()
+
+
+async def test_an_accepted_channel_outlives_the_service(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    """
+    Serving can stop while a conversation finishes, as with a listening
+    socket.
+    """
+    async with asyncio.TaskGroup() as group:
+        talked = asyncio.Event()
+        finish = asyncio.Event()
+
+        async with bluetooth.serve(CHAT, name="chat") as service:
+            fake = _published(provider).connect()
+            request = await anext(service.connection_requests())
+
+            async def talk() -> None:
+                async with request.accept() as channel:
+                    talked.set()
+                    await finish.wait()
+                    await channel.send(b"still here")
+
+            group.create_task(talk())
+            await talked.wait()
+
+        assert _published(provider).withdrawn
+        finish.set()
+
+    assert fake.sent == b"still here"
+
+
+async def test_a_request_is_answered_inside_the_service_s_block(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        _published(provider).connect()
+        request = await anext(service.connection_requests())
+    with pytest.raises(ScopeClosedError):
+        request.accept()
+
+
+async def test_requests_raise_once_bluetooth_goes(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        requests = service.connection_requests()
+        waiting = asyncio.ensure_future(anext(requests))
+        await asyncio.sleep(0)
+
+        provider.report(Availability.SWITCHED_OFF)
+        with pytest.raises(BluetoothUnavailableError) as first:
+            async with asyncio.timeout(1):
+                await waiting
+
+        # Ended, not paused: Bluetooth coming back does not bring it back.
+        provider.report(Availability.USABLE)
+        with pytest.raises(BluetoothUnavailableError) as second:
+            await anext(requests)
+
+    assert first.value.reason is second.value.reason is Availability.SWITCHED_OFF
+
+
+async def test_an_accepted_channel_ends_when_bluetooth_goes(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        _published(provider).connect()
+        request = await anext(service.connection_requests())
+        async with request.accept() as channel:
+            provider.report(Availability.NOT_ALLOWED)
+            with pytest.raises(BluetoothUnavailableError) as caught:
+                await channel.receive()
+    assert caught.value.reason is Availability.NOT_ALLOWED
+
+
+async def test_accepting_while_bluetooth_is_unusable_is_refused(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+        provider.report(Availability.SWITCHED_OFF)
+        with pytest.raises(BluetoothUnavailableError):
+            async with request.accept():
+                pass
+    assert fake.closed
+
+
+async def test_an_accept_that_fails_still_hangs_up(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    """
+    The request is answered by then, so nothing else would ever close it.
+    """
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+        provider.report(Availability.SWITCHED_OFF)
+        provider.report(Availability.USABLE)
+
+        with pytest.raises(BluetoothUnavailableError):
+            async with request.accept():
+                pass
+        assert fake.closed
+
+
+async def test_an_accept_never_entered_is_hung_up_on_when_dropped(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+        request.accept()
+        del request
+        gc.collect()
+        assert fake.closed
+
+
+async def test_requests_waiting_when_bluetooth_goes_are_hung_up_on(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    """
+    They arrived over links that went with the radio, so accepting one after
+    Bluetooth comes back would hand over a dead connection.
+    """
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+
+        provider.report(Availability.SERVICE_UNAVAILABLE)
+        assert fake.closed
+
+        provider.report(Availability.USABLE)
+        with pytest.raises(BluetoothUnavailableError) as caught:
+            async with request.accept():
+                pass
+        assert caught.value.reason is Availability.SERVICE_UNAVAILABLE
+
+
+async def test_declining_a_request_bluetooth_ended_does_nothing(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        _published(provider).connect()
+        request = await anext(service.connection_requests())
+        provider.report(Availability.SWITCHED_OFF)
+        await request.decline()
+
+
+async def test_an_accept_entered_after_the_service_s_block_refuses(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        fake = _published(provider).connect()
+        request = await anext(service.connection_requests())
+        accepting = request.accept()
 
     with pytest.raises(ScopeClosedError):
-        await escaped[0].send(b"too late")
-
-
-async def test_leaving_the_block_stops_a_handler_that_is_still_talking(
-    backend: FakeAdapter,
-) -> None:
-    started = asyncio.Event()
-    cancelled = asyncio.Event()
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        started.set()
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            cancelled.set()
-            raise
-
-    async with serving(backend, handler) as (_, fake):
-        channel = fake.connect()
-        await asyncio.wait_for(started.wait(), 1)
-
-    assert cancelled.is_set()
-    assert channel.closed
-
-
-async def test_a_connection_nobody_took_is_still_closed(
-    backend: FakeAdapter,
-) -> None:
-    """
-    A peer can connect in the instant before the service is withdrawn. BlueZ
-    has already handed over a descriptor by then, so dropping it silently
-    would leak it and leave the peer holding a connection nothing will answer.
-    """
-    async with serving(backend, noop) as (_, fake):
-        channel = fake.connect()
-
-    assert channel not in fake.accepted
-    assert channel.closed
-
-
-# -- a handler that raises -------------------------------------------------
-
-
-async def test_a_failing_handler_does_not_end_the_service(
-    backend: FakeAdapter,
-) -> None:
-    reported: list[dict[str, Any]] = []
-    asyncio.get_running_loop().set_exception_handler(
-        lambda loop, context: reported.append(context)
-    )
-    survived = asyncio.Event()
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        if not reported:
-            raise ValueError("handler blew up")
-        survived.set()
-
-    try:
-        async with serving(backend, handler) as (_, fake):
-            fake.connect()
-            for _ in range(10):
-                await asyncio.sleep(0)
-                if reported:
-                    break
-            fake.connect()
-            await asyncio.wait_for(survived.wait(), 1)
-    finally:
-        asyncio.get_running_loop().set_exception_handler(None)
-
-    assert len(reported) == 1
-    assert isinstance(reported[0]["exception"], ValueError)
-    assert reported[0]["peer"] == DEVICE.address
-
-
-async def test_a_failing_handler_still_closes_its_channel(
-    backend: FakeAdapter,
-) -> None:
-    asyncio.get_running_loop().set_exception_handler(lambda loop, context: None)
-
-    async def handler(peer: RfcommDeviceInfo, channel: RfcommChannel) -> None:
-        raise ValueError("handler blew up")
-
-    try:
-        async with serving(backend, handler) as (_, fake):
-            channel = fake.connect()
-            for _ in range(10):
-                await asyncio.sleep(0)
-                if channel.closed:
-                    break
-    finally:
-        asyncio.get_running_loop().set_exception_handler(None)
-
-    assert channel.closed
+        async with accepting:
+            pass
+    assert fake.closed

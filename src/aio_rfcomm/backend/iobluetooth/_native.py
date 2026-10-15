@@ -49,7 +49,7 @@ from aio_rfcomm.backend.iobluetooth._codes import (
     CBManagerState,
     IOReturn,
 )
-from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     CloseReason,
@@ -63,12 +63,11 @@ from aio_rfcomm.errors import (
 __all__ = [
     "Channel",
     "MachError",
-    "list_adapters",
     "list_known_devices",
     "open_channel",
     "read_authorization",
     "read_power_state",
-    "wait_until_switched_off",
+    "read_state",
 ]
 
 # Loading the framework is what makes its classes findable by name. It does
@@ -403,23 +402,26 @@ async def _wait_until_settled(manager: _Manager) -> None:
     await _wait_for_state(manager, lambda state: state not in _UNSETTLED)
 
 
-async def wait_until_switched_off() -> None:
+async def read_state() -> tuple[int, int]:
     """
-    Wait for the radio to be switched off.
+    Read the manager's state, once it has settled.
 
-    IOBluetooth was not seen to report it any other way: a channel open at
-    the time hears its link drop, and that was all. Measured across a real
-    toggle: the manager goes from powered on to powered off, on a framework
-    thread, about a millisecond before the channel is told.
+    If the manager cannot be reached, the controller's power state stands in,
+    since a macOS without it is one this can say nothing more about.
 
-    Never returns if the manager cannot be reached, since a macOS that does
-    not have it is one this can say nothing about.
+    Returns:
+        The ``CBManagerState`` and the ``CBManagerAuthorization`` with it.
     """
     manager = _classic_manager()
     if manager is None:
-        await asyncio.Event().wait()
-        return
-    await _wait_for_state(manager, lambda state: state == CBManagerState.POWERED_OFF)
+        powered = read_power_state()
+        return (
+            CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF,
+            read_authorization(),
+        )
+
+    await _wait_until_settled(manager)
+    return manager.state, read_authorization()
 
 
 async def _wait_for_state(manager: _Manager, wanted: Callable[[int], bool]) -> None:
@@ -437,6 +439,10 @@ async def _wait_for_state(manager: _Manager, wanted: Callable[[int], bool]) -> N
         observer, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
     )
     try:
+        # The state can settle while the observer is being added, unheard;
+        # see report_states.
+        if wanted(manager.state):
+            observer.reached.set()
         await observer.reached.wait()
     finally:
         manager.removeObserver(observer, forKeyPath="state", context=None)
@@ -457,7 +463,7 @@ def _unusable(state: int) -> RfcommError:
             # Both, because macOS reports a radio this program may not use as
             # switched off -- so telling someone to turn Bluetooth on would
             # send them to a switch that is already on. The authorization is
-            # what separates the two, as it does when the adapter is opened.
+            # what separates the two, as it does in the reported availability.
             if read_authorization() == CBManagerAuthorization.ALLOWED_ALWAYS:
                 return BluetoothUnavailableError(
                     Availability.SWITCHED_OFF,
@@ -728,27 +734,6 @@ def read_power_state() -> bool:
     """
     controller = IOBluetoothHostController.defaultController()
     return controller is not None and controller.powerState == _POWER_ON
-
-
-def list_adapters() -> list[RfcommAdapterInfo]:
-    """
-    List the machine's Bluetooth adapters.
-
-    Returns:
-        The adapter, in a list of at most one: macOS exposes a single
-        controller and gives no way to choose between radios.
-    """
-    controller = IOBluetoothHostController.defaultController()
-    if controller is None:
-        return []
-    address = controller.addressAsString()
-    return [
-        RfcommAdapterInfo(
-            "default",
-            _normalise(str(address)) if address else None,
-            str(controller.nameAsString() or "") or None,
-        )
-    ]
 
 
 def list_known_devices(

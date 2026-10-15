@@ -9,85 +9,73 @@ its owning scope is gone. A stale handle that still half-works is worse than
 one that raises, because the failure then surfaces somewhere else entirely.
 """
 
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from uuid import UUID
 
 import pytest
 
-from aio_rfcomm.adapter import RfcommAdapter
-from aio_rfcomm.channel import RfcommChannel
+from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
 from aio_rfcomm.errors import ScopeClosedError
-from tests.fake import FakeAdapter
+from tests.fake import DEVICE, FakeProvider
 
 
-@asynccontextmanager
-async def adapter_scope() -> AsyncGenerator[tuple[RfcommAdapter, FakeAdapter], None]:
-    """
-    An adapter and the fake behind it, closed the way the real opener closes
-    it.
-    """
-    backend = FakeAdapter()
-    handle = RfcommAdapter(backend)
-    try:
-        yield handle, backend
-    finally:
-        handle._close()
-        backend.go_away()
-
-
-async def test_device_refuses_to_open_after_its_adapter_closes() -> None:
-    async with adapter_scope() as (adapter, _backend):
-        device = adapter.use_device((await adapter.list_known_devices())[0])
-
-    with pytest.raises(ScopeClosedError):
-        async with device.open_channel(1):
-            pass
-
-
-async def test_use_device_refuses_after_its_adapter_closes() -> None:
-    async with adapter_scope() as (adapter, _backend):
-        device = adapter.use_device("00:11:22:33:44:55")
-
-    with pytest.raises(ScopeClosedError):
-        async with device.open_service(None):  # type: ignore[arg-type]
-            pass
-
-
-async def test_adapter_refuses_to_list_after_it_closes() -> None:
-    async with adapter_scope() as (adapter, _backend):
+async def test_bluetooth_refuses_everything_after_its_block() -> None:
+    async with _open_bluetooth(FakeProvider()) as bluetooth:
         pass
 
     with pytest.raises(ScopeClosedError):
-        await adapter.list_known_devices()
+        await bluetooth.list_known_devices()
+    with pytest.raises(ScopeClosedError):
+        bluetooth.open_channel(DEVICE, 1)
+    with pytest.raises(ScopeClosedError):
+        bluetooth.serve(UUID(int=1), name="late")
+    with pytest.raises(ScopeClosedError):
+        bluetooth.watch_availability()
 
 
-async def test_channel_refuses_to_send_after_its_scope_exits() -> None:
-    async with adapter_scope() as (adapter, _backend):
-        device = adapter.use_device((await adapter.list_known_devices())[0])
+async def test_a_watcher_refuses_after_bluetooth_s_block() -> None:
+    async with _open_bluetooth(FakeProvider()) as bluetooth:
+        watcher = bluetooth.watch_availability()
 
-        async with device.open_channel(1) as channel:
-            await channel.send(b"fine")
-
-        with pytest.raises(ScopeClosedError):
-            await channel.send(b"too late")
+    with pytest.raises(ScopeClosedError):
+        await anext(watcher)
 
 
-async def test_channel_refuses_to_receive_after_its_scope_exits() -> None:
-    async with adapter_scope() as (adapter, _backend):
-        device = adapter.use_device((await adapter.list_known_devices())[0])
+async def test_channel_refuses_to_send_after_its_scope_exits(
+    bluetooth: Bluetooth,
+) -> None:
+    async with bluetooth.open_channel(DEVICE, 1) as channel:
+        await channel.send(b"fine")
 
-        async with device.open_channel(1) as channel:
-            pass
-
-        with pytest.raises(ScopeClosedError):
-            await channel.receive()
+    with pytest.raises(ScopeClosedError):
+        await channel.send(b"too late")
 
 
-async def test_channel_is_closed_when_its_scope_exits() -> None:
-    async with adapter_scope() as (adapter, _backend):
-        device = adapter.use_device((await adapter.list_known_devices())[0])
+async def test_channel_refuses_to_receive_after_its_scope_exits(
+    bluetooth: Bluetooth,
+) -> None:
+    async with bluetooth.open_channel(DEVICE, 1) as channel:
+        pass
 
-        async with device.open_channel(1) as channel:
-            assert isinstance(channel, RfcommChannel)
+    with pytest.raises(ScopeClosedError):
+        await channel.receive()
 
-        assert _backend.channels[-1].closed
+
+async def test_channel_is_closed_when_its_scope_exits(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.open_channel(DEVICE, 1):
+        assert not provider.backend.channels[-1].closed
+
+    assert provider.backend.channels[-1].closed
+
+
+async def test_a_service_refuses_requests_after_its_block(
+    bluetooth: Bluetooth,
+) -> None:
+    async with bluetooth.serve(UUID(int=1), name="x") as service:
+        requests = service.connection_requests()
+
+    with pytest.raises(ScopeClosedError):
+        await anext(requests)
+    with pytest.raises(ScopeClosedError):
+        service.connection_requests()

@@ -31,21 +31,23 @@ if not hasattr(socket, "AF_UNIX"):
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import (
-    IOBluetoothAdapter,
+    IOBluetoothBluetooth,
     IOBluetoothChannel,
+    _availability,
+    _not_allowed,
     _reason,
     _wanted,
 )
 from aio_rfcomm.backend.iobluetooth._bundle import _identifier, _key
+from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth._helper import (
     Helper,
     HelperFailedError,
     _rebuild,
 )
 from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, ProtocolError
-from aio_rfcomm.discovery import RfcommAdapterInfo
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    AdapterLostReason,
     BluetoothUnavailableError,
     ChannelClosedError,
     CloseReason,
@@ -287,6 +289,15 @@ async def test_a_helper_that_dies_ends_every_channel() -> None:
         assert await ending.wait() == "LINK_LOST"
 
 
+DEVICE = RfcommDeviceInfo("00:11:22:33:44:55")
+
+
+def _bluetooth(helper: Helper) -> IOBluetoothBluetooth:
+    bluetooth = IOBluetoothBluetooth()
+    bluetooth.helper = helper
+    return bluetooth
+
+
 @asynccontextmanager
 async def _channel(
     helper: Helper, there: Link, handle: int
@@ -302,10 +313,10 @@ async def _channel(
     Yields:
         The open channel, and the far end of its socket.
     """
-    adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+    bluetooth = _bluetooth(helper)
     async with AsyncExitStack() as stack:
         opening = asyncio.ensure_future(
-            stack.enter_async_context(adapter.open_channel("00:11:22:33:44:55", 4))
+            stack.enter_async_context(bluetooth.open_channel(DEVICE, 4))
         )
         asked = await _next(there)
         ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -480,39 +491,28 @@ def test_a_refused_permission_is_not_reported_as_a_dead_radio() -> None:
     on -- which is exactly the wrong place to look. This cost an evening
     once.
     """
-    from aio_rfcomm.backend.iobluetooth import _no_radio
-    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-
-    error = _no_radio(CBManagerAuthorization.DENIED, "thor")
-    assert error.reason is Availability.NOT_ALLOWED
-    assert "System Settings" in str(error)
+    denied = CBManagerAuthorization.DENIED
+    assert _availability(CBManagerState.POWERED_OFF, denied) is Availability.NOT_ALLOWED
+    assert "System Settings" in _not_allowed(denied)
 
 
 def test_an_unanswered_prompt_says_so() -> None:
-    from aio_rfcomm.backend.iobluetooth import _no_radio
-    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-
-    error = _no_radio(CBManagerAuthorization.NOT_DETERMINED, "thor")
-    assert error.reason is Availability.NOT_ALLOWED
-    assert "dialog" in str(error)
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    assert (
+        _availability(CBManagerState.POWERED_OFF, unasked) is Availability.NOT_ALLOWED
+    )
+    assert "dialog" in _not_allowed(unasked)
 
 
 def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
-    from aio_rfcomm.backend.iobluetooth import _no_radio
-    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-
-    error = _no_radio(CBManagerAuthorization.RESTRICTED, "thor")
-    assert error.reason is Availability.NOT_ALLOWED
+    assert "parental controls" in _not_allowed(CBManagerAuthorization.RESTRICTED)
 
 
 def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
-    from aio_rfcomm.backend.iobluetooth import _no_radio
-    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-
-    error = _no_radio(CBManagerAuthorization.ALLOWED_ALWAYS, "thor")
-    assert error.reason is Availability.SWITCHED_OFF
-    assert "thor" in str(error)
-    assert "switched off" in str(error)
+    allowed = CBManagerAuthorization.ALLOWED_ALWAYS
+    assert (
+        _availability(CBManagerState.POWERED_OFF, allowed) is Availability.SWITCHED_OFF
+    )
 
 
 def test_the_renaming_trap_is_in_the_refusal_message() -> None:
@@ -521,49 +521,83 @@ def test_the_renaming_trap_is_in_the_refusal_message() -> None:
     prompt_under_name, so renaming an application asks again -- and the
     symptom points nowhere near the cause.
     """
-    from aio_rfcomm.backend.iobluetooth import _no_radio
-    from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
+    assert "prompt_under_name" in _not_allowed(CBManagerAuthorization.DENIED)
 
-    assert "prompt_under_name" in str(_no_radio(CBManagerAuthorization.DENIED, None))
+
+@pytest.mark.parametrize(
+    ("state", "availability"),
+    [
+        (CBManagerState.POWERED_ON, Availability.USABLE),
+        (CBManagerState.UNAUTHORIZED, Availability.NOT_ALLOWED),
+        (CBManagerState.RESETTING, Availability.SERVICE_UNAVAILABLE),
+        (CBManagerState.UNSUPPORTED, Availability.UNSUPPORTED),
+        (CBManagerState.UNKNOWN, None),
+        (99, None),
+    ],
+)
+def test_each_manager_state_means_one_thing(
+    state: int, availability: Availability | None
+) -> None:
+    allowed = CBManagerAuthorization.ALLOWED_ALWAYS
+    assert _availability(state, allowed) is availability
 
 
 # --------------------------------------------------------------------------
-# The adapter going away
+# The manager's state
 # --------------------------------------------------------------------------
 
 
-async def test_the_helper_saying_the_radio_went_reaches_the_adapter() -> None:
+async def test_the_helper_s_states_arrive_in_order() -> None:
     async with _helper() as (helper, there):
-        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
-        there.send({"event": "lost", "reason": "SWITCHED_OFF"})
+        for state in (CBManagerState.RESETTING, CBManagerState.POWERED_ON):
+            there.send({"event": "state", "state": state, "authorization": 3})
         async with asyncio.timeout(1):
-            assert await adapter.wait_until_gone() is AdapterLostReason.SWITCHED_OFF
+            assert await helper.next_state() == (CBManagerState.RESETTING, 3)
+            assert await helper.next_state() == (CBManagerState.POWERED_ON, 3)
 
 
-async def test_one_waiter_giving_up_leaves_the_others_the_adapter_s_end() -> None:
+async def test_a_reader_giving_up_loses_no_state() -> None:
     async with _helper() as (helper, there):
-        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
-        impatient = asyncio.ensure_future(adapter.wait_until_gone())
-        patient = asyncio.ensure_future(adapter.wait_until_gone())
+        impatient = asyncio.ensure_future(helper.next_state())
         await asyncio.sleep(0.01)
         impatient.cancel()
         await asyncio.gather(impatient, return_exceptions=True)
 
-        there.send({"event": "lost", "reason": "SWITCHED_OFF"})
+        there.send(
+            {"event": "state", "state": CBManagerState.POWERED_OFF, "authorization": 3}
+        )
         async with asyncio.timeout(1):
-            assert await patient is AdapterLostReason.SWITCHED_OFF
+            assert await helper.next_state() == (CBManagerState.POWERED_OFF, 3)
 
 
-async def test_a_lost_reason_we_do_not_know_still_ends_the_adapter() -> None:
+async def test_states_from_a_helper_that_has_gone_are_not_handed_out() -> None:
     """
-    Only a helper of a different version could send one, and the adapter is
-    gone whatever the reason.
+    They described a helper that is no longer there, and acting on one --
+    powered on, say -- would report Bluetooth usable with nothing behind it.
     """
     async with _helper() as (helper, there):
-        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
-        there.send({"event": "lost", "reason": "EATEN_BY_A_GRUE"})
+        there.send(
+            {"event": "state", "state": CBManagerState.POWERED_ON, "authorization": 3}
+        )
+        there.close()
         async with asyncio.timeout(1):
-            assert await adapter.wait_until_gone() is AdapterLostReason.REMOVED
+            while not helper.stopped:
+                await asyncio.sleep(0)
+            with pytest.raises(HelperFailedError):
+                await helper.next_state()
+
+
+async def test_waiting_for_a_state_hears_the_helper_go() -> None:
+    async with _helper() as (helper, there):
+        waiting = asyncio.ensure_future(helper.next_state())
+        await asyncio.sleep(0.01)
+        there.close()
+        async with asyncio.timeout(1):
+            with pytest.raises(HelperFailedError):
+                await waiting
+            # And again, for whoever asks next.
+            with pytest.raises(HelperFailedError):
+                await helper.next_state()
 
 
 # --------------------------------------------------------------------------
@@ -618,11 +652,11 @@ async def test_closing_a_channel_does_not_return_before_the_helper_is_done() -> 
     helper's own teardown.
     """
     async with _helper() as (helper, there):
-        adapter = IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
+        bluetooth = _bluetooth(helper)
         stack = AsyncExitStack()
         # Entered as a task, because the request only goes out once it is.
         opening = asyncio.ensure_future(
-            stack.enter_async_context(adapter.open_channel("00:11:22:33:44:55", 4))
+            stack.enter_async_context(bluetooth.open_channel(DEVICE, 4))
         )
 
         asked = await _next(there)

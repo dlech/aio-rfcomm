@@ -2,59 +2,248 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-The service handle callers hold, and the machinery that feeds its handler.
+Serving, the way a listening socket does it.
 
-A served channel's lifetime is the handler call: the channel is opened before
-the handler starts and closed once it returns, so a handler never has to
-remember to close anything and cannot leak a channel by returning early.
+A published service hands out each peer that connects as a request, which the
+program accepts -- getting a channel, in a block of its own -- or declines.
+The program runs its conversations in its own task group, so nothing here
+starts a task.
 """
 
-import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from __future__ import annotations
+
+import copy
+import enum
+import logging
+import warnings
+import weakref
+from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import TYPE_CHECKING, Self
 from uuid import UUID
 
 from aio_rfcomm._scope import Scope
-from aio_rfcomm._teardown import unwrap_lone_error
-from aio_rfcomm.backend.provider import BackendChannel, BackendService
+from aio_rfcomm.backend.provider import BackendRequest, BackendService
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.discovery import RfcommDeviceInfo
+from aio_rfcomm.errors import BluetoothUnavailableError
 
-__all__ = ["ConnectionHandler", "RfcommService"]
+if TYPE_CHECKING:
+    from aio_rfcomm.bluetooth import Bluetooth
 
-ConnectionHandler = Callable[[RfcommDeviceInfo, RfcommChannel], Awaitable[None]]
-"""
-What runs for each peer that connects.
+__all__ = ["ConnectionRequests", "RfcommConnectionRequest", "RfcommService"]
 
-Called with the peer and its channel. The channel is closed when the handler
-returns, so the handler runs for exactly as long as it wants the connection to
-last.
-"""
+logger = logging.getLogger(__name__)
+
+
+class _Answer(enum.Enum):
+    NONE = enum.auto()
+    ACCEPTED = enum.auto()
+    DECLINED = enum.auto()
+    # Hung up on because Bluetooth went; accepting it raises why.
+    ENDED = enum.auto()
+
+
+class RfcommConnectionRequest:
+    """
+    A peer asking to connect.
+
+    Accept it to talk, or decline it. One that is neither, dropped and then
+    garbage-collected, is a bug: it raises :class:`ResourceWarning` and is
+    hung up on then, the way an unclosed socket is. Leaving the
+    :meth:`~aio_rfcomm.Bluetooth.serve` block closes any that remain.
+
+    Declining is not a refusal. On BlueZ and Windows the peer's channel
+    appears to be open before the request arrives here, so the peer should see
+    its open succeed and the channel then end; not yet measured.
+    """
+
+    def __init__(self, backend: BackendRequest, service: RfcommService) -> None:
+        """
+        Not called directly. Requests come from
+        :meth:`RfcommService.connection_requests`.
+
+        Args:
+            backend: The backend's request.
+            service: The service it arrived through.
+        """
+        self._backend = backend
+        self._service = service
+        self._answer = _Answer.NONE
+
+    @property
+    def info(self) -> RfcommDeviceInfo:
+        """
+        Who is asking: what the platform knows without asking further, which
+        may not include a name.
+        """
+        return self._backend.info
+
+    def accept(self) -> AbstractAsyncContextManager[RfcommChannel]:
+        """
+        Take the connection.
+
+        A peer that hung up before this still gets a channel, whose first
+        :meth:`~aio_rfcomm.RfcommChannel.receive` raises, so every ending
+        arrives the same way.
+
+        Returns:
+            An async context manager yielding the channel, closed on exit.
+            The channel belongs to that block, not to the service's, and
+            carries on if the service is withdrawn first. Entering it raises
+            :class:`~aio_rfcomm.errors.BluetoothUnavailableError` if Bluetooth
+            is unusable or went away since the request arrived.
+
+        Raises:
+            RuntimeError: The request was already accepted or declined.
+            ScopeClosedError: The service's block has ended.
+        """
+        self._service._scope.check()
+        match self._answer:
+            case _Answer.ACCEPTED | _Answer.DECLINED:
+                raise RuntimeError(
+                    f"this request was already {self._answer.name.lower()}"
+                )
+            case _Answer.NONE | _Answer.ENDED:
+                self._answer = _Answer.ACCEPTED
+                return self._accepting()
+
+    @asynccontextmanager
+    async def _accepting(self) -> AsyncGenerator[RfcommChannel, None]:
+        try:
+            self._service._scope.check()
+            self._service._check_ending()
+            async with self._service._bluetooth._open(self._backend.open) as channel:
+                yield channel
+        finally:
+            # Does nothing once a channel has the connection; otherwise an
+            # accept that failed would leave the peer connected.
+            self._backend.close()
+
+    async def decline(self) -> None:
+        """
+        Turn the peer away, hanging up at once.
+
+        Always takes effect, even if cancelled: the request is closed before
+        anything is awaited. Waits only on this side, never on the peer, and
+        raises nothing if hanging up fails, since nothing could be done about
+        it. Declining twice does nothing.
+
+        Raises:
+            RuntimeError: The request was already accepted.
+        """
+        match self._answer:
+            case _Answer.ACCEPTED:
+                raise RuntimeError("this request was already accepted")
+            case _Answer.DECLINED | _Answer.ENDED:
+                return
+            case _Answer.NONE:
+                self._answer = _Answer.DECLINED
+                try:
+                    await self._backend.decline()
+                except Exception:
+                    # Nothing a caller could do about a hang-up that failed.
+                    logger.debug(
+                        "declining %s failed", self.info.address, exc_info=True
+                    )
+
+    def _close(self, answer: _Answer = _Answer.DECLINED) -> None:
+        """
+        Hang up, unless a channel already has the connection.
+
+        For the service, which answers every request left unanswered when it
+        ends, so none of them is warned about later.
+
+        Args:
+            answer: What the service's ending amounts to for this request.
+        """
+        if self._answer is _Answer.NONE:
+            self._answer = answer
+        self._backend.close()
+
+    def __del__(self) -> None:
+        # Hung up first: the warning can itself raise, under -W error or as
+        # the interpreter shuts down.
+        self._backend.close()
+
+        if self._answer is _Answer.NONE:
+            warnings.warn(
+                f"a connection request from {self._backend.info.address} was "
+                "neither accepted nor declined, and has been hung up on",
+                ResourceWarning,
+                source=self,
+                stacklevel=2,
+            )
+
+
+class ConnectionRequests:
+    """
+    The peers asking to connect to a service, one request each.
+
+    An iterator object rather than an async generator, so that leaving a loop
+    over it early leaves nothing suspended to be cleaned up later. Each
+    request goes to exactly one reader.
+    """
+
+    def __init__(self, service: RfcommService) -> None:
+        """
+        Not called directly. Use :meth:`RfcommService.connection_requests`.
+
+        Args:
+            service: The service being listened on.
+        """
+        self._service = service
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> RfcommConnectionRequest:
+        """
+        Wait for the next peer.
+
+        Returns:
+            Its request.
+
+        Raises:
+            BluetoothUnavailableError: Bluetooth went away, which ends the
+                service; every later call raises the same.
+            ScopeClosedError: The service's block has ended.
+        """
+        return await self._service._next_request()
 
 
 class RfcommService:
     """
-    A service published on an adapter, listening for peers.
-
-    Handed to the caller so that it can say what was published -- most usefully
-    the channel number, which the caller may not have chosen.
-
-    To stop serving when the radio goes away, use the adapter's
-    :meth:`~aio_rfcomm.RfcommAdapter.fail_when_gone`.
+    A service published on this machine, listening for peers.
     """
 
-    def __init__(self, backend: BackendService, service: UUID, name: str) -> None:
+    def __init__(
+        self,
+        bluetooth: Bluetooth,
+        backend: BackendService,
+        service: UUID,
+        name: str,
+        scope: Scope,
+    ) -> None:
         """
-        Not called directly. Services come from :meth:`~aio_rfcomm.RfcommAdapter.serve`.
+        Not called directly. Services come from
+        :meth:`~aio_rfcomm.Bluetooth.serve`.
 
         Args:
-            backend: The backend-specific service object.
+            bluetooth: The Bluetooth object it was published through.
+            backend: The backend's service.
             service: The service UUID that was published.
             name: The name that was published with it.
+            scope: The service's scope.
         """
+        self._bluetooth = bluetooth
         self._backend = backend
         self._service = service
         self._name = name
+        self._scope = scope
+        self._ending: BluetoothUnavailableError | None = None
+        # Weak, so that one nobody kept can be collected and warned about.
+        self._requests: weakref.WeakSet[RfcommConnectionRequest] = weakref.WeakSet()
 
     @property
     def service(self) -> UUID:
@@ -81,111 +270,57 @@ class RfcommService:
         """
         return self._backend.channel
 
+    def connection_requests(self) -> ConnectionRequests:
+        """
+        The peers asking to connect, as they arrive.
 
-async def _handle(
-    handler: ConnectionHandler,
-    peer: RfcommDeviceInfo,
-    opening: AbstractAsyncContextManager[BackendChannel],
-    parent: Scope,
-) -> None:
-    """
-    Run one handler, and report rather than propagate what it raises.
+        ::
 
-    A server outlives the connections it serves, so one handler failing must
-    not take down the service or its other connections. There is nobody to
-    raise to, which is what the loop's exception handler is for: it prints
-    the traceback by default and the application can replace it.
+            async with asyncio.TaskGroup() as group:
+                async for request in service.connection_requests():
+                    group.create_task(answer(request))
 
-    Args:
-        handler: What the caller gave to :meth:`~aio_rfcomm.RfcommAdapter.serve`.
-        peer: Who connected.
-        opening: The channel, not yet open.
-        parent: The service's scope, which the channel's nests inside.
-    """
-    scope = parent.child("channel")
-    try:
-        async with opening as backend_channel:
-            try:
-                await handler(peer, RfcommChannel(backend_channel, scope))
-            finally:
-                scope.close()
-    except asyncio.CancelledError:
-        raise
-    except Exception as error:  # noqa: BLE001  (reported, not propagated)
-        asyncio.get_running_loop().call_exception_handler(
-            {
-                "message": "unhandled exception in an RFCOMM connection handler",
-                "exception": error,
-                "peer": peer.address,
-            }
-        )
+        Returns:
+            An async iterator of requests. It never ends by itself.
+        """
+        self._scope.check()
+        return ConnectionRequests(self)
 
+    async def _next_request(self) -> RfcommConnectionRequest:
+        self._scope.check()
+        self._check_ending()
 
-async def _accept_forever(
-    backend: BackendService,
-    handler: ConnectionHandler,
-    group: asyncio.TaskGroup,
-    running: set[asyncio.Task[None]],
-    scope: Scope,
-) -> None:
-    """
-    Take connections as they arrive and give each one to the handler.
+        with self._bluetooth._interrupted():
+            backend = await self._backend.accept()
 
-    Args:
-        backend: The listening service.
-        handler: What to run for each peer.
-        group: Where handler tasks are started.
-        running: The handler tasks, so they can be stopped with the service.
-        scope: The service's scope.
-    """
-    while True:
-        peer, opening = await backend.accept()
-        task = group.create_task(_handle(handler, peer, opening, scope))
-        running.add(task)
-        task.add_done_callback(running.discard)
+        request = RfcommConnectionRequest(backend, self)
+        self._requests.add(request)
+        return request
 
+    def _check_ending(self) -> None:
+        """
+        Raises:
+            BluetoothUnavailableError: Bluetooth went away, ending the service.
+        """
+        if self._ending is not None:
+            raise copy.copy(self._ending)
 
-@asynccontextmanager
-async def serve_connections(
-    opening: AbstractAsyncContextManager[BackendService],
-    handler: ConnectionHandler,
-    service: UUID,
-    name: str,
-    parent: Scope,
-) -> AsyncGenerator[RfcommService, None]:
-    """
-    Publish a service and run ``handler`` for every peer that connects.
+    def _end(self, error: BluetoothUnavailableError) -> None:
+        """
+        End the service because Bluetooth has gone.
 
-    The accepting and the handlers live in a task group of the block's own, so
-    that leaving the block stops all of them. Handlers are cancelled rather
-    than waited for: the block ending is the caller saying the service is over,
-    and a handler that is still talking to a peer would otherwise keep it open
-    indefinitely.
+        The peers already waiting arrived before it went, over links that are
+        gone too, so they are hung up on.
 
-    Args:
-        opening: The backend's service, not yet published.
-        handler: What to run for each peer.
-        service: The service UUID being published.
-        name: The name being published with it.
-        parent: The adapter's scope, which the service's nests inside.
+        Args:
+            error: What every later call raises.
+        """
+        if self._ending is None:
+            self._ending = error
+        for request in list(self._requests):
+            request._close(_Answer.ENDED)
 
-    Yields:
-        The published service.
-    """
-    scope = parent.child("service")
-    async with opening as backend:
-        running: set[asyncio.Task[None]] = set()
-        try:
-            with unwrap_lone_error():
-                async with asyncio.TaskGroup() as group:
-                    accepting = group.create_task(
-                        _accept_forever(backend, handler, group, running, scope)
-                    )
-                    try:
-                        yield RfcommService(backend, service, name)
-                    finally:
-                        accepting.cancel()
-                        for task in running:
-                            task.cancel()
-        finally:
-            scope.close()
+    def _close(self) -> None:
+        self._scope.close()
+        for request in list(self._requests):
+            request._close()

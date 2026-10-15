@@ -25,8 +25,7 @@ from typing_extensions import override
 from aio_rfcomm.availability import Availability, UnavailableReason
 
 __all__ = [
-    "AdapterLostError",
-    "AdapterLostReason",
+    "BluetoothAlreadyOpenError",
     "BluetoothUnavailableError",
     "ChannelBrokenError",
     "ChannelBusyError",
@@ -88,47 +87,6 @@ class BluetoothUnavailableError(RfcommError):
         # Rebuilt from the reason, not from the message alone, so that copying
         # or pickling one gives back the same error.
         return type(self), (self.reason, str(self))
-
-
-# --------------------------------------------------------------------------
-# Using an adapter
-# --------------------------------------------------------------------------
-
-
-class AdapterLostReason(enum.Enum):
-    """
-    Why an adapter is no longer usable.
-    """
-
-    SWITCHED_OFF = "the adapter was switched off"
-    """
-    The local radio was turned off.
-    """
-
-    REMOVED = "the adapter was removed"
-    """
-    The adapter was unplugged or otherwise disappeared from the system.
-    """
-
-
-class AdapterLostError(RfcommError):
-    """
-    The adapter went away while it was in use.
-
-    Raised by :meth:`~aio_rfcomm.RfcommAdapter.fail_when_gone`.
-    :attr:`reason` says why.
-    """
-
-    def __init__(self, reason: AdapterLostReason) -> None:
-        """
-        Args:
-            reason: Why the adapter is gone.
-        """
-        super().__init__(reason.value)
-        self.reason = reason
-        """
-        Why the adapter is gone.
-        """
 
 
 # --------------------------------------------------------------------------
@@ -244,6 +202,15 @@ class UnsupportedOperationError(RfcommError):
 # --------------------------------------------------------------------------
 
 
+class BluetoothAlreadyOpenError(RuntimeError):
+    """
+    Bluetooth was opened while it was already open in this process.
+
+    There is one Bluetooth object per process. Code that needs Bluetooth takes
+    that object as an argument rather than opening its own.
+    """
+
+
 class ChannelBrokenError(RuntimeError):
     """
     A channel was sent on after an earlier send on it was cancelled.
@@ -269,8 +236,8 @@ class ScopeClosedError(RuntimeError):
     """
     A handle was used after the block that produced it ended.
 
-    Adapters, devices and channels are only meaningful inside their
-    ``async with``. Keeping one past the end of the block is a bug in the
+    The Bluetooth object, channels and services are only meaningful inside
+    their ``async with``. Keeping one past the end of the block is a bug in the
     caller, so it is reported at once rather than left to fail somewhere less
     obvious.
     """

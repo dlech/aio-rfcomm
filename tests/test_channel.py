@@ -10,9 +10,15 @@ import asyncio
 
 import pytest
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.channel import RfcommChannel
-from aio_rfcomm.errors import ChannelBrokenError, ChannelClosedError, CloseReason
-from tests.fake import FakeChannel
+from aio_rfcomm.errors import (
+    BluetoothUnavailableError,
+    ChannelBrokenError,
+    ChannelClosedError,
+    CloseReason,
+)
+from tests.fake import FakeChannel, FakeProvider
 
 
 @pytest.mark.parametrize("max_bytes", [0, -1])
@@ -83,3 +89,14 @@ async def test_the_end_matters_more_than_a_cancelled_send(
     with pytest.raises(ChannelClosedError) as caught:
         await channel.send(b"again")
     assert caught.value.reason is CloseReason.LINK_LOST
+
+
+async def test_bluetooth_going_matters_more_than_a_cancelled_send(
+    opened: tuple[RfcommChannel, FakeChannel], provider: FakeProvider
+) -> None:
+    channel, fake = opened
+    await _cancel_a_send(channel, fake)
+    provider.report(Availability.SWITCHED_OFF)
+
+    with pytest.raises(BluetoothUnavailableError):
+        await channel.send(b"again")

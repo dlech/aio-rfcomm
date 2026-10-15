@@ -6,7 +6,7 @@ The macOS backend end to end, with only the framework stood in for.
 
 The library and its helper are otherwise tested on either side of the socket
 between them, which cannot show that the two halves agree. Here both run in
-this process: the public API over the real adapter and helper client on one
+this process: the public API over the real backend and helper client on one
 end of a socket pair, the helper's own request loop and the native layer on
 the other, and the fake framework beneath that. Only spawning the helper is
 left out, since the child would not have the fake.
@@ -23,17 +23,15 @@ import pytest
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
-from aio_rfcomm.adapter import RfcommAdapter
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth import IOBluetoothAdapter
+from aio_rfcomm.backend.iobluetooth import IOBluetoothBackend, IOBluetoothBluetooth
 from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerState
-from aio_rfcomm.backend.iobluetooth._helper import Helper
+from aio_rfcomm.backend.iobluetooth._helper import Helper, HelperFailedError
 from aio_rfcomm.backend.iobluetooth._protocol import Link
-from aio_rfcomm.discovery import RfcommAdapterInfo
+from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    AdapterLostError,
-    AdapterLostReason,
     BluetoothUnavailableError,
     ChannelClosedError,
     CloseReason,
@@ -41,6 +39,7 @@ from aio_rfcomm.errors import (
 )
 from tests.fake_iobluetooth import (
     FakeDeviceClass,
+    FakeManager,
     change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
     fake_framework,
@@ -49,40 +48,67 @@ from tests.fake_iobluetooth import (
 )
 
 ADDRESS = "00:1A:7D:DA:71:0C"
+DEVICE = RfcommDeviceInfo(ADDRESS)
+
+
+class _Helpers:
+    """
+    Starts helpers in this process, the way the backend starts real ones.
+    """
+
+    def __init__(self) -> None:
+        self.started: list[tuple[Helper, socket.socket]] = []
+
+    @asynccontextmanager
+    async def start(self) -> AsyncGenerator[Helper, None]:
+        near, far = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        helper = Helper(Link(near))
+        self.started.append((helper, far))
+        serving = asyncio.ensure_future(helper_main._serve(far))
+        reading = asyncio.ensure_future(helper.deliver())
+        try:
+            yield helper
+        finally:
+            # What run_helper ends with: whatever still waits is released, and
+            # the helper reads end of file and stops.
+            helper._stop(HelperFailedError("the helper was stopped"))
+            helper._link.close()
+            async with asyncio.timeout(1):
+                await asyncio.gather(serving, return_exceptions=True)
+            reading.cancel()
+            await asyncio.gather(reading, return_exceptions=True)
+
+    def kill(self) -> None:
+        """
+        End the running helper without warning, as a crash would.
+        """
+        _helper, far = self.started[-1]
+        far.shutdown(socket.SHUT_RDWR)
 
 
 @asynccontextmanager
-async def _stack() -> AsyncGenerator[RfcommAdapter, None]:
+async def _stack(helpers: _Helpers | None = None) -> AsyncGenerator[Bluetooth, None]:
     """
-    An adapter whose helper runs in this process, over the fake framework.
+    Bluetooth whose helpers run in this process, over the fake framework.
 
     Yields:
-        The adapter, as a caller of the library holds it.
+        The Bluetooth object, as a caller of the library holds it.
     """
-    near, far = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-    helper = Helper(Link(near))
-    serving = asyncio.ensure_future(helper_main._serve(far))
-    reading = asyncio.ensure_future(helper.deliver())
-    try:
-        yield RfcommAdapter(
-            IOBluetoothAdapter(helper, RfcommAdapterInfo("default", None, None))
-        )
-    finally:
-        # What the adapter's scope ends with: the library closes its end, and
-        # the helper reads end of file and stops.
-        helper._link.close()
-        async with asyncio.timeout(1):
-            await serving
-        reading.cancel()
-        await asyncio.gather(reading, return_exceptions=True)
+    helpers = helpers or _Helpers()
+    async with _open_bluetooth(IOBluetoothBackend(helpers.start)) as bluetooth:
+        yield bluetooth
+
+
+async def _next_availability(bluetooth: Bluetooth, wanted: Availability) -> None:
+    async with asyncio.timeout(1):
+        async for availability in bluetooth.watch_availability():
+            if availability is wanted:
+                return
 
 
 async def test_bytes_cross_both_ways(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_framework(monkeypatch)
-    async with (
-        _stack() as adapter,
-        adapter.use_device(ADDRESS).open_channel(5) as channel,
-    ):
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
         fake = opened[-1]
 
         await channel.send(b"hello\n")
@@ -103,10 +129,7 @@ async def test_a_peer_that_hangs_up_ends_the_stream(
     reported closed while the link stays up, which is an orderly end.
     """
     fake_framework(monkeypatch)
-    async with (
-        _stack() as adapter,
-        adapter.use_device(ADDRESS).open_channel(5) as channel,
-    ):
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
         opened[-1].hang_up()
         async with asyncio.timeout(1):
             with pytest.raises(ChannelClosedError) as caught:
@@ -118,10 +141,7 @@ async def test_a_lost_link_is_not_mistaken_for_a_hang_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_framework(monkeypatch)
-    async with (
-        _stack() as adapter,
-        adapter.use_device(ADDRESS).open_channel(5) as channel,
-    ):
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
         fake = opened[-1]
         fake.device.connected = False
         fake.hang_up()
@@ -139,10 +159,9 @@ async def test_a_closed_channel_leaves_the_device_free(
     while the helper still held the device, and the next open was refused.
     """
     fake_framework(monkeypatch)
-    async with _stack() as adapter:
-        device = adapter.use_device(ADDRESS)
+    async with _stack() as bluetooth:
         for _round in range(3):
-            async with device.open_channel(5) as channel:
+            async with bluetooth.open_channel(DEVICE, 5) as channel:
                 await channel.send(b"x")
         channels = FakeDeviceClass.made[ADDRESS].channels
         assert len(channels) == 3
@@ -157,64 +176,83 @@ async def test_a_device_that_does_not_answer_is_reported(
     error code; that has to arrive here as the device not answering.
     """
     fake_framework(monkeypatch, answers=False, connected=False)
-    async with _stack() as adapter:
+    async with _stack() as bluetooth:
         with pytest.raises(DeviceNotFoundError, match="did not answer"):
-            async with adapter.use_device(ADDRESS).open_channel(5):
+            async with bluetooth.open_channel(DEVICE, 5):
                 pass
 
 
-async def test_a_radio_switched_off_ends_the_adapter(
+# --------------------------------------------------------------------------
+# Availability
+# --------------------------------------------------------------------------
+
+
+async def test_the_first_reading_is_the_manager_s_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework(monkeypatch, state=CBManagerState.POWERED_OFF)
+    async with _stack() as bluetooth:
+        assert await anext(bluetooth.watch_availability()) is Availability.SWITCHED_OFF
+        with pytest.raises(BluetoothUnavailableError, match="turn it on"):
+            async with bluetooth.open_channel(DEVICE, 5):
+                pass
+
+
+async def test_an_open_the_helper_refuses_says_why(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    What a server waiting on nothing but the adapter needs: told, rather than
-    left waiting on a radio that is no longer there.
+    The helper checks the radio itself before opening, and the reason has to
+    survive the trip back across the socket.
     """
-    manager = fake_framework(monkeypatch)
-    async with _stack() as adapter:
-        with pytest.raises(AdapterLostError) as caught:
-            async with asyncio.timeout(1), adapter.fail_when_gone():
-                await until_observed(manager)
-                change_state(manager, CBManagerState.POWERED_OFF)
-                await asyncio.Event().wait()
-        assert caught.value.reason is AdapterLostReason.SWITCHED_OFF
-
-
-async def test_a_radio_switched_off_with_a_channel_open(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    Measured on a clean toggle: the manager says powered off, and a
-    millisecond later the channel hears its link drop.
-    """
-    manager = fake_framework(monkeypatch)
-    async with (
-        _stack() as adapter,
-        adapter.use_device(ADDRESS).open_channel(5) as channel,
-    ):
-        fake = opened[-1]
-        await until_observed(manager)
-        change_state(manager, CBManagerState.POWERED_OFF)
-        fake.device.connected = False
-        fake.hang_up()
-        async with asyncio.timeout(1):
-            with pytest.raises(ChannelClosedError) as closed:
-                await channel.receive()
-            assert closed.value.reason is CloseReason.LINK_LOST
-            assert await adapter.wait_until_gone() is AdapterLostReason.SWITCHED_OFF
-
-
-async def test_an_open_with_the_radio_off_says_why(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    The helper notices the radio is off; the reason has to survive the trip
-    back across the socket for the caller to say what to do about it.
-    """
-    manager = fake_framework(monkeypatch)
-    manager.state = CBManagerState.POWERED_OFF
-    async with _stack() as adapter:
+    fake_framework(monkeypatch, state=CBManagerState.POWERED_OFF)
+    helpers = _Helpers()
+    async with helpers.start() as helper:
+        bluetooth = IOBluetoothBluetooth()
+        bluetooth.helper = helper
         with pytest.raises(BluetoothUnavailableError) as caught:
-            async with asyncio.timeout(1), adapter.use_device(ADDRESS).open_channel(5):
+            async with asyncio.timeout(1), bluetooth.open_channel(DEVICE, 5):
                 pass
-        assert caught.value.reason is Availability.SWITCHED_OFF
+    assert caught.value.reason is Availability.SWITCHED_OFF
+
+
+# --------------------------------------------------------------------------
+# The Bluetooth service restarting
+# --------------------------------------------------------------------------
+
+
+async def _restart(manager: FakeManager) -> None:
+    await until_observed(manager)
+    # Measured when bluetoothd restarted on its way to powering off; here it
+    # comes back on.
+    change_state(manager, CBManagerState.RESETTING, CBManagerState.POWERED_ON)
+
+
+async def test_a_first_helper_that_will_not_start_is_an_error() -> None:
+    @asynccontextmanager
+    async def broken() -> AsyncGenerator[Helper, None]:
+        raise HelperFailedError("the helper stopped during startup")
+        yield  # pragma: no cover
+
+    with pytest.raises(HelperFailedError):
+        async with _open_bluetooth(IOBluetoothBackend(broken)):
+            pass
+
+
+async def test_a_helper_refused_bluetooth_is_not_allowed() -> None:
+    """
+    macOS ends a helper it will not let use Bluetooth, and would end a new one
+    the same way, so nothing is retried and the reason is reported.
+    """
+
+    @asynccontextmanager
+    async def refused() -> AsyncGenerator[Helper, None]:
+        raise BluetoothUnavailableError(
+            Availability.NOT_ALLOWED, "call prompt_under_name() first"
+        )
+        yield  # pragma: no cover
+
+    async with _open_bluetooth(IOBluetoothBackend(refused)) as bluetooth:
+        assert await anext(bluetooth.watch_availability()) is Availability.NOT_ALLOWED
+        with pytest.raises(BluetoothUnavailableError, match="prompt_under_name"):
+            await bluetooth.list_known_devices()

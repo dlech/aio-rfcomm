@@ -60,6 +60,16 @@ class _Transport(asyncio.Transport):
         return False
 
     @override
+    def set_protocol(self, protocol: asyncio.BaseProtocol) -> None:
+        self.protocol = protocol
+
+    @override
+    def abort(self) -> None:
+        # What the loop's transport does: the protocol hears the connection
+        # is gone, later.
+        asyncio.get_running_loop().call_soon(self.protocol.connection_lost, None)
+
+    @override
     def pause_reading(self) -> None:
         self.paused = True
 
@@ -71,6 +81,7 @@ class _Transport(asyncio.Transport):
 def _driven() -> tuple[StreamChannel, StreamProtocol, _Transport]:
     transport = _Transport()
     protocol = StreamProtocol()
+    transport.set_protocol(protocol)
     protocol.connection_made(transport)
     return StreamChannel(transport, protocol), protocol, transport
 
@@ -259,3 +270,24 @@ async def test_a_sender_waiting_for_room_hears_the_end() -> None:
     with pytest.raises(ChannelClosedError):
         await sending
     assert transport.written == [b"stuck"]
+
+
+async def test_an_aborted_channel_still_hands_over_what_arrived() -> None:
+    channel, protocol, _transport = _driven()
+    protocol.data_received(b"before the radio went")
+    channel.abort()
+
+    assert await channel.receive() == b"before the radio went"
+    with pytest.raises(ChannelClosedError) as caught:
+        await channel.receive()
+    assert caught.value.reason is CloseReason.LINK_LOST
+
+
+async def test_an_abort_wakes_a_waiting_receive() -> None:
+    async with _channel() as (channel, _peer):
+        receiving = asyncio.ensure_future(channel.receive())
+        await asyncio.sleep(0)
+        channel.abort()
+        with pytest.raises(ChannelClosedError):
+            async with asyncio.timeout(1):
+                await receiving

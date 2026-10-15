@@ -19,43 +19,34 @@ from collections.abc import AsyncGenerator
 
 import pytest
 
-from aio_rfcomm.adapter import RfcommAdapter
+from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
 from aio_rfcomm.channel import RfcommChannel
-from aio_rfcomm.device import RfcommDevice
-from tests.fake import FakeAdapter, FakeChannel
+from tests.fake import DEVICE, FakeChannel, FakeProvider
 
 
 @pytest.fixture
-async def backend() -> FakeAdapter:
+def provider() -> FakeProvider:
     """
-    A fake backend adapter, for driving events by hand.
+    A fake backend, for driving events by hand.
     """
-    return FakeAdapter()
+    return FakeProvider()
 
 
 @pytest.fixture
-async def adapter(backend: FakeAdapter) -> RfcommAdapter:
+async def bluetooth(provider: FakeProvider) -> AsyncGenerator[Bluetooth, None]:
     """
-    An open adapter over the fake backend.
+    Bluetooth opened over the fake backend.
     """
-    return RfcommAdapter(backend)
-
-
-@pytest.fixture
-async def device(adapter: RfcommAdapter) -> RfcommDevice:
-    """
-    A device found through the fake adapter, ready to use.
-    """
-    known = await adapter.list_known_devices()
-    return adapter.use_device(known[0])
+    async with _open_bluetooth(provider) as opened:
+        yield opened
 
 
 @pytest.fixture
 async def opened(
-    device: RfcommDevice, backend: FakeAdapter
+    bluetooth: Bluetooth, provider: FakeProvider
 ) -> AsyncGenerator[tuple[RfcommChannel, FakeChannel], None]:
     """
     An open channel, paired with the fake backing it.
     """
-    async with device.open_channel(1) as channel:
-        yield channel, backend.channels[-1]
+    async with bluetooth.open_channel(DEVICE, 1) as channel:
+        yield channel, provider.backend.channels[-1]

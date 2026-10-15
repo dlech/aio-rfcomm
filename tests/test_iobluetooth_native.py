@@ -20,6 +20,7 @@ import pytest
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
+
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import _native
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
@@ -37,7 +38,6 @@ from tests.fake_iobluetooth import (
     FakeManager,
     change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
-    is_observed,
     until_observed,
     wrap_channel,
 )
@@ -259,70 +259,50 @@ async def test_a_power_on_from_a_framework_thread_is_heard(
 
 
 # --------------------------------------------------------------------------
-# Noticing the radio switched off
+# Reading the radio's state
 # --------------------------------------------------------------------------
 
 
-async def test_a_radio_switched_off_is_noticed(manager: FakeManager) -> None:
-    """
-    Measured on a clean toggle: powered on, then powered off, on a framework
-    thread.
-    """
-    manager.state = CBManagerState.POWERED_ON
-    watching = asyncio.ensure_future(_native.wait_until_switched_off())
-    await asyncio.sleep(SETTLE)
-    assert not watching.done()
-
-    change_state(manager, CBManagerState.POWERED_OFF)
-    async with asyncio.timeout(1):
-        await watching
-
-
-async def test_a_restart_on_the_way_to_off_is_not_taken_for_off(
-    manager: FakeManager,
-) -> None:
-    """
-    Measured when switching off restarted bluetoothd: resetting, a powered-on
-    from the restarted daemon, and only then powered off.
-    """
-    manager.state = CBManagerState.POWERED_ON
-    watching = asyncio.ensure_future(_native.wait_until_switched_off())
-    await asyncio.sleep(SETTLE)
-
-    change_state(manager, CBManagerState.RESETTING, CBManagerState.POWERED_ON)
-    await asyncio.sleep(SETTLE)
-    assert not watching.done()
-
-    change_state(manager, CBManagerState.POWERED_OFF)
-    async with asyncio.timeout(1):
-        await watching
-
-
-async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> None:
-    """
-    An observer left registered would be called on a framework thread for the
-    rest of the process, into a loop that may have gone.
-    """
-    manager.state = CBManagerState.POWERED_ON
-    watching = asyncio.ensure_future(_native.wait_until_switched_off())
+async def test_the_state_is_read_once_it_has_settled(manager: FakeManager) -> None:
+    reading = asyncio.ensure_future(_native.read_state())
     await until_observed(manager)
-    watching.cancel()
-    await asyncio.gather(watching, return_exceptions=True)
-    assert not is_observed(manager)
+    assert not reading.done()
+
+    change_state(manager, CBManagerState.POWERED_OFF)
+    async with asyncio.timeout(1):
+        assert await reading == (
+            CBManagerState.POWERED_OFF,
+            CBManagerAuthorization.ALLOWED_ALWAYS,
+        )
 
 
-async def test_a_manager_that_cannot_be_reached_never_says_off(
+class _Controller:
+    """
+    Stands in for ``IOBluetoothHostController``, asked only its power state.
+    """
+
+    powerState = 1  # kBluetoothHCIPowerStateON
+
+    @classmethod
+    def defaultController(cls) -> "_Controller":
+        return cls()
+
+
+async def test_a_manager_that_cannot_be_reached_reads_the_power_instead(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def gone(_name: str) -> object:
         raise ValueError("no Objective-C class named that")
 
     monkeypatch.setattr(_native, "ObjCClass", gone)
-    watching = asyncio.ensure_future(_native.wait_until_switched_off())
-    await asyncio.sleep(SETTLE)
-    assert not watching.done()
-    watching.cancel()
-    await asyncio.gather(watching, return_exceptions=True)
+    monkeypatch.setattr(_native, "IOBluetoothHostController", _Controller)
+    monkeypatch.setattr(
+        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+    )
+    assert await _native.read_state() == (
+        CBManagerState.POWERED_ON,
+        CBManagerAuthorization.ALLOWED_ALWAYS,
+    )
 
 
 # --------------------------------------------------------------------------

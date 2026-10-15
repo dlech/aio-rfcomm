@@ -2,7 +2,7 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-Plain descriptions of adapters and devices.
+Plain descriptions of devices.
 
 These carry only what does not change while you hold them. Anything that can
 change underneath the caller -- whether a device is connected, whether it is
@@ -13,33 +13,11 @@ moment invites a polling loop and is stale the instant it is read.
 import re
 from dataclasses import dataclass
 
-__all__ = ["RfcommAdapterInfo", "RfcommDeviceInfo"]
+__all__ = ["RfcommDeviceInfo"]
 
 # Six two-digit groups, all separated the same way: the back reference makes a
 # mix of colons and dashes fail to match.
 _ADDRESS = re.compile(r"[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}")
-
-
-@dataclass(eq=False, frozen=True, slots=True)
-class RfcommAdapterInfo:
-    """
-    A Bluetooth adapter on this machine.
-    """
-
-    id: str
-    """
-    Opaque, platform-specific identifier used to open the adapter.
-    """
-
-    address: str | None
-    """
-    The adapter's own Bluetooth address, if the OS reports one.
-    """
-
-    name: str | None
-    """
-    A human-readable name, if the OS reports one.
-    """
 
 
 @dataclass(eq=False, frozen=True, slots=True)

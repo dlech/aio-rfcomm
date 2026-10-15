@@ -19,11 +19,20 @@ import asyncio
 import ctypes
 import threading
 from collections.abc import Generator
+from ctypes import c_int, c_void_p
 from typing import ClassVar, cast
 
 import pytest
-from rubicon.objc import NSObject, objc_method, objc_property
-from rubicon.objc.runtime import load_library
+from rubicon.objc import (
+    NSObject,
+    NSUInteger,
+    ObjCInstance,
+    objc_id,
+    objc_method,
+    objc_property,
+    send_super,
+)
+from rubicon.objc.runtime import load_library, set_ivar
 
 load_library("AppKit")
 
@@ -49,6 +58,38 @@ class FakeManager(NSObject):
         # a CBManagerState at all.
         self.state = int(CBManagerState.UNKNOWN)
         return self
+
+
+class SettlingManager(FakeManager):
+    """
+    A stand-in for ``CBClassicManager`` in a process that has only just
+    reached it.
+
+    Measured in fresh processes: the state reads 0 when an observer is added,
+    settles on powered on as it is, and no notification ever reports the
+    change. Reproduced by settling once the registration is done, without
+    going through the setter that would notify.
+    """
+
+    @objc_method
+    def addObserver_forKeyPath_options_context_(
+        self,
+        observer: ObjCInstance,
+        path: ObjCInstance,
+        options: int,
+        context: c_void_p,
+    ) -> None:
+        send_super(
+            __class__,  # type: ignore[name-defined]
+            self,
+            "addObserver:forKeyPath:options:context:",
+            observer,
+            path,
+            options,
+            context,
+            argtypes=[objc_id, objc_id, NSUInteger, c_void_p],
+        )
+        set_ivar(self, "_state", c_int(int(CBManagerState.POWERED_ON)))
 
 
 def change_state(manager: FakeManager, *states: int) -> None:

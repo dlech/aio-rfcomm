@@ -2,34 +2,24 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-Stopping a block when the adapter underneath it goes away.
-
-This is for work that would otherwise sit idle and never notice, and the two
-things it must not do are hang when nothing goes wrong, or bury the cause in
-an exception group.
+Keeping the library's own task groups out of what callers see.
 """
-
-import asyncio
 
 import pytest
 
-from aio_rfcomm.adapter import RfcommAdapter
-from aio_rfcomm.errors import (
-    AdapterLostError,
-    AdapterLostReason,
-)
-from tests.fake import FakeAdapter
+from aio_rfcomm._teardown import unwrap_lone_error
 
 
-async def test_a_lost_adapter_stops_the_block() -> None:
-    backend = FakeAdapter()
-    handle = RfcommAdapter(backend)
-    try:
-        with pytest.raises(AdapterLostError) as caught:
-            async with handle.fail_when_gone():
-                backend.go_away(AdapterLostReason.REMOVED)
-                await asyncio.sleep(10)
+def test_a_lone_failure_comes_out_as_itself() -> None:
+    with pytest.raises(ValueError, match="alone"), unwrap_lone_error():
+        raise ExceptionGroup("one", [ValueError("alone")])
 
-        assert caught.value.reason is AdapterLostReason.REMOVED
-    finally:
-        handle._close()
+
+def test_several_failures_stay_a_group() -> None:
+    with pytest.raises(ExceptionGroup), unwrap_lone_error():
+        raise ExceptionGroup("two", [ValueError("one"), KeyError("two")])
+
+
+def test_anything_else_passes_through() -> None:
+    with pytest.raises(KeyError), unwrap_lone_error():
+        raise KeyError("plain")

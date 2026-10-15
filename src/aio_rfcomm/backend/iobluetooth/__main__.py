@@ -34,13 +34,9 @@ load_library("AppKit")
 from rubicon.objc.eventloop import RubiconEventLoop
 
 from aio_rfcomm.backend.iobluetooth import _native
+from aio_rfcomm.backend.iobluetooth._codes import CBManagerState
 from aio_rfcomm.backend.iobluetooth._protocol import Link
-from aio_rfcomm.errors import (
-    AdapterLostReason,
-    BluetoothUnavailableError,
-    CloseReason,
-    RfcommError,
-)
+from aio_rfcomm.errors import BluetoothUnavailableError, CloseReason, RfcommError
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +65,7 @@ async def _serve(sock: socket.socket) -> None:
     try:
         try:
             async with asyncio.TaskGroup() as group:
-                group.create_task(_watch_radio(link))
+                group.create_task(_report_state(link))
                 while True:
                     frame = await link.receive()
                     if frame is None:
@@ -98,23 +94,30 @@ async def _serve(sock: socket.socket) -> None:
         link.close()
 
 
-async def _watch_radio(link: Link) -> None:
+async def _report_state(link: Link) -> None:
     """
-    Tell the library once the radio has been switched off.
+    Tell the library the manager's state, once it has settled.
 
-    An adapter does not come back from that: one is opened again once the
-    radio is back on.
+    Sent as numbers and read on the other side, which decides what each one
+    means for whether Bluetooth is usable.
 
     Args:
         link: The control socket.
     """
     try:
-        await _native.wait_until_switched_off()
+        state, authorization = await _native.read_state()
     except Exception:
-        # Losing the watch costs the report, not the helper and its channels.
-        logger.exception("could not watch the radio")
-        return
-    link.send({"event": "lost", "reason": AdapterLostReason.SWITCHED_OFF.name})
+        # The library waits for a reading, so the power state stands in.
+        logger.exception("could not read the manager's state")
+        try:
+            powered = _native.read_power_state()
+            state = CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF
+            authorization = _native.read_authorization()
+        except Exception:
+            logger.exception("could not read the power state either")
+            return
+
+    link.send({"event": "state", "state": state, "authorization": authorization})
 
 
 def _forget(
@@ -150,29 +153,6 @@ async def _answer(link: Link, message: dict[str, Any]) -> None:
                 # is about to die.
                 _native.read_power_state()
                 link.send({"id": number, "ok": None})
-
-            case "adapters":
-                link.send(
-                    {
-                        "id": number,
-                        "ok": [
-                            [a.id, a.address, a.name] for a in _native.list_adapters()
-                        ],
-                    }
-                )
-
-            case "powered":
-                # Both, because macOS reports an unauthorised radio as off
-                # and the caller cannot otherwise tell which it is looking at.
-                link.send(
-                    {
-                        "id": number,
-                        "ok": {
-                            "powered": _native.read_power_state(),
-                            "authorization": _native.read_authorization(),
-                        },
-                    }
-                )
 
             case "devices":
                 wanted = [UUID(u) for u in message.get("service") or []]

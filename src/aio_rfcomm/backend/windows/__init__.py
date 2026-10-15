@@ -46,15 +46,18 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
     FIRST_CHANNEL,
     LAST_CHANNEL,
-    BackendAdapter,
+    AvailabilityState,
+    BackendBluetooth,
     BackendChannel,
     BackendProvider,
+    BackendRequest,
     BackendService,
+    NoBluetooth,
 )
 from aio_rfcomm.backend.sdp import SdpError, read_channel
 from aio_rfcomm.backend.stream import StreamChannel, open_stream
 from aio_rfcomm.backend.windows import _service
-from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelInUseError,
@@ -114,9 +117,7 @@ class WindowsService(BackendService):
         return self._channel
 
     @override
-    async def accept(
-        self,
-    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
+    async def accept(self) -> BackendRequest:
         """
         Wait for a peer, on a thread, because the loop cannot do it.
 
@@ -157,10 +158,42 @@ class WindowsService(BackendService):
         try:
             peer = RfcommDeviceInfo(address)
         except ValueError:
-            # The socket is ours until a channel takes it.
+            # The socket is ours until a request holds it.
             conn.close()
             raise
-        return peer, _take(conn)
+        return _Request(peer, conn)
+
+
+class _Request(BackendRequest):
+    """
+    A peer that has connected, and the socket accepted for it.
+    """
+
+    def __init__(self, peer: RfcommDeviceInfo, conn: socket.socket) -> None:
+        self._peer = peer
+        self._conn: socket.socket | None = conn
+
+    @property
+    @override
+    def info(self) -> RfcommDeviceInfo:
+        return self._peer
+
+    @override
+    def open(self) -> AbstractAsyncContextManager[BackendChannel]:
+        return self._take()
+
+    @asynccontextmanager
+    async def _take(self) -> AsyncGenerator[BackendChannel, None]:
+        conn, self._conn = self._conn, None
+        assert conn is not None, "a request's connection was taken twice"
+        async with _take(conn) as channel:
+            yield channel
+
+    @override
+    def close(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            conn.close()
 
 
 def _deliver(
@@ -206,18 +239,17 @@ async def _take(conn: socket.socket) -> AsyncGenerator[BackendChannel, None]:
         yield opened
 
 
-class WindowsAdapter(BackendAdapter):
+class WindowsBluetooth(BackendBluetooth):
     """
-    One Bluetooth radio, found through WinRT.
+    Bluetooth through one radio, found through WinRT.
     """
 
-    def __init__(self, info: RfcommAdapterInfo) -> None:
+    def __init__(self, address: str | None) -> None:
         """
         Args:
-            info: What was found out about the adapter when it was opened.
+            address: The radio's own address, if WinRT reports one.
         """
-        super().__init__()
-        self._info = info
+        self._address = address
 
     @override
     async def list_known_devices(
@@ -252,13 +284,13 @@ class WindowsAdapter(BackendAdapter):
 
     @override
     def open_service(
-        self, device: RfcommDeviceInfo | str, service: UUID
+        self, device: RfcommDeviceInfo, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, service=service)
 
     @override
     def open_channel(
-        self, device: RfcommDeviceInfo | str, channel: int
+        self, device: RfcommDeviceInfo, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, channel=channel)
 
@@ -302,7 +334,7 @@ class WindowsAdapter(BackendAdapter):
     @asynccontextmanager
     async def _connect(
         self,
-        device: RfcommDeviceInfo | str,
+        device: RfcommDeviceInfo,
         *,
         service: UUID | None = None,
         channel: int | None = None,
@@ -318,13 +350,13 @@ class WindowsAdapter(BackendAdapter):
         Yields:
             The open channel, closed on exit.
         """
-        address = device if isinstance(device, str) else device.address
+        address = device.address
         if channel is None:
             assert service is not None
             channel = await _look_up(device, address, service)
 
         async with AsyncExitStack() as stack:
-            sock = await _open_socket(address, channel, self._info.address)
+            sock = await _open_socket(address, channel, self._address)
             stack.callback(sock.close)
 
             # An ordinary asyncio stream over a Bluetooth socket, which reads
@@ -349,58 +381,67 @@ class WindowsBackend(BackendProvider):
     """
 
     @override
-    async def list_adapters(self) -> list[RfcommAdapterInfo]:
-        return await _list_adapters()
-
-    @override
-    def open_adapter(
-        self, adapter: RfcommAdapterInfo | None = None
-    ) -> AbstractAsyncContextManager[BackendAdapter]:
-        return self._open(adapter)
+    def open(
+        self, state: AvailabilityState
+    ) -> AbstractAsyncContextManager[BackendBluetooth]:
+        return self._open(state)
 
     @asynccontextmanager
     async def _open(
-        self, adapter: RfcommAdapterInfo | None
-    ) -> AsyncGenerator[BackendAdapter, None]:
+        self, state: AvailabilityState
+    ) -> AsyncGenerator[BackendBluetooth, None]:
         """
-        Open an adapter, refusing one whose radio is off.
+        Read whether the radio is usable, once.
+
+        REVISIT: availability is read only when Bluetooth is opened. Windows
+        reports a radio's changes through ``Radio.StateChanged`` and adapters
+        arriving through a device watcher, neither yet measured; until they
+        are, a radio switched off later is noticed by the channels it ends
+        rather than reported here.
 
         Args:
-            adapter: Which adapter, or ``None`` for the default.
+            state: Where to report availability.
 
         Yields:
-            The open adapter.
+            Bluetooth through the first radio.
         """
         available = await _list_adapters()
         if not available:
-            raise BluetoothUnavailableError(Availability.NO_ADAPTER)
+            state.set(Availability.NO_ADAPTER)
+            yield NoBluetooth()
+            return
 
-        chosen = available[0] if adapter is None else adapter
-        if not any(a.id == chosen.id for a in available):
-            raise BluetoothUnavailableError(
-                Availability.NO_ADAPTER, f"there is no adapter {chosen.id}"
-            )
+        identifier, address, name = available[0]
+        found = await BluetoothAdapter.from_id_async(identifier)
+        radio = None if found is None else await found.get_radio_async()
 
-        radio = await (await _adapter(chosen.id)).get_radio_async()
-        if radio.state != RadioState.ON:
-            raise BluetoothUnavailableError(
+        if radio is None:
+            # Gone between the listing and now.
+            state.set(Availability.NO_ADAPTER)
+            yield NoBluetooth()
+            return
+
+        if radio.state == RadioState.ON:
+            state.set(Availability.USABLE)
+        else:
+            state.set(
                 Availability.SWITCHED_OFF,
-                f"{chosen.name or chosen.id} is switched off; turn Bluetooth on",
+                f"{name or identifier} is switched off; turn Bluetooth on",
             )
 
-        yield WindowsAdapter(chosen)
+        yield WindowsBluetooth(address)
 
 
-async def _list_adapters() -> list[RfcommAdapterInfo]:
+async def _list_adapters() -> list[tuple[str, str | None, str | None]]:
     """
     Read every Bluetooth radio the machine has.
 
     Returns:
-        The adapters that support Bluetooth Classic. A Low Energy only radio
-        cannot carry RFCOMM at all, so listing it would only offer a choice
-        that cannot work.
+        The identifier, address and name of each adapter that supports
+        Bluetooth Classic. A Low Energy only radio cannot carry RFCOMM at
+        all, so listing it would only offer a choice that cannot work.
     """
-    found: list[RfcommAdapterInfo] = []
+    found: list[tuple[str, str | None, str | None]] = []
     for info in await DeviceInformation.find_all_async_aqs_filter(
         BluetoothAdapter.get_device_selector()
     ):
@@ -415,11 +456,7 @@ async def _list_adapters() -> list[RfcommAdapterInfo]:
         adapter = await BluetoothAdapter.from_id_async(info.id)
         if adapter is None or not adapter.is_classic_supported:
             continue
-        found.append(
-            RfcommAdapterInfo(
-                info.id, _format(adapter.bluetooth_address), info.name or None
-            )
-        )
+        found.append((info.id, _format(adapter.bluetooth_address), info.name or None))
     return found
 
 
@@ -442,28 +479,7 @@ def _read_address(info: DeviceInformation) -> str | None:
         return None
 
 
-async def _adapter(identifier: str) -> BluetoothAdapter:
-    """
-    Open one adapter by its identifier.
-
-    Args:
-        identifier: The adapter's device identifier.
-
-    Returns:
-        The adapter.
-
-    Raises:
-        BluetoothUnavailableError: It has gone since it was listed.
-    """
-    adapter = await BluetoothAdapter.from_id_async(identifier)
-    if adapter is None:
-        raise BluetoothUnavailableError(
-            Availability.NO_ADAPTER, f"adapter {identifier} has gone"
-        )
-    return adapter
-
-
-async def _device(device: RfcommDeviceInfo | str, address: str) -> BluetoothDevice:
+async def _device(device: RfcommDeviceInfo, address: str) -> BluetoothDevice:
     """
     Get hold of a device, however the caller named it.
 
@@ -477,7 +493,7 @@ async def _device(device: RfcommDeviceInfo | str, address: str) -> BluetoothDevi
     Raises:
         DeviceNotFoundError: The device could not be reached.
     """
-    if isinstance(device, RfcommDeviceInfo) and device.id is not None:
+    if device.id is not None:
         found = await BluetoothDevice.from_id_async(device.id)
     else:
         found = await BluetoothDevice.from_bluetooth_address_async(_parse(address))
@@ -487,7 +503,7 @@ async def _device(device: RfcommDeviceInfo | str, address: str) -> BluetoothDevi
     return found
 
 
-async def _look_up(device: RfcommDeviceInfo | str, address: str, service: UUID) -> int:
+async def _look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int:
     """
     Ask a device which RFCOMM channel a service is on.
 

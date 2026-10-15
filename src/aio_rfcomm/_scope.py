@@ -4,14 +4,14 @@
 """
 Keeping handles from outliving the block that produced them.
 
-An adapter, a device and a channel each come out of an ``async with``, and
-none of them means anything once that block has ended. Holding one afterwards
+The Bluetooth object, a channel and a service each come out of an
+``async with``, and none of them means anything once that block has ended. Holding one afterwards
 is a bug in the caller, and it should say so at once rather than half-working
 or hanging.
 
-Scopes nest the way the blocks do: a channel's scope has the adapter's as its
-parent, so closing the adapter invalidates everything found through it without
-having to track them.
+Scopes nest the way the blocks do: a channel's scope has the Bluetooth
+object's as its parent, so closing that invalidates everything opened through
+it without having to track them.
 """
 
 from dataclasses import dataclass, field

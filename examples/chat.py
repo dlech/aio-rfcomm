@@ -9,13 +9,10 @@ Run it on one machine as a server and on another as a client::
     python examples/chat.py serve
     python examples/chat.py connect AA:BB:CC:DD:EE:FF
 
-Serving needs Linux or Windows; macOS can only connect (see the README).
-Both ends print what the other types, and Ctrl-D or Ctrl-C hangs up.
-
-The parts worth copying are the shape of the two ``async with`` blocks, the
-line splitting -- RFCOMM is a byte stream and does not keep message
-boundaries -- and how each side waits: on an event nothing sets, rather than
-in a sleeping loop.
+Both ends print what the other types, and Ctrl-D or Ctrl-C hangs up; Ctrl-C
+again stops the server. The server talks to one peer at a time, turning away
+anyone else who connects meanwhile, and keeps serving through Bluetooth going
+off and on.
 """
 
 from __future__ import annotations
@@ -24,8 +21,8 @@ import argparse
 import asyncio
 import contextlib
 import sys
-from collections.abc import AsyncGenerator, Generator, Iterator
-from typing import NoReturn, assert_never
+from collections.abc import Generator, Iterator
+from typing import Literal, NoReturn, assert_never
 from uuid import UUID
 
 from prompt_toolkit import PromptSession
@@ -33,13 +30,74 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 import aio_rfcomm
 import aio_rfcomm.macos
-from aio_rfcomm.errors import ChannelClosedError, CloseReason, RfcommError
+from aio_rfcomm import Availability, UnavailableReason
+from aio_rfcomm.errors import (
+    BluetoothUnavailableError,
+    ChannelClosedError,
+    CloseReason,
+    RfcommError,
+)
 
 # Any UUID both ends agree on. Generate your own for a real application with
 # "python -m uuid", or uuid.uuid4() on Python 3.11, which has no such module.
 CHAT = UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
 
 SERVICE_NAME = "aio-rfcomm chat"
+
+
+# --------------------------------------------------------------------------
+# Bluetooth
+# --------------------------------------------------------------------------
+
+
+def explain(reason: UnavailableReason) -> str:
+    """
+    Say what the user can do about Bluetooth being unusable.
+
+    Args:
+        reason: Why Bluetooth cannot be used.
+
+    Returns:
+        What to tell the user.
+    """
+    # A match rather than a dict, so that a new reason is a type error here.
+    match reason:
+        case Availability.SWITCHED_OFF:
+            return "Bluetooth is switched off; turn it on"
+        case Availability.NO_ADAPTER:
+            return "this computer has no Bluetooth adapter; plug one in"
+        case Availability.NOT_ALLOWED:
+            return "this program may not use Bluetooth; allow it in settings"
+        case Availability.SERVICE_UNAVAILABLE:
+            return "the Bluetooth service is restarting; waiting for it"
+        case Availability.UNSUPPORTED:
+            return "this system has no Bluetooth"
+        case _:
+            assert_never(reason)
+
+
+async def wait_until_usable(bluetooth: aio_rfcomm.Bluetooth) -> bool:
+    """
+    Wait for Bluetooth to be usable, saying what is being waited for.
+
+    Args:
+        bluetooth: The open Bluetooth object.
+
+    Returns:
+        True once Bluetooth is usable; False if it never will be, since
+        nobody can do anything about a system with no Bluetooth.
+    """
+    async for availability in bluetooth.watch_availability():
+        match availability:
+            case Availability.USABLE:
+                return True
+            case Availability.UNSUPPORTED:
+                print(explain(availability))
+                return False
+            case _:
+                print(explain(availability))
+
+    assert False, "watch_availability() does not end by itself"
 
 
 # --------------------------------------------------------------------------
@@ -52,9 +110,7 @@ def split_lines(buffer: bytearray, arrived: bytes) -> Iterator[str]:
     Take whole lines out of a growing buffer.
 
     RFCOMM is a byte stream: a peer's single ``send`` may arrive split across
-    several ``receive`` calls, or share one with the next message. Anything
-    message-shaped has to be framed by the application, and a newline is the
-    cheapest framing there is.
+    several ``receive`` calls, or share one with the next message.
 
     Args:
         buffer: Holds the bytes left over from last time. Modified in place.
@@ -64,6 +120,7 @@ def split_lines(buffer: bytearray, arrived: bytes) -> Iterator[str]:
         Each complete line, decoded, without its newline.
     """
     buffer += arrived
+
     while (end := buffer.find(b"\n")) >= 0:
         line = bytes(buffer[:end])
         del buffer[: end + 1]
@@ -87,17 +144,19 @@ async def show(channel: aio_rfcomm.RfcommChannel, who: str) -> NoReturn:
 
 async def send_typing(channel: aio_rfcomm.RfcommChannel) -> None:
     """
-    Send whatever is typed, a line at a time.
+    Send whatever is typed, a line at a time, until the user hangs up.
 
     Args:
         channel: The open channel.
     """
     session: PromptSession[str] = PromptSession("> ")
+
     while True:
         try:
             line = await session.prompt_async()
         except (EOFError, KeyboardInterrupt):
             return
+
         await channel.send(line.encode() + b"\n")
 
 
@@ -113,7 +172,7 @@ def unwrap_ending() -> Generator[None, None, None]:
     try:
         yield
     except ExceptionGroup as failed:
-        match failed.split(ChannelClosedError):
+        match failed.split((ChannelClosedError, BluetoothUnavailableError)):
             case (ExceptionGroup() as endings, None):
                 # split() keeps any nesting, so dig down to an exception.
                 ending = endings.exceptions[0]
@@ -126,45 +185,43 @@ def unwrap_ending() -> Generator[None, None, None]:
                 raise
 
 
-def _report(error: ChannelClosedError) -> None:
-    """
-    Say how the conversation ended.
-
-    Args:
-        error: The channel error that ended it.
-    """
-    match error.reason:
-        case CloseReason.PEER_CLOSED:
-            print("the other end hung up")
-        case CloseReason.LINK_LOST:
-            print("lost the connection")
-        case _:
-            assert_never(error.reason)
-
-
 async def converse(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
     """
-    Talk until either end hangs up.
+    Talk until the user hangs up, or raise however the channel ended.
 
-    Reading runs as a task beside the typing. The channel's end is raised by
-    its receive(), which also cancels the typing; the user hanging up returns
+    Reading runs as a task beside the typing. Any ending is raised by its
+    receive(), which also cancels the typing; the user hanging up returns
     from the typing, which then stops the reading. The task group is only how
-    this does two things at once, so the end comes out of it as itself.
+    this function does two things at once, so its callers see the ending
+    itself, not a group.
 
     Args:
         channel: The open channel.
         who: What to label the peer's lines with.
     """
-    print(f"connected to {who}. Ctrl-D to hang up.")
+    print(f"connected to {who}. Ctrl-D or Ctrl-C to hang up.")
 
-    try:
-        with patch_stdout(), unwrap_ending():
-            async with asyncio.TaskGroup() as group:
-                reading = group.create_task(show(channel, who))
-                await send_typing(channel)
-                reading.cancel()
-    except ChannelClosedError as error:
-        _report(error)
+    with patch_stdout(), unwrap_ending():
+        async with asyncio.TaskGroup() as group:
+            reading = group.create_task(show(channel, who))
+            await send_typing(channel)
+            reading.cancel()
+
+
+def report(lost: ChannelClosedError) -> None:
+    """
+    Say how a conversation ended.
+
+    Args:
+        lost: How the channel ended.
+    """
+    match lost.reason:
+        case CloseReason.PEER_CLOSED:
+            print("the other end hung up")
+        case CloseReason.LINK_LOST:
+            print("lost the connection")
+        case _:
+            assert_never(lost.reason)
 
 
 # --------------------------------------------------------------------------
@@ -172,67 +229,128 @@ async def converse(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
 # --------------------------------------------------------------------------
 
 
-async def serve(adapter: aio_rfcomm.RfcommAdapter, channel: int | None) -> None:
+async def answer(request: aio_rfcomm.RfcommConnectionRequest) -> None:
     """
-    Publish the chat service and talk to whoever connects.
+    Accept one connection and talk over it.
+
+    A conversation ending is not the server's problem, so it is reported here
+    and goes no further. Bluetooth going away is, so that goes on up.
 
     Args:
-        adapter: The open adapter.
-        channel: The RFCOMM channel to listen on, or ``None`` to be given one.
+        request: Someone asking to connect.
     """
+    try:
+        async with request.accept() as channel:
+            await converse(channel, request.info.name or request.info.address)
+    except ChannelClosedError as ended:
+        report(ended)
 
-    async def handle(
-        peer: aio_rfcomm.RfcommDeviceInfo, chan: aio_rfcomm.RfcommChannel
-    ) -> None:
-        await converse(chan, peer.name or peer.address)
 
-    async with adapter.serve(
-        CHAT, handle, name=SERVICE_NAME, channel=channel
-    ) as service:
-        print(f"serving {SERVICE_NAME} on channel {service.channel}")
-        print("waiting for someone to connect; Ctrl-C to stop")
-        # Waiting on an event nothing ever sets costs nothing, and is how to
-        # wait for something that will not happen. A loop that sleeps and
-        # checks would burn wakeups to achieve the same nothing.
-        async with adapter.fail_when_gone():
-            await asyncio.Event().wait()
+async def serve(bluetooth: aio_rfcomm.Bluetooth, channel: int | None) -> int:
+    """
+    Publish the chat service and talk to whoever connects, one at a time,
+    for as long as Bluetooth is usable, and again each time it comes back.
+
+    Only one conversation can have the terminal, so anyone who connects
+    during one is turned away rather than left waiting on a channel that
+    nobody answers.
+
+    Args:
+        bluetooth: The open Bluetooth object.
+        channel: The RFCOMM channel to listen on, or ``None`` to be given one.
+
+    Returns:
+        The exit status, once Bluetooth will never be usable here; until then
+        it serves.
+    """
+    while await wait_until_usable(bluetooth):
+        try:
+            async with bluetooth.serve(
+                CHAT, name=SERVICE_NAME, channel=channel
+            ) as service:
+                print(f"serving {SERVICE_NAME} on channel {service.channel}")
+
+                # The conversation runs as a task so that requests keep
+                # arriving during it. When Bluetooth goes, the requests and
+                # the conversation raise the same ending.
+                with unwrap_ending():
+                    async with asyncio.TaskGroup() as group:
+                        talking: asyncio.Task[None] | None = None
+
+                        async for request in service.connection_requests():
+                            if not talking or talking.done():
+                                talking = group.create_task(answer(request))
+                            else:
+                                who = request.info.name or request.info.address
+                                print(f"turned away {who}: already talking")
+                                await request.decline()
+        except BluetoothUnavailableError:
+            # The wait at the top says why, for as long as it lasts.
+            print("stopped serving: Bluetooth went away")
+
+    return 1
 
 
 async def connect(
-    adapter: aio_rfcomm.RfcommAdapter, address: str, channel: int | None
-) -> None:
+    bluetooth: aio_rfcomm.Bluetooth,
+    server: aio_rfcomm.RfcommDeviceInfo,
+    channel: int | None,
+) -> int:
     """
     Open a channel to someone else's chat service and talk to it.
 
     Args:
-        adapter: The open adapter.
-        address: The peer's Bluetooth address.
+        bluetooth: The open Bluetooth object.
+        server: The machine serving the chat.
         channel: The channel to use, or ``None`` to look the service up.
+
+    Returns:
+        The exit status: 1 if Bluetooth could not be used or went away, else 0.
     """
-    device = adapter.use_device(address)
+    if not await wait_until_usable(bluetooth):
+        return 1
+
     connection = (
-        device.open_channel(channel)
-        if channel is not None
-        else device.open_service(CHAT)
+        bluetooth.open_service(server, CHAT)
+        if channel is None
+        else bluetooth.open_channel(server, channel)
     )
-    async with connection as chan:
-        await converse(chan, device.name or device.address)
+
+    try:
+        async with connection as chan:
+            await converse(chan, server.name or server.address)
+    except ChannelClosedError as ended:
+        report(ended)
+    except BluetoothUnavailableError as gone:
+        print(explain(gone.reason))
+        return 1
+
+    return 0
 
 
-async def show_devices(adapter: aio_rfcomm.RfcommAdapter) -> None:
+async def list_devices(bluetooth: aio_rfcomm.Bluetooth) -> int:
     """
     List the devices this machine knows that offer the chat service.
 
     Args:
-        adapter: The open adapter.
+        bluetooth: The open Bluetooth object.
+
+    Returns:
+        The exit status: 1 if Bluetooth could not be used, else 0.
     """
-    known = await adapter.list_known_devices(service=CHAT)
+    if not await wait_until_usable(bluetooth):
+        return 1
+
+    known = await bluetooth.list_known_devices(service=CHAT)
+
     if not known:
         print("no known device offers the chat service.")
         print("pair the other machine first, and start its server.")
-        return
+
     for device in known:
         print(f"{device.address}  {device.name or ''}")
+
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -240,37 +358,14 @@ async def show_devices(adapter: aio_rfcomm.RfcommAdapter) -> None:
 # --------------------------------------------------------------------------
 
 
-@contextlib.asynccontextmanager
-async def opened() -> AsyncGenerator[aio_rfcomm.RfcommAdapter, None]:
-    """
-    Open the default adapter, having asked macOS for permission first.
-
-    Yields:
-        The open adapter.
-    """
-    # On macOS this is the name the Bluetooth permission dialog appears
-    # under, and the name the answer is remembered against -- so changing it
-    # asks the user again. A library cannot pick a name on its caller's
-    # behalf, which is why a program that is not a bundled application gives
-    # its own here. Everywhere else the call does nothing.
-    aio_rfcomm.macos.prompt_under_name(
-        name="aio-rfcomm chat", reason="to chat over Bluetooth"
-    )
-    async with aio_rfcomm.open_adapter() as adapter:
-        yield adapter
-
-
 class Arguments(argparse.Namespace):
     """
     What the command line can say, with types on it.
-
-    ``argparse.Namespace`` is otherwise an untyped bag of attributes, and a
-    typo in one of these names would go unnoticed until it ran.
     """
 
-    command: str
+    command: Literal["list", "serve", "connect"]
     channel: int | None
-    address: str
+    address: aio_rfcomm.RfcommDeviceInfo
 
 
 async def main(arguments: Arguments) -> int:
@@ -283,34 +378,29 @@ async def main(arguments: Arguments) -> int:
     Returns:
         The process exit status.
     """
+    # On macOS this is the name the Bluetooth permission dialog appears
+    # under, and the name the answer is remembered against. Everywhere else
+    # the call does nothing.
+    aio_rfcomm.macos.prompt_under_name(
+        name="aio-rfcomm chat", reason="to chat over Bluetooth"
+    )
+
     try:
-        async with opened() as adapter:
-            if arguments.command == "list":
-                await show_devices(adapter)
-            elif arguments.command == "serve":
-                await serve(adapter, arguments.channel)
-            else:
-                await connect(adapter, arguments.address, arguments.channel)
+        async with aio_rfcomm.open_bluetooth() as bluetooth:
+            match arguments.command:
+                case "list":
+                    return await list_devices(bluetooth)
+                case "serve":
+                    return await serve(bluetooth, arguments.channel)
+                case "connect":
+                    return await connect(
+                        bluetooth, arguments.address, arguments.channel
+                    )
+                case _:
+                    assert_never(arguments.command)
     except RfcommError as error:
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         return 1
-    return 0
-
-
-def _address(text: str) -> str:
-    """
-    Check that a command-line argument is a Bluetooth address.
-
-    Args:
-        text: What was typed.
-
-    Returns:
-        The address, normalised.
-
-    Raises:
-        ValueError: It is not one, which argparse turns into a usage message.
-    """
-    return aio_rfcomm.RfcommDeviceInfo(text).address
 
 
 def parse() -> Arguments:
@@ -330,28 +420,24 @@ def parse() -> Arguments:
     serving.add_argument(
         "--channel",
         type=int,
-        choices=range(1, 31),
-        metavar="1-30",
         default=None,
-        help="RFCOMM channel to listen on; chosen for you if omitted",
+        help="RFCOMM channel to listen on (1-30); chosen for you if omitted",
     )
 
     connecting = commands.add_parser("connect", help="connect to someone serving")
-    # Checked here so a mistyped address gets argparse's own message.
+    # A type that raises ValueError gets argparse's own error message.
     connecting.add_argument(
-        "address", type=_address, help="the peer's Bluetooth address"
+        "address",
+        type=aio_rfcomm.RfcommDeviceInfo,
+        help="the peer's Bluetooth address",
     )
     connecting.add_argument(
         "--channel",
         type=int,
-        choices=range(1, 31),
-        metavar="1-30",
         default=None,
-        help=(
-            "skip service discovery and use this channel. Worth having on "
-            "macOS, which will not re-read a paired device's services"
-        ),
+        help="skip service discovery and use this channel",
     )
+
     return parser.parse_args(namespace=Arguments())
 
 

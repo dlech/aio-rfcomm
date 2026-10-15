@@ -10,7 +10,7 @@ caller's process and means a failure to load it shows up as a helper that will
 not start, rather than as an import error in an unrelated program.
 
 The pair of sockets is the whole lifetime story. When the caller leaves the
-adapter's ``async with``, this end closes and the helper reads end of file and
+Bluetooth object's ``async with``, this end closes and the helper reads end of file and
 exits; macOS has no ``PDEATHSIG``, so that is also what stops a helper whose
 parent died without tidying up.
 """
@@ -26,7 +26,7 @@ import os
 import signal
 import socket
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -67,7 +67,7 @@ def prompt_under_name(*, name: str, reason: str) -> None:
 
     A script, a REPL or a command line tool has no such application to speak
     for it, and macOS ends such a process with ``SIGABRT`` rather than asking
-    anybody anything. Calling this before opening an adapter breaks the link
+    anybody anything. Calling this before opening Bluetooth breaks the link
     to the responsible process, so the helper asks on its own behalf instead.
 
     The cost is that ``name`` is what the user sees, both in the permission
@@ -89,13 +89,13 @@ class HelperFailedError(RfcommError):
 
     Not exported from :mod:`aio_rfcomm.errors`: it is specific to macOS, and
     what a caller can do about it is the same as for any other failure to
-    reach the adapter.
+    reach Bluetooth.
     """
 
 
 class Ending:
     """
-    Why a channel or the adapter ended, once the helper has said.
+    Why a channel ended, once the helper has said.
 
     Each waiter waits on an event of its own rather than on a shared future:
     cancelling a task that awaits a future cancels the future, which would
@@ -142,7 +142,8 @@ class Helper:
 
     Replies and events arrive on one socket in whatever order the helper
     produces them, so a reader task hands each to whoever is waiting: replies
-    to the request they answer, and the end of a channel to that channel.
+    to the request they answer, the end of a channel to that channel, and the
+    manager's state to whoever reads :meth:`next_state`.
     """
 
     def __init__(self, link: Link) -> None:
@@ -155,8 +156,15 @@ class Helper:
         self._waiting: dict[int, asyncio.Future[tuple[Any, list[int]]]] = {}
         self._channels: dict[int, Ending] = {}
         self._finished: dict[int, asyncio.Future[None]] = {}
-        self._lost = Ending()
+        # None marks the helper's end, so a reader waiting here hears of it.
+        self._states: asyncio.Queue[tuple[int, int] | None] = asyncio.Queue()
         self._stopped: RfcommError | None = None
+
+        self.on_stop: Callable[[], None] | None = None
+        """
+        Called as the helper is found to have stopped, before anything waiting
+        on it is told, so that whatever the stop means is settled first.
+        """
 
     async def ask(self, op: str, **fields: Any) -> tuple[Any, list[int]]:
         """
@@ -236,14 +244,37 @@ class Helper:
         if finished is not None:
             await finished
 
-    async def wait_until_lost(self) -> str:
+    async def next_state(self) -> tuple[int, int]:
         """
-        Wait for the helper to report the adapter gone.
+        Wait for the helper to report the manager's state.
+
+        The first report is the state when the helper started watching; after
+        that, one per change, in order.
 
         Returns:
-            The reason's name, as the helper sent it.
+            The ``CBManagerState`` and the ``CBManagerAuthorization`` with it.
+
+        Raises:
+            RfcommError: The helper has stopped. States it sent before it
+                stopped are not handed out after: they no longer say anything.
         """
-        return await self._lost.wait()
+        if self._stopped is not None:
+            raise self._stopped
+
+        reported = await self._states.get()
+        if reported is None:
+            # Left for whoever asks next, who must hear the same.
+            self._states.put_nowait(None)
+            assert self._stopped is not None
+            raise self._stopped
+        return reported
+
+    @property
+    def stopped(self) -> bool:
+        """
+        Whether the helper has been found to have stopped.
+        """
+        return self._stopped is not None
 
     def forget(self, handle: int) -> None:
         """
@@ -304,8 +335,8 @@ class Helper:
             finished = self._finished.get(message["handle"])
             if finished is not None and not finished.done():
                 finished.set_result(None)
-        elif message["event"] == "lost":
-            self._lost.say(message["reason"])
+        elif message["event"] == "state":
+            self._states.put_nowait((message["state"], message["authorization"]))
 
     def _stop(self, error: RfcommError) -> None:
         """
@@ -314,7 +345,13 @@ class Helper:
         Args:
             error: What to fail them with.
         """
+        if self._stopped is not None:
+            return
+
         self._stopped = error
+        if self.on_stop is not None:
+            self.on_stop()
+        self._states.put_nowait(None)
         for answer in list(self._waiting.values()):
             if not answer.done():
                 answer.set_exception(error)
@@ -374,6 +411,9 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
                 finally:
                     reader.cancel()
     finally:
+        # Whatever still waits on this helper -- a channel closing, say --
+        # hears that it has gone rather than waiting for it for ever.
+        helper._stop(HelperFailedError("the macOS Bluetooth helper was stopped"))
         link.close()
         await _reap(pid)
 
@@ -392,7 +432,7 @@ async def _wait_until_ready(helper: Helper, pid: int) -> None:
     permission dialog on screen, so this waits for however long somebody takes
     to read it and decide -- which is not a length of time a library is
     entitled to guess at. A caller who is not prepared to wait says so by
-    opening the adapter inside a cancel scope of their own.
+    opening Bluetooth inside a cancel scope of their own.
 
     Args:
         helper: The helper being started.
@@ -431,8 +471,9 @@ def _died(pid: int) -> RfcommError:
             "process, which must carry NSBluetoothAlwaysUsageDescription in "
             "its Info.plist. If this program is not a bundled application -- "
             "a script, a REPL or a command line tool -- call "
-            "aio_rfcomm.macos.prompt_under_name() before opening an "
-            "adapter, so the helper can ask for permission itself.",
+            "aio_rfcomm.macos.prompt_under_name() before opening "
+            "Bluetooth, so the helper can ask for permission itself. Once "
+            "it is allowed, start the program again.",
         )
     return HelperFailedError(
         f"the macOS Bluetooth helper stopped during startup (status {status})"
@@ -639,6 +680,22 @@ async def _reap(pid: int) -> None:
     Args:
         pid: The helper's process id.
     """
+    try:
+        await _wait_for_exit(pid)
+    except asyncio.CancelledError:
+        # Cancelled part way, as when the program leaves its block while a
+        # helper is being replaced: it is not left behind either way.
+        _kill(pid)
+        raise
+
+
+async def _wait_for_exit(pid: int) -> None:
+    """
+    Wait for the helper to exit, killing it if it will not.
+
+    Args:
+        pid: The helper's process id.
+    """
     for _ in range(200):
         try:
             done, _status = os.waitpid(pid, os.WNOHANG)  # noqa: ASYNC222
@@ -649,9 +706,7 @@ async def _reap(pid: int) -> None:
         await asyncio.sleep(0.01)
 
     logger.warning("macOS Bluetooth helper %d did not exit; killing it", pid)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
+    if not _kill(pid):
         return
     for _ in range(100):
         try:
@@ -661,3 +716,24 @@ async def _reap(pid: int) -> None:
         if done:
             return
         await asyncio.sleep(0.01)
+
+
+def _kill(pid: int) -> bool:
+    """
+    Kill the helper and take its exit status, if it has gone.
+
+    Args:
+        pid: The helper's process id.
+
+    Returns:
+        Whether it was still there to kill.
+    """
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    return True

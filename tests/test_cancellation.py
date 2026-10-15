@@ -13,29 +13,25 @@ import asyncio
 
 import pytest
 
-from aio_rfcomm.adapter import RfcommAdapter
-from tests.fake import FakeAdapter
+from aio_rfcomm.bluetooth import Bluetooth
+from tests.fake import DEVICE, FakeProvider
 
 
-async def test_cancelling_the_scope_still_closes_the_channel() -> None:
+async def test_cancelling_the_scope_still_closes_the_channel(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
     """
     Tearing down under cancellation must not leak the channel.
     """
-    backend = FakeAdapter()
-    handle = RfcommAdapter(backend)
-    try:
 
-        async def work() -> None:
-            device = handle.use_device((await handle.list_known_devices())[0])
-            async with device.open_channel(1):
-                await asyncio.Event().wait()
+    async def work() -> None:
+        async with bluetooth.open_channel(DEVICE, 1):
+            await asyncio.Event().wait()
 
-        task = asyncio.ensure_future(work())
-        await asyncio.sleep(0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+    task = asyncio.ensure_future(work())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
-        assert backend.channels[-1].closed
-    finally:
-        handle._close()
+    assert provider.backend.channels[-1].closed

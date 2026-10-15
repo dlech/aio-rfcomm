@@ -4,11 +4,11 @@
 """
 The interface every platform backend implements.
 
-Four abstract classes, in the order a caller meets them: the backend itself,
-an adapter opened through it, and then either a channel opened through that or
-a service published on it. Each is an :class:`~abc.ABC`, so a backend that
-forgets a method fails at construction with the method named, rather than at
-the first call.
+The classes come in the order a caller meets them: the backend itself, what
+it opens to stand for Bluetooth on this machine, and then either a channel
+opened through that or a service published on it, with the requests it
+receives. Each is an :class:`~abc.ABC`, so a backend that forgets a method
+fails at construction with the method named, rather than at the first call.
 
 Everything that opens something returns an async context manager. Nothing here
 hands back a resource the caller has to remember to close.
@@ -18,20 +18,26 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from contextlib import AbstractAsyncContextManager
 from uuid import UUID
 
-from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
-from aio_rfcomm.errors import AdapterLostReason, CloseReason
+from typing_extensions import override
+
+from aio_rfcomm.availability import Availability, UnavailableReason
+from aio_rfcomm.discovery import RfcommDeviceInfo
+from aio_rfcomm.errors import CloseReason, UnsupportedOperationError
 
 __all__ = [
     "FIRST_CHANNEL",
     "LAST_CHANNEL",
-    "BackendAdapter",
+    "AvailabilityState",
+    "BackendBluetooth",
     "BackendChannel",
     "BackendProvider",
+    "BackendRequest",
     "BackendService",
+    "NoBluetooth",
     "check_channel",
 ]
 
@@ -60,88 +66,139 @@ def check_channel(channel: int) -> None:
         )
 
 
+class AvailabilityState:
+    """
+    Whether Bluetooth is usable, as a backend last reported it.
+
+    The backend sets it; everything else reads it, or waits for it to change.
+    Only ever touched from the event loop's thread.
+    """
+
+    def __init__(self) -> None:
+        self._value: Availability | None = None
+        self._detail: str | None = None
+        self._changed = asyncio.Event()
+        self._known = asyncio.Event()
+
+        self.on_unusable: Callable[[UnavailableReason, str | None], None] | None = None
+        """
+        Called with every change away from usable, as it is set. A change and
+        back can happen between two looks at :attr:`value`, and what it ended
+        has to be ended all the same.
+        """
+
+    @property
+    def value(self) -> Availability:
+        """
+        The availability now. Only read once :meth:`known` has returned.
+        """
+        assert self._value is not None, "availability read before it was reported"
+        return self._value
+
+    @property
+    def detail(self) -> str | None:
+        """
+        What the platform said about it, when that says more than the value.
+        """
+        return self._detail
+
+    def set(self, value: Availability, detail: str | None = None) -> None:
+        """
+        Report the availability.
+
+        Args:
+            value: Whether Bluetooth is usable, and if not why not.
+            detail: What the platform said about it, for the error message.
+        """
+        if value is self._value and detail == self._detail:
+            return
+
+        was = self._value
+        self._value = value
+        self._detail = detail
+        self._known.set()
+        self.wake()
+
+        match value:
+            case Availability.USABLE:
+                pass
+            case reason:
+                if was is not value and self.on_unusable is not None:
+                    self.on_unusable(reason, detail)
+
+    def changed(self) -> asyncio.Event:
+        """
+        Something to wait on for the next change.
+
+        Taken before looking at :attr:`value`, so that a change in between is
+        not missed.
+
+        Returns:
+            An event set at the next change.
+        """
+        return self._changed
+
+    def wake(self) -> None:
+        """
+        Wake everything waiting for a change, whether or not there was one.
+        """
+        self._changed.set()
+        self._changed = asyncio.Event()
+
+    async def known(self) -> None:
+        """
+        Wait for the first report.
+        """
+        await self._known.wait()
+
+
 class BackendProvider(ABC):
     """
     A platform's implementation of this library.
     """
 
     @abstractmethod
-    async def list_adapters(self) -> list[RfcommAdapterInfo]:
+    def open(
+        self, state: AvailabilityState
+    ) -> AbstractAsyncContextManager[BackendBluetooth]:
         """
-        List the Bluetooth adapters on this machine.
+        Open Bluetooth for use.
 
-        Returns:
-            The adapters, in the platform's own order. macOS reports at most
-            one.
-        """
-        raise NotImplementedError
+        Owns whatever the platform needs for as long as the context manager is
+        held -- on macOS, a helper process -- and may replace it to keep
+        Bluetooth working, after the system's Bluetooth service restarts, say.
 
-    @abstractmethod
-    def open_adapter(
-        self, adapter: RfcommAdapterInfo | None = None
-    ) -> AbstractAsyncContextManager[BackendAdapter]:
-        """
-        Open an adapter for use.
-
-        Owns whatever the platform needs to talk to Bluetooth for as long as
-        the context manager is held -- on macOS that includes a helper process.
+        Reports availability into ``state`` from the first reading for as long
+        as it is held: from tasks of its own, or in the course of another call
+        when that is where a change is noticed -- a channel finding its link
+        gone, say. The first reading may come after the context manager has
+        been entered; nothing is asked of the backend before it has.
 
         Args:
-            adapter: Which adapter. ``None`` for the default.
+            state: Where to report availability.
 
         Returns:
-            An async context manager yielding the open adapter.
-
-        Raises:
-            BluetoothUnavailableError: No such adapter, the machine has none,
-                it is switched off, or the OS refused access to Bluetooth.
+            An async context manager yielding the backend's Bluetooth object.
         """
         raise NotImplementedError
 
 
-class BackendAdapter(ABC):
+class BackendBluetooth(ABC):
     """
-    An adapter that has been opened and is ready to use.
+    Bluetooth on this machine, as the backend sees it.
 
-    Subclasses must call ``super().__init__()``, and must either call
-    :meth:`_mark_gone` once when they notice the adapter has gone or override
-    :meth:`wait_until_gone` to ask whatever does notice.
+    Nothing here is called while the backend has reported Bluetooth unusable.
+    What was opened earlier is still closed then, though -- channels and
+    services leave their blocks, requests are closed -- so closing must
+    neither raise nor wait on a platform that has gone.
     """
-
-    def __init__(self) -> None:
-        self._gone = asyncio.Event()
-        self._reason: AdapterLostReason | None = None
-
-    def _mark_gone(self, reason: AdapterLostReason) -> None:
-        """
-        Record that the adapter has gone.
-
-        Args:
-            reason: Why the adapter is gone.
-        """
-        if self._reason is None:
-            self._reason = reason
-            self._gone.set()
-
-    async def wait_until_gone(self) -> AdapterLostReason:
-        """
-        Wait until the adapter is gone.
-
-        Implemented once here rather than by every backend.
-
-        Returns:
-            Why the adapter went away.
-        """
-        await self._gone.wait()
-        assert self._reason is not None
-        return self._reason
 
     @abstractmethod
     async def list_known_devices(
         self, *, service: UUID | Collection[UUID] | None = None
     ) -> list[RfcommDeviceInfo]:
         """
-        List the devices this adapter already knows about.
+        List the devices the OS already knows about.
 
         A snapshot of what the OS knows, which in practice means paired
         devices. Scanning for new ones is a separate feature, not yet
@@ -158,23 +215,20 @@ class BackendAdapter(ABC):
 
     @abstractmethod
     def open_service(
-        self, device: RfcommDeviceInfo | str, service: UUID
+        self, device: RfcommDeviceInfo, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         """
         Open a channel to a service, looking up its channel number.
 
         Args:
-            device: A device from :meth:`list_known_devices`, or a bare
-                Bluetooth address. An address need not be paired or previously
-                known.
+            device: The device. Need not be paired or previously known.
             service: The service to look up and connect to.
 
         Returns:
             An async context manager yielding the open channel, closed on exit.
 
         Raises:
-            BluetoothUnavailableError: The radio was switched off after the
-                adapter was opened, or this program may not use Bluetooth.
+            BluetoothUnavailableError: Bluetooth turned out not to be usable.
             DeviceNotFoundError: The device could not be reached.
             ServiceNotFoundError: The device does not offer ``service``.
             ConnectionFailedError: The channel could not be opened.
@@ -186,26 +240,20 @@ class BackendAdapter(ABC):
 
     @abstractmethod
     def open_channel(
-        self, device: RfcommDeviceInfo | str, channel: int
+        self, device: RfcommDeviceInfo, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         """
         Open a channel by number, skipping service discovery.
 
-        Worth using when the number is fixed and known, since service
-        discovery is a slow round trip.
-
         Args:
-            device: A device from :meth:`list_known_devices`, or a bare
-                Bluetooth address. An address need not be paired or previously
-                known.
-            channel: The RFCOMM channel number.
+            device: The device. Need not be paired or previously known.
+            channel: The RFCOMM channel number, already checked.
 
         Returns:
             An async context manager yielding the open channel, closed on exit.
 
         Raises:
-            BluetoothUnavailableError: The radio was switched off after the
-                adapter was opened, or this program may not use Bluetooth.
+            BluetoothUnavailableError: Bluetooth turned out not to be usable.
             DeviceNotFoundError: The device could not be reached.
             ConnectionFailedError: The channel could not be opened.
             UnsupportedOperationError: The platform cannot open a channel
@@ -225,8 +273,9 @@ class BackendAdapter(ABC):
             service: The service UUID to publish.
             name: The human-readable service name, which goes into the
                 published record.
-            channel: The RFCOMM channel to listen on. ``None`` leaves the
-                choice to the backend, which may refuse it.
+            channel: The RFCOMM channel to listen on, already checked.
+                ``None`` leaves the choice to the backend, which may refuse
+                it.
 
         Returns:
             An async context manager yielding the listening service,
@@ -238,6 +287,38 @@ class BackendAdapter(ABC):
                 cannot choose a channel and was given none.
         """
         raise NotImplementedError
+
+
+class NoBluetooth(BackendBluetooth):
+    """
+    Stands in when there is nothing to reach, because Bluetooth has been
+    reported unusable from the start. Never asked anything, since nothing is
+    asked of a backend while it says Bluetooth is unusable.
+    """
+
+    @override
+    async def list_known_devices(
+        self, *, service: UUID | Collection[UUID] | None = None
+    ) -> list[RfcommDeviceInfo]:
+        raise UnsupportedOperationError("Bluetooth is not usable here")
+
+    @override
+    def open_service(
+        self, device: RfcommDeviceInfo, service: UUID
+    ) -> AbstractAsyncContextManager[BackendChannel]:
+        raise UnsupportedOperationError("Bluetooth is not usable here")
+
+    @override
+    def open_channel(
+        self, device: RfcommDeviceInfo, channel: int
+    ) -> AbstractAsyncContextManager[BackendChannel]:
+        raise UnsupportedOperationError("Bluetooth is not usable here")
+
+    @override
+    def serve(
+        self, service: UUID, *, name: str, channel: int | None = None
+    ) -> AbstractAsyncContextManager[BackendService]:
+        raise UnsupportedOperationError("Bluetooth is not usable here")
 
 
 class BackendChannel(ABC):
@@ -279,6 +360,17 @@ class BackendChannel(ABC):
         Whether the channel is over, which may be known before why it is.
         """
         return self._reason is not None
+
+    @abstractmethod
+    def abort(self) -> None:
+        """
+        Stop the channel now, because Bluetooth has gone.
+
+        Pending and later calls raise their ending as usual; what arrived
+        before still comes out first. Must not raise: it is called while
+        everything else Bluetooth going ended is being ended too.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def send(self, data: bytes) -> None:
@@ -328,17 +420,62 @@ class BackendService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def accept(
-        self,
-    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
+    async def accept(self) -> BackendRequest:
         """
         Wait for the next peer to connect.
 
-        The channel comes back unopened, as a context manager, so that
-        whoever takes it decides how long it lives -- the same way a channel
-        opened from this side is handed over.
-
         Returns:
-            Who connected, and their channel as an async context manager.
+            The peer's request, holding its connection until it is opened or
+            closed.
         """
         raise NotImplementedError
+
+
+class BackendRequest(ABC):
+    """
+    A peer that has connected, and the connection it is holding.
+
+    The connection belongs to the request until :meth:`open` hands it to a
+    channel. Closing it before then, by :meth:`close` or :meth:`decline`, is
+    the only other way it ends.
+    """
+
+    @property
+    @abstractmethod
+    def info(self) -> RfcommDeviceInfo:
+        """
+        Who connected.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def open(self) -> AbstractAsyncContextManager[BackendChannel]:
+        """
+        Take the connection as a channel.
+
+        The connection passes to the channel only when the context manager is
+        entered; until then :meth:`close` still closes it.
+
+        Returns:
+            An async context manager yielding the channel, closed on exit.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def close(self) -> None:
+        """
+        Hang up at once, unless a channel has the connection already.
+
+        Safe to call more than once, and from a finaliser.
+        """
+        raise NotImplementedError
+
+    async def decline(self) -> None:
+        """
+        Turn the peer away.
+
+        Hangs up before anything is awaited, so it takes effect even if
+        cancelled. A backend that has to wait for its platform to finish
+        overrides this, and still closes first.
+        """
+        self.close()

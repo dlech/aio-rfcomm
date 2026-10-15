@@ -190,6 +190,13 @@ class StreamChannel(BackendChannel):
         return self._protocol.ended or self._transport.is_closing()
 
     @override
+    def abort(self) -> None:
+        # Whoever ended it has said why, and there is no use asking a platform
+        # that may itself be gone.
+        self._mark_gone(CloseReason.LINK_LOST)
+        self._transport.abort()
+
+    @override
     async def send(self, data: bytes) -> None:
         if self.ended:
             raise await self._end_error()

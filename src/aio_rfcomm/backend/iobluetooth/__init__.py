@@ -18,27 +18,32 @@ other backends produce, so everything after the connection is shared code.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket
-from collections.abc import AsyncGenerator, Collection
+from collections.abc import AsyncGenerator, Callable, Collection
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from uuid import UUID
 
 from typing_extensions import override
 
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization
-from aio_rfcomm.backend.iobluetooth._helper import Ending, Helper, run_helper
+from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
+from aio_rfcomm.backend.iobluetooth._helper import (
+    Ending,
+    Helper,
+    run_helper,
+)
 from aio_rfcomm.backend.provider import (
-    BackendAdapter,
+    AvailabilityState,
+    BackendBluetooth,
     BackendChannel,
     BackendProvider,
     BackendService,
 )
 from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
-from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    AdapterLostReason,
     BluetoothUnavailableError,
     CloseReason,
     ConnectionFailedError,
@@ -46,6 +51,8 @@ from aio_rfcomm.errors import (
 )
 
 __all__ = ["IOBluetoothBackend"]
+
+logger = logging.getLogger(__name__)
 
 
 class IOBluetoothChannel(StreamChannel):
@@ -84,51 +91,54 @@ class IOBluetoothChannel(StreamChannel):
         """
         return _reason(await self._ending.wait())
 
-
-class IOBluetoothAdapter(BackendAdapter):
-    """
-    The machine's Bluetooth adapter, worked through a running helper.
-    """
-
-    def __init__(self, helper: Helper, info: RfcommAdapterInfo) -> None:
-        """
-        Args:
-            helper: The running helper process.
-            info: What was found out about the adapter when it was opened.
-        """
-        super().__init__()
-        self._helper = helper
-        self._info = info
-
     @override
-    async def wait_until_gone(self) -> AdapterLostReason:
+    def abort(self) -> None:
+        # The helper says why a channel ended only when the device ended it.
+        # Ended from this side, nothing would ever answer explain_end.
+        self._ending.say(CloseReason.LINK_LOST.name)
+        super().abort()
+
+
+class IOBluetoothBluetooth(BackendBluetooth):
+    """
+    Bluetooth on this Mac, worked through whichever helper is running.
+    """
+
+    def __init__(self) -> None:
+        self.helper: Helper | None = None
         """
-        Wait for the helper to report the adapter gone.
+        The running helper, or ``None`` between one and the next.
+        """
 
-        Only the helper can tell: it watches the radio, and nothing reaches
-        this side otherwise.
-
+    def _current(self) -> Helper:
+        """
         Returns:
-            Why the adapter went away.
+            The running helper.
+
+        Raises:
+            BluetoothUnavailableError: There is none, because the system's
+                Bluetooth service is restarting.
         """
-        return _adapter_reason(await self._helper.wait_until_lost())
+        if self.helper is None:
+            raise BluetoothUnavailableError(Availability.SERVICE_UNAVAILABLE)
+        return self.helper
 
     @override
     async def list_known_devices(
         self, *, service: UUID | Collection[UUID] | None = None
     ) -> list[RfcommDeviceInfo]:
-        rows, _fds = await self._helper.ask("devices", service=_wanted(service))
+        rows, _fds = await self._current().ask("devices", service=_wanted(service))
         return [RfcommDeviceInfo(address, name) for address, name in rows]
 
     @override
     def open_service(
-        self, device: RfcommDeviceInfo | str, service: UUID
+        self, device: RfcommDeviceInfo, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, service=str(service))
 
     @override
     def open_channel(
-        self, device: RfcommDeviceInfo | str, channel: int
+        self, device: RfcommDeviceInfo, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, channel=channel)
 
@@ -152,7 +162,7 @@ class IOBluetoothAdapter(BackendAdapter):
     @asynccontextmanager
     async def _connect(
         self,
-        device: RfcommDeviceInfo | str,
+        device: RfcommDeviceInfo,
         *,
         service: str | None = None,
         channel: int | None = None,
@@ -168,9 +178,11 @@ class IOBluetoothAdapter(BackendAdapter):
         Yields:
             The open channel, closed on exit.
         """
-        address = device if isinstance(device, str) else device.address
-        handle, fds = await self._helper.ask(
-            "open", address=address, service=service, channel=channel
+        # The helper that opened a channel is the one it belongs to, even once
+        # another has replaced it.
+        helper = self._current()
+        handle, fds = await helper.ask(
+            "open", address=device.address, service=service, channel=channel
         )
         if len(fds) != 1:
             for fd in fds:
@@ -181,12 +193,12 @@ class IOBluetoothAdapter(BackendAdapter):
             )
 
         async with AsyncExitStack() as stack:
-            ending = self._helper.expect(handle)
-            stack.callback(self._helper.forget, handle)
+            ending = helper.expect(handle)
+            stack.callback(helper.forget, handle)
             # Pushed before the socket, so that it runs after it: closing this
             # end is what tells the helper to let the device go, and until it
             # has, another channel to that device is refused.
-            stack.push_async_callback(self._helper.wait_until_finished, handle)
+            stack.push_async_callback(helper.wait_until_finished, handle)
 
             sock = socket.socket(fileno=fds[0])
             transport, protocol = await open_stream(sock)
@@ -201,111 +213,157 @@ class IOBluetoothBackend(BackendProvider):
     The macOS implementation.
     """
 
-    @override
-    async def list_adapters(self) -> list[RfcommAdapterInfo]:
-        async with run_helper() as helper:
-            return await _read_adapters(helper)
+    def __init__(
+        self,
+        start: Callable[[], AbstractAsyncContextManager[Helper]] = run_helper,
+    ) -> None:
+        """
+        Args:
+            start: Starts a helper and keeps it running for a block. Only a
+                test has reason to pass anything else.
+        """
+        self._start = start
 
     @override
-    def open_adapter(
-        self, adapter: RfcommAdapterInfo | None = None
-    ) -> AbstractAsyncContextManager[BackendAdapter]:
-        return self._open(adapter)
+    def open(
+        self, state: AvailabilityState
+    ) -> AbstractAsyncContextManager[BackendBluetooth]:
+        return self._open(state)
 
     @asynccontextmanager
     async def _open(
-        self, adapter: RfcommAdapterInfo | None
-    ) -> AsyncGenerator[BackendAdapter, None]:
+        self, state: AvailabilityState
+    ) -> AsyncGenerator[BackendBluetooth, None]:
         """
-        Start a helper and open an adapter through it.
+        Start a helper, read whether Bluetooth is usable, and keep the helper
+        running for as long as the block lasts.
 
-        The helper lives exactly as long as the adapter does, which is why
-        adapters are opened with ``async with`` rather than handed out.
+        REVISIT: availability is read only when Bluetooth is opened. Following
+        CoreBluetooth's state as it changes, and replacing a helper whose
+        bluetoothd has restarted, come next.
 
         Args:
-            adapter: Which adapter, or ``None`` for the only one.
+            state: Where to report availability.
 
         Yields:
-            The open adapter.
+            Bluetooth, worked through the helper.
+
+        Raises:
+            HelperFailedError: The helper could not be started.
         """
-        async with run_helper() as helper:
-            available = await _read_adapters(helper)
-            if not available:
-                raise BluetoothUnavailableError(Availability.NO_ADAPTER)
+        bluetooth = IOBluetoothBluetooth()
 
-            # macOS exposes a single controller and no way to choose between
-            # radios, so there is nothing to be clever about here.
-            chosen = available[0] if adapter is None else adapter
-            if not any(a.id == chosen.id for a in available):
-                raise BluetoothUnavailableError(
-                    Availability.NO_ADAPTER, f"there is no adapter {chosen.id}"
-                )
+        async with AsyncExitStack() as stack:
+            helper = None
 
-            radio, _fds = await helper.ask("powered")
-            if not radio["powered"]:
-                raise _no_radio(radio["authorization"], chosen.name)
+            try:
+                helper = await stack.enter_async_context(self._start())
+            except BluetoothUnavailableError as refused:
+                # macOS refused Bluetooth to the helper and ended it.
+                state.set(refused.reason, str(refused))
 
-            yield IOBluetoothAdapter(helper, chosen)
+            if helper is not None:
+                bluetooth.helper = helper
+                await _first_reading(helper, state)
+
+            yield bluetooth
 
 
-def _no_radio(authorization: int, name: str | None) -> BluetoothUnavailableError:
+async def _first_reading(helper: Helper, state: AvailabilityState) -> None:
     """
-    Say why the radio is unusable, which is not always that it is off.
-
-    macOS reports Bluetooth as switched off to a process that may not use it,
-    so the obvious message sends someone to turn on a radio that is already
-    on. The authorization is what tells the two apart.
-
-    Args:
-        authorization: A ``CBManagerAuthorization`` from the helper.
-        name: The adapter's name, if it has one.
-
-    Returns:
-        The error to raise.
-    """
-    match authorization:
-        case CBManagerAuthorization.DENIED:
-            return BluetoothUnavailableError(
-                Availability.NOT_ALLOWED,
-                "Bluetooth was refused for this program. Allow it under "
-                "Privacy & Security > Bluetooth in System Settings. Note that "
-                "the name passed to aio_rfcomm.macos.prompt_under_name() "
-                "is what the permission is remembered against, so changing it "
-                "asks again.",
-            )
-        case CBManagerAuthorization.RESTRICTED:
-            return BluetoothUnavailableError(
-                Availability.NOT_ALLOWED,
-                "Bluetooth is not allowed on this Mac, by a profile or "
-                "parental controls rather than by a choice this program can "
-                "undo.",
-            )
-        case CBManagerAuthorization.NOT_DETERMINED:
-            return BluetoothUnavailableError(
-                Availability.NOT_ALLOWED,
-                "Bluetooth permission for this program has not been answered. "
-                "A dialog should have appeared; if it was dismissed, run the "
-                "program again and allow it.",
-            )
-        case _:
-            return BluetoothUnavailableError(
-                Availability.SWITCHED_OFF,
-                f"{name or 'this Mac'}'s Bluetooth is switched off; turn it on",
-            )
-
-
-async def _read_adapters(helper: Helper) -> list[RfcommAdapterInfo]:
-    """
-    Ask the helper what adapters the machine has.
+    Report the first state the helper sends that answers whether Bluetooth is
+    usable.
 
     Args:
         helper: The running helper.
+        state: Where to report availability.
+
+    Raises:
+        HelperFailedError: The helper stopped first.
+    """
+    while True:
+        manager, authorization = await helper.next_state()
+
+        match _availability(manager, authorization):
+            case None:
+                continue
+            case Availability.SWITCHED_OFF:
+                state.set(
+                    Availability.SWITCHED_OFF,
+                    "this Mac's Bluetooth is switched off; turn it on",
+                )
+            case Availability.NOT_ALLOWED:
+                state.set(Availability.NOT_ALLOWED, _not_allowed(authorization))
+            case available:
+                state.set(available)
+
+        return
+
+
+def _availability(manager: int, authorization: int) -> Availability | None:
+    """
+    Say what a ``CBManagerState`` means for whether Bluetooth is usable.
+
+    Args:
+        manager: The manager's state.
+        authorization: The ``CBManagerAuthorization`` at the time, since macOS
+            reports a radio this program may not use as switched off.
 
     Returns:
-        The adapters, at most one of them.
+        The availability, or ``None`` for a state that is not an answer.
     """
-    rows, _fds = await helper.ask("adapters")
-    return [RfcommAdapterInfo(id, address, name) for id, address, name in rows]
+    match manager:
+        case CBManagerState.POWERED_ON:
+            return Availability.USABLE
+        case CBManagerState.POWERED_OFF if (
+            authorization == CBManagerAuthorization.ALLOWED_ALWAYS
+        ):
+            return Availability.SWITCHED_OFF
+        case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED:
+            return Availability.NOT_ALLOWED
+        case CBManagerState.RESETTING:
+            # Set only when the connection to bluetoothd is lost, never on an
+            # ordinary toggle (follow-ups §13.2).
+            return Availability.SERVICE_UNAVAILABLE
+        case CBManagerState.UNSUPPORTED:
+            return Availability.UNSUPPORTED
+        case CBManagerState.UNKNOWN:
+            return None
+        case _:
+            logger.warning("CoreBluetooth reported state %d, unknown here", manager)
+            return None
+
+
+def _not_allowed(authorization: int) -> str:
+    """
+    Say why this program may not use Bluetooth, which is not always the same.
+
+    Args:
+        authorization: A ``CBManagerAuthorization`` from the helper.
+
+    Returns:
+        What to tell the user.
+    """
+    match authorization:
+        case CBManagerAuthorization.RESTRICTED:
+            return (
+                "Bluetooth is not allowed on this Mac, by a profile or parental "
+                "controls rather than by a choice this program can undo."
+            )
+        case CBManagerAuthorization.NOT_DETERMINED:
+            return (
+                "Bluetooth permission for this program has not been answered. "
+                "A dialog should have appeared; if it was dismissed, run the "
+                "program again and allow it."
+            )
+        case _:
+            return (
+                "Bluetooth was refused for this program. Allow it under "
+                "Privacy & Security > Bluetooth in System Settings. Note that "
+                "the name passed to aio_rfcomm.macos.prompt_under_name() is "
+                "what the permission is remembered against, so changing it "
+                "asks again."
+            )
 
 
 def _wanted(service: UUID | Collection[UUID] | None) -> list[str]:
@@ -323,24 +381,6 @@ def _wanted(service: UUID | Collection[UUID] | None) -> list[str]:
     if isinstance(service, UUID):
         return [str(service)]
     return [str(u) for u in service]
-
-
-def _adapter_reason(name: str) -> AdapterLostReason:
-    """
-    Turn the helper's word for a lost adapter back into one of ours.
-
-    Args:
-        name: The reason's name, as the helper sent it.
-
-    Returns:
-        Why the adapter went away, or removed if the name is not one we know
-        -- which can only mean the helper is a different version, and the
-        adapter is gone either way.
-    """
-    try:
-        return AdapterLostReason[name]
-    except KeyError:
-        return AdapterLostReason.REMOVED
 
 
 def _reason(name: str) -> CloseReason:

@@ -11,7 +11,7 @@ from typing import assert_never
 import pytest
 
 from aio_rfcomm.availability import Availability, UnavailableReason
-from aio_rfcomm.device import RfcommDevice
+from aio_rfcomm.bluetooth import Bluetooth
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
@@ -22,6 +22,7 @@ from aio_rfcomm.errors import (
     RfcommError,
     ScopeClosedError,
 )
+from tests.fake import DEVICE
 
 # --------------------------------------------------------------------------
 # Addresses
@@ -73,18 +74,18 @@ def test_a_name_is_not_needed() -> None:
 
 @pytest.mark.parametrize("channel", [1, 30])
 def test_the_first_and_last_channel_numbers_are_allowed(
-    device: RfcommDevice, channel: int
+    bluetooth: Bluetooth, channel: int
 ) -> None:
-    device.open_channel(channel)
+    bluetooth.open_channel(DEVICE, channel)
 
 
 @pytest.mark.parametrize("channel", [0, 31, -1, 255])
 def test_a_channel_number_out_of_range_is_refused_before_anything_happens(
-    device: RfcommDevice, channel: int
+    bluetooth: Bluetooth, channel: int
 ) -> None:
     # Refused when the call is made, not when the block is entered.
     with pytest.raises(ValueError, match="not an RFCOMM channel"):
-        device.open_channel(channel)
+        bluetooth.open_channel(DEVICE, channel)
 
 
 # --------------------------------------------------------------------------

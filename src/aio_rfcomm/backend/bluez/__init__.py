@@ -13,8 +13,8 @@ on a Python that has never heard of Bluetooth.
 
 Two things are better with a socket, and both degrade rather than fail without
 one: connecting to a bare channel number, which cannot be done over D-Bus at
-all (:meth:`BlueZAdapter.open_channel`), and choosing the channel a service
-listens on, which falls back to a guess (:meth:`BlueZAdapter._reserve_channel`).
+all (:meth:`BlueZBluetooth.open_channel`), and choosing the channel a service
+listens on, which falls back to a guess (:meth:`BlueZBluetooth._reserve_channel`).
 """
 
 # Do not add ``from __future__ import annotations`` to this module. dbus-fast
@@ -28,30 +28,34 @@ import itertools
 import logging
 import os
 import socket
-from collections.abc import AsyncGenerator, Collection
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from typing import TypeVar, cast
+from typing import NamedTuple, TypeVar, cast
 from uuid import UUID
 
 from dbus_fast import BusType, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.aio.proxy_object import ProxyInterface
 from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
+from dbus_fast.errors import DBusError
 from dbus_fast.service import ServiceInterface, method
 from typing_extensions import override
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
-    BackendAdapter,
+    AvailabilityState,
+    BackendBluetooth,
     BackendChannel,
     BackendProvider,
+    BackendRequest,
     BackendService,
+    NoBluetooth,
 )
-from aio_rfcomm.backend.stream import StreamChannel, open_stream
-from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
+from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
-    BluetoothUnavailableError,
     ChannelInUseError,
+    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     RfcommError,
@@ -97,10 +101,6 @@ class _ProfileManagerProxy(ProxyInterface):
     ) -> None: ...
 
     async def call_unregister_profile(self, profile: str) -> None: ...
-
-
-class _AdapterProxy(ProxyInterface):
-    async def get_powered(self) -> bool: ...
 
 
 class _DeviceProxy(ProxyInterface):
@@ -188,7 +188,17 @@ class _Profiles:
     when the last of them has finished with it.
     """
 
-    def __init__(self, bus: MessageBus, manager: _ProfileManagerProxy) -> None:
+    def __init__(
+        self,
+        bus: MessageBus,
+        manager: Callable[[], Awaitable[_ProfileManagerProxy]],
+    ) -> None:
+        """
+        Args:
+            bus: Where profiles are exported.
+            manager: Gets BlueZ's profile manager. Asked for each time rather
+                than kept, so a restarted BlueZ is found.
+        """
         self._bus = bus
         self._manager = manager
         self._lock = asyncio.Lock()
@@ -208,6 +218,8 @@ class _Profiles:
         Raises:
             ConnectionFailedError: Another program already holds this UUID.
         """
+        manager = await self._manager()
+
         async with self._lock:
             existing = self._registered.get(uuid)
             if existing is None:
@@ -215,7 +227,7 @@ class _Profiles:
                 profile = _Profile()
                 self._bus.export(path, profile)
                 try:
-                    await self._manager.call_register_profile(
+                    await manager.call_register_profile(
                         path,
                         uuid,
                         {
@@ -240,18 +252,53 @@ class _Profiles:
                     self._registered[uuid] = (path, profile, count - 1)
                 else:
                     del self._registered[uuid]
-                    await self._manager.call_unregister_profile(path)
-                    self._bus.unexport(path)
+                    try:
+                        await manager.call_unregister_profile(path)
+                    finally:
+                        self._bus.unexport(path)
 
 
 class BlueZChannel(StreamChannel):
     """
     An RFCOMM channel over the file descriptor BlueZ supplied.
-
-    Nothing to add: BlueZ gives us a connected socket and the shared stream
-    channel does the rest. It stays a class of its own so that a backtrace
-    names the platform.
     """
+
+    def __init__(
+        self,
+        transport: asyncio.Transport,
+        protocol: StreamProtocol,
+        refresh: Callable[[], Awaitable[None]],
+    ) -> None:
+        """
+        Args:
+            transport: Carries the descriptor.
+            protocol: What the transport reports to.
+            refresh: Reads whether Bluetooth is still usable, and reports it.
+        """
+        super().__init__(transport, protocol)
+        self._refresh = refresh
+
+    @override
+    async def explain_end(self) -> CloseReason:
+        """
+        Make sure a radio going off is known before the end is put down to
+        the peer.
+
+        Measured on BlueZ 5.72: switching the radio off ends the channel about
+        50 ms before the adapter is reported off, while its power state
+        already reads as going off. So the adapter is read again here, and if
+        Bluetooth is no longer usable that is reported first, and becomes why
+        the channel ended.
+
+        Returns:
+            Why the channel went away, as far as the socket can tell.
+        """
+        try:
+            await self._refresh()
+        except Exception:
+            # The end still has to be explained; the reason is only less sure.
+            logger.debug("could not read whether Bluetooth is usable", exc_info=True)
+        return await super().explain_end()
 
 
 class _ServerProfile(ServiceInterface):
@@ -318,14 +365,22 @@ class BlueZService(BackendService):
     A service published through BlueZ, listening for peers.
     """
 
-    def __init__(self, profile: _ServerProfile, channel: int) -> None:
+    def __init__(
+        self,
+        profile: _ServerProfile,
+        channel: int,
+        refresh: Callable[[], Awaitable[None]],
+    ) -> None:
         """
         Args:
             profile: The registered profile BlueZ calls back.
             channel: The channel it was registered on.
+            refresh: Reads whether Bluetooth is still usable, for the
+                channels accepted here.
         """
         self._profile = profile
         self._channel = channel
+        self._refresh = refresh
 
     @property
     @override
@@ -333,17 +388,53 @@ class BlueZService(BackendService):
         return self._channel
 
     @override
-    async def accept(
-        self,
-    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
+    async def accept(self) -> BackendRequest:
         device_path, fd = await self._profile.next_connection()
         try:
             peer = _peer_from_path(device_path)
         except ValueError:
-            # The descriptor is ours until a channel takes it.
+            # The descriptor is ours until a request holds it.
             os.close(fd)
             raise
-        return peer, _take_connection(fd)
+        return _Request(peer, fd, self._refresh)
+
+
+class _Request(BackendRequest):
+    """
+    A peer BlueZ has connected, and the descriptor it handed over.
+    """
+
+    def __init__(
+        self,
+        peer: RfcommDeviceInfo,
+        fd: int,
+        refresh: Callable[[], Awaitable[None]],
+    ) -> None:
+        self._peer = peer
+        self._fd: int | None = fd
+        self._refresh = refresh
+
+    @property
+    @override
+    def info(self) -> RfcommDeviceInfo:
+        return self._peer
+
+    @override
+    def open(self) -> AbstractAsyncContextManager[BackendChannel]:
+        return self._take()
+
+    @asynccontextmanager
+    async def _take(self) -> AsyncGenerator[BackendChannel, None]:
+        fd, self._fd = self._fd, None
+        assert fd is not None, "a request's connection was taken twice"
+        async with _take_connection(fd, self._refresh) as channel:
+            yield channel
+
+    @override
+    def close(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            os.close(fd)
 
 
 def _peer_from_path(device_path: str) -> RfcommDeviceInfo:
@@ -366,12 +457,15 @@ def _peer_from_path(device_path: str) -> RfcommDeviceInfo:
 
 
 @asynccontextmanager
-async def _take_connection(fd: int) -> AsyncGenerator[BackendChannel, None]:
+async def _take_connection(
+    fd: int, refresh: Callable[[], Awaitable[None]]
+) -> AsyncGenerator[BackendChannel, None]:
     """
     Turn a descriptor BlueZ handed over into a channel, closed on exit.
 
     Args:
         fd: The connected file descriptor.
+        refresh: Reads whether Bluetooth is still usable.
 
     Yields:
         The channel.
@@ -379,25 +473,36 @@ async def _take_connection(fd: int) -> AsyncGenerator[BackendChannel, None]:
     async with AsyncExitStack() as stack:
         sock = socket.socket(fileno=fd)
         transport, protocol = await open_stream(sock)
-        opened = BlueZChannel(transport, protocol)
+        opened = BlueZChannel(transport, protocol, refresh)
         stack.push_async_callback(opened.close)
         yield opened
 
 
-class BlueZAdapter(BackendAdapter):
+class BlueZBluetooth(BackendBluetooth):
     """
-    One BlueZ adapter, with a bus connection of its own.
+    Bluetooth through BlueZ, on one adapter, with a bus connection of its own.
     """
 
-    def __init__(
-        self, bus: MessageBus, info: RfcommAdapterInfo, profiles: _Profiles
-    ) -> None:
-        super().__init__()
+    def __init__(self, bus: MessageBus, profiles: _Profiles) -> None:
         self._bus = bus
-        self._path = info.id
-        self._address = info.address
         self._profiles = profiles
         self._claimed: set[int] = set()
+
+        self.path = ""
+        """
+        The adapter's object path, kept up to date as adapters come and go.
+        """
+
+        self.address: str | None = None
+        """
+        The adapter's own address, if BlueZ reports one.
+        """
+
+        self.refresh: Callable[[], Awaitable[None]] = _nothing
+        """
+        Reads whether Bluetooth is usable and reports it; set once there is
+        somewhere to report it.
+        """
 
     async def _interface(
         self, path: str, name: str, kind: type[_Interface]
@@ -439,7 +544,7 @@ class BlueZAdapter(BackendAdapter):
             # default to compare against -- an empty string is not a valid
             # object path -- so an absent property just means no match.
             belongs_to = properties.get("Adapter")
-            if belongs_to is None or belongs_to.value != self._path:
+            if belongs_to is None or belongs_to.value != self.path:
                 continue
             uuids = {
                 u.lower() for u in properties.get("UUIDs", Variant("as", [])).value
@@ -457,13 +562,13 @@ class BlueZAdapter(BackendAdapter):
 
     @override
     def open_service(
-        self, device: RfcommDeviceInfo | str, service: UUID
+        self, device: RfcommDeviceInfo, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect(device, service)
 
     @override
     def open_channel(
-        self, device: RfcommDeviceInfo | str, channel: int
+        self, device: RfcommDeviceInfo, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._connect_by_channel(device, channel)
 
@@ -508,7 +613,7 @@ class BlueZAdapter(BackendAdapter):
             UnsupportedOperationError: No channel was named and this Python
                 cannot probe for one.
         """
-        if not hasattr(socket, "AF_BLUETOOTH") or self._address is None:
+        if not hasattr(socket, "AF_BLUETOOTH") or self.address is None:
             return self._unprobed_channel(channel)
 
         probe = socket.socket(
@@ -516,7 +621,7 @@ class BlueZAdapter(BackendAdapter):
         )
         try:
             try:
-                probe.bind((self._address, channel or 0))
+                probe.bind((self.address, channel or 0))
                 # The kernel does not settle on a channel until the socket is
                 # listening, so binding channel 0 and reading the name back
                 # without this returns 0 rather than the channel it picked.
@@ -524,12 +629,12 @@ class BlueZAdapter(BackendAdapter):
             except OSError as error:
                 if error.errno == errno.EADDRINUSE:
                     raise ChannelInUseError(
-                        f"channel {channel} is already in use on {self._address}"
+                        f"channel {channel} is already in use on {self.address}"
                         if channel is not None
                         else "every RFCOMM channel on this adapter is in use"
                     ) from error
                 raise ConnectionFailedError(
-                    f"could not reserve a channel on {self._address}: {error}"
+                    f"could not reserve a channel on {self.address}: {error}"
                 ) from error
             return probe.getsockname()[1]
         finally:
@@ -613,7 +718,7 @@ class BlueZAdapter(BackendAdapter):
                 raise _translate_registration(error, str(service)) from error
 
             try:
-                yield BlueZService(profile, channel)
+                yield BlueZService(profile, channel, self.refresh)
             finally:
                 await manager.call_unregister_profile(path)
         finally:
@@ -621,28 +726,26 @@ class BlueZAdapter(BackendAdapter):
             self._bus.unexport(path)
             profile.discard_queued()
 
-    def _device_path(self, device: RfcommDeviceInfo | str) -> str:
+    def _device_path(self, device: RfcommDeviceInfo) -> str:
         """
         Find the object path for a device.
 
         Args:
-            device: A description from :meth:`list_known_devices`, or an
-                address.
+            device: The device.
 
         Returns:
             The device's object path, taken from the description where it came
             from this backend and rebuilt from the address otherwise.
         """
-        if isinstance(device, RfcommDeviceInfo) and device.id is not None:
+        if device.id is not None:
             return device.id
-        address = device if isinstance(device, str) else device.address
-        return f"{self._path}/dev_{address.upper().replace(':', '_')}"
+        return f"{self.path}/dev_{device.address.replace(':', '_')}"
 
     @asynccontextmanager
     async def _connect(
-        self, device: RfcommDeviceInfo | str, service: UUID
+        self, device: RfcommDeviceInfo, service: UUID
     ) -> AsyncGenerator[BackendChannel, None]:
-        address = device if isinstance(device, str) else device.address
+        address = device.address
         device_path = self._device_path(device)
         uuid = str(service)
 
@@ -665,14 +768,14 @@ class BlueZAdapter(BackendAdapter):
             fd = await waiter
             sock = socket.socket(fileno=fd)
             transport, protocol = await open_stream(sock)
-            opened = BlueZChannel(transport, protocol)
+            opened = BlueZChannel(transport, protocol, self.refresh)
             stack.push_async_callback(opened.close)
 
             yield opened
 
     @asynccontextmanager
     async def _connect_by_channel(
-        self, device: RfcommDeviceInfo | str, channel: int
+        self, device: RfcommDeviceInfo, channel: int
     ) -> AsyncGenerator[BackendChannel, None]:
         """
         Connect straight to a channel number, over a Bluetooth socket.
@@ -692,7 +795,7 @@ class BlueZAdapter(BackendAdapter):
                 "or use a Python built against libbluetooth."
             )
 
-        address = device if isinstance(device, str) else device.address
+        address = device.address
         async with AsyncExitStack() as stack:
             sock = socket.socket(
                 socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM
@@ -701,13 +804,13 @@ class BlueZAdapter(BackendAdapter):
 
             # Which adapter a socket goes out of is chosen by binding to that
             # adapter's own address; left unbound the kernel picks for itself,
-            # which would quietly ignore the adapter the caller opened.
-            if self._address is not None:
+            # which would quietly ignore the adapter in use.
+            if self.address is not None:
                 try:
-                    sock.bind((self._address, 0))
+                    sock.bind((self.address, 0))
                 except OSError as error:
                     raise ConnectionFailedError(
-                        f"could not use adapter {self._address}: {error}"
+                        f"could not use adapter {self.address}: {error}"
                     ) from error
 
             try:
@@ -718,7 +821,7 @@ class BlueZAdapter(BackendAdapter):
                 ) from error
 
             transport, protocol = await open_stream(sock)
-            opened = BlueZChannel(transport, protocol)
+            opened = BlueZChannel(transport, protocol, self.refresh)
             stack.push_async_callback(opened.close)
 
             yield opened
@@ -730,49 +833,168 @@ class BlueZBackend(BackendProvider):
     """
 
     @override
-    async def list_adapters(self) -> list[RfcommAdapterInfo]:
-        async with _bus(negotiate_unix_fd=False) as bus:
-            return await _list_adapters(bus)
-
-    @override
-    def open_adapter(
-        self, adapter: RfcommAdapterInfo | None = None
-    ) -> AbstractAsyncContextManager[BackendAdapter]:
-        return self._open(adapter)
+    def open(
+        self, state: AvailabilityState
+    ) -> AbstractAsyncContextManager[BackendBluetooth]:
+        return self._open(state)
 
     @asynccontextmanager
     async def _open(
-        self, adapter: RfcommAdapterInfo | None
-    ) -> AsyncGenerator[BackendAdapter, None]:
-        # A connected channel arrives as a Unix file descriptor, so passing
-        # them has to be negotiated when the connection is made.
-        async with _bus(negotiate_unix_fd=True) as bus:
-            available = await _list_adapters(bus)
-            if not available:
-                raise BluetoothUnavailableError(Availability.NO_ADAPTER)
+        self, state: AvailabilityState
+    ) -> AsyncGenerator[BackendBluetooth, None]:
+        """
+        Connect to the system bus, and read whether Bluetooth is usable.
 
-            # REVISIT: taking the first is a poor default on a machine with
-            # more than one radio. It should prefer a powered adapter over an
-            # unpowered one, and honour an environment variable naming a
-            # preferred adapter so a user can settle it without touching code.
-            # bleak has a worked-out algorithm for this worth following.
-            chosen = available[0] if adapter is None else adapter
-            if not any(a.id == chosen.id for a in available):
-                raise BluetoothUnavailableError(
-                    Availability.NO_ADAPTER, f"there is no adapter {chosen.id}"
+        REVISIT: availability is read only when Bluetooth is opened. Following
+        BlueZ and its adapters as they change comes next.
+
+        Args:
+            state: Where to report availability.
+
+        Yields:
+            Bluetooth through BlueZ.
+        """
+        async with AsyncExitStack() as stack:
+            try:
+                # A connected channel arrives as a Unix file descriptor, so
+                # passing them has to be negotiated when the connection is made.
+                bus = await stack.enter_async_context(_bus(negotiate_unix_fd=True))
+            except (OSError, DBusError, ValueError) as error:
+                # No system bus at all: a container, say, with nothing to reach.
+                state.set(
+                    Availability.UNSUPPORTED, f"could not reach the system bus: {error}"
                 )
+                bus = None
 
-            radio = await _get(bus, chosen.id, _ADAPTER, _AdapterProxy)
-            if not await radio.get_powered():
-                raise BluetoothUnavailableError(
-                    Availability.SWITCHED_OFF,
-                    f"{chosen.name or chosen.id} is switched off; turn Bluetooth on",
-                )
+            if bus is None:
+                # Outside the except, so that what the caller's block raises is
+                # not reported as happening while handling this.
+                yield NoBluetooth()
+                return
 
-            manager = await _get(
-                bus, "/org/bluez", _PROFILE_MANAGER, _ProfileManagerProxy
+            bluetooth = BlueZBluetooth(
+                bus,
+                _Profiles(
+                    bus,
+                    lambda: _get(
+                        bus, "/org/bluez", _PROFILE_MANAGER, _ProfileManagerProxy
+                    ),
+                ),
             )
-            yield BlueZAdapter(bus, chosen, _Profiles(bus, manager))
+            bluetooth.refresh = lambda: _read(bus, bluetooth, state)
+            await _read(bus, bluetooth, state)
+            yield bluetooth
+
+
+async def _nothing() -> None:
+    pass
+
+
+# What the bus answers when nothing owns the name asked for: BlueZ is not
+# running, and nothing has started it.
+_NOBODY_THERE = (
+    "org.freedesktop.DBus.Error.ServiceUnknown",
+    "org.freedesktop.DBus.Error.NameHasNoOwner",
+)
+
+
+class _Adapter(NamedTuple):
+    path: str
+    address: str | None
+    name: str | None
+    powered: bool
+    power_state: str | None
+
+
+async def _list_adapters(bus: MessageBus) -> list[_Adapter]:
+    """
+    Read every adapter BlueZ knows about.
+
+    Args:
+        bus: A connected system bus.
+
+    Returns:
+        The adapters, in object path order.
+    """
+    manager = await _get(bus, "/", _OBJECT_MANAGER, _ObjectManagerProxy)
+    objects = await manager.call_get_managed_objects()
+
+    return [
+        _Adapter(
+            path,
+            interfaces[_ADAPTER].get("Address", Variant("s", "")).value or None,
+            interfaces[_ADAPTER].get("Alias", Variant("s", "")).value or None,
+            bool(interfaces[_ADAPTER].get("Powered", Variant("b", False)).value),
+            # Newer than Powered, so not always there.
+            _optional_text(interfaces[_ADAPTER].get("PowerState")),
+        )
+        for path, interfaces in sorted(objects.items())
+        if _ADAPTER in interfaces
+    ]
+
+
+def _powered(adapter: _Adapter) -> tuple[Availability, str | None]:
+    """
+    Say whether an adapter's radio is usable.
+
+    Measured on BlueZ 5.72: switching off goes through ``on-disabling`` for
+    about 50 ms while ``Powered`` still reads true, and the radio's links drop
+    during it. So only ``on`` counts, where BlueZ reports a power state.
+
+    Args:
+        adapter: The adapter, as last read.
+
+    Returns:
+        Its availability, and what to tell the user about it.
+    """
+    name = adapter.name or adapter.path
+    match adapter.power_state:
+        case None if adapter.powered:
+            return Availability.USABLE, None
+        case "on":
+            return Availability.USABLE, None
+        case "off-blocked":
+            return (
+                Availability.SWITCHED_OFF,
+                f"{name} is blocked, by rfkill or airplane mode; unblock it",
+            )
+        case _:
+            return (
+                Availability.SWITCHED_OFF,
+                f"{name} is switched off; turn Bluetooth on",
+            )
+
+
+async def _read(
+    bus: MessageBus, bluetooth: BlueZBluetooth, state: AvailabilityState
+) -> None:
+    """
+    Read whether Bluetooth is usable, and which adapter to use.
+
+    Args:
+        bus: A connected system bus.
+        bluetooth: Where the adapter in use is kept.
+        state: Where to report availability.
+    """
+    try:
+        adapters = await _list_adapters(bus)
+    except DBusError as error:
+        if error.type not in _NOBODY_THERE:
+            raise
+        state.set(Availability.SERVICE_UNAVAILABLE, f"BlueZ is not running: {error}")
+        return
+
+    if not adapters:
+        state.set(Availability.NO_ADAPTER)
+        return
+
+    # The one in use is kept while it is there; otherwise the first.
+    # REVISIT: a machine with several radios should be able to name one.
+    chosen = next((a for a in adapters if a.path == bluetooth.path), adapters[0])
+    bluetooth.path = chosen.path
+    bluetooth.address = chosen.address
+
+    state.set(*_powered(chosen))
 
 
 @asynccontextmanager
@@ -840,28 +1062,15 @@ def _wanted(service: UUID | Collection[UUID] | None) -> set[str]:
     return {str(u).lower() for u in service}
 
 
-async def _list_adapters(bus: MessageBus) -> list[RfcommAdapterInfo]:
+def _optional_text(value: Variant | None) -> str | None:
     """
-    Read every adapter BlueZ knows about.
-
     Args:
-        bus: A connected system bus.
+        value: A property that may be missing.
 
     Returns:
-        The adapters, in object path order.
+        Its text, or ``None`` if it is missing.
     """
-    manager = await _get(bus, "/", _OBJECT_MANAGER, _ObjectManagerProxy)
-    objects = await manager.call_get_managed_objects()
-
-    return [
-        RfcommAdapterInfo(
-            path,
-            interfaces[_ADAPTER].get("Address", Variant("s", "")).value or None,
-            interfaces[_ADAPTER].get("Alias", Variant("s", "")).value or None,
-        )
-        for path, interfaces in sorted(objects.items())
-        if _ADAPTER in interfaces
-    ]
+    return None if value is None else str(value.value)
 
 
 def _translate_registration(error: Exception, uuid: str) -> RfcommError:

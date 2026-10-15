@@ -16,22 +16,19 @@ from uuid import UUID
 
 from typing_extensions import override
 
+from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
-    BackendAdapter,
+    AvailabilityState,
+    BackendBluetooth,
     BackendChannel,
     BackendProvider,
+    BackendRequest,
     BackendService,
 )
-from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
-from aio_rfcomm.errors import (
-    AdapterLostReason,
-    ChannelClosedError,
-    ChannelInUseError,
-    CloseReason,
-)
+from aio_rfcomm.discovery import RfcommDeviceInfo
+from aio_rfcomm.errors import ChannelClosedError, ChannelInUseError, CloseReason
 
 DEVICE = RfcommDeviceInfo("00:11:22:33:44:55", "fake device")
-ADAPTER = RfcommAdapterInfo("fake0", "AA:BB:CC:DD:EE:FF", "fake adapter")
 
 
 class FakeChannel(BackendChannel):
@@ -46,16 +43,25 @@ class FakeChannel(BackendChannel):
         super().__init__()
         self.sent = bytearray()
         self.closed = False
+        self.aborted = False
         self.send_blocks = False
         self._incoming = bytearray()
         self._changed = asyncio.Event()
+
+    @override
+    def abort(self) -> None:
+        self.aborted = True
+        self.go_away(CloseReason.LINK_LOST)
 
     @override
     async def send(self, data: bytes) -> None:
         if self.reason is not None:
             raise ChannelClosedError(self.reason)
         if self.send_blocks:
-            await asyncio.Event().wait()
+            self._changed.clear()
+            await self._changed.wait()
+            if self.reason is not None:
+                raise ChannelClosedError(self.reason)
         self.sent += data
 
     @override
@@ -87,6 +93,40 @@ class FakeChannel(BackendChannel):
         self._changed.set()
 
 
+class FakeRequest(BackendRequest):
+    """
+    A peer that has connected, holding the channel the test made for it.
+    """
+
+    def __init__(self, peer: RfcommDeviceInfo, channel: FakeChannel) -> None:
+        self._peer = peer
+        self.channel = channel
+        self.taken = False
+
+    @property
+    @override
+    def info(self) -> RfcommDeviceInfo:
+        return self._peer
+
+    @override
+    def open(self) -> AbstractAsyncContextManager[BackendChannel]:
+        return self._hold()
+
+    @asynccontextmanager
+    async def _hold(self) -> AsyncGenerator[BackendChannel, None]:
+        assert not self.channel.closed, "opened a request that was closed"
+        self.taken = True
+        try:
+            yield self.channel
+        finally:
+            self.channel.closed = True
+
+    @override
+    def close(self) -> None:
+        if not self.taken:
+            self.channel.closed = True
+
+
 class FakeService(BackendService):
     """
     A published service whose peers the test conjures up by hand.
@@ -96,11 +136,8 @@ class FakeService(BackendService):
         self.service = service
         self.name = name
         self.withdrawn = False
-        self.accepted: list[FakeChannel] = []
         self._channel = channel
-        self._arriving: asyncio.Queue[tuple[RfcommDeviceInfo, FakeChannel]] = (
-            asyncio.Queue()
-        )
+        self._arriving: asyncio.Queue[FakeRequest] = asyncio.Queue()
 
     @property
     @override
@@ -108,33 +145,8 @@ class FakeService(BackendService):
         return self._channel
 
     @override
-    async def accept(
-        self,
-    ) -> tuple[RfcommDeviceInfo, AbstractAsyncContextManager[BackendChannel]]:
-        peer, channel = await self._arriving.get()
-        self.accepted.append(channel)
-        return peer, self._hold(channel)
-
-    @asynccontextmanager
-    async def _hold(self, channel: FakeChannel) -> AsyncGenerator[BackendChannel, None]:
-        try:
-            yield channel
-        finally:
-            channel.closed = True
-
-    def discard_queued(self) -> None:
-        """
-        Close what arrived and was never handed to a handler.
-
-        The real backends have a descriptor to close here, so the fake has to
-        have the same obligation for a test to be able to catch a leak.
-        """
-        while True:
-            try:
-                _, channel = self._arriving.get_nowait()
-            except asyncio.QueueEmpty:
-                return
-            channel.closed = True
+    async def accept(self) -> BackendRequest:
+        return await self._arriving.get()
 
     # -- test controls -------------------------------------------------
 
@@ -143,39 +155,45 @@ class FakeService(BackendService):
         Have a peer connect to the service.
 
         Returns:
-            The channel the handler will be given.
+            The channel its request holds.
         """
         channel = FakeChannel()
-        self._arriving.put_nowait((peer, channel))
+        self._arriving.put_nowait(FakeRequest(peer, channel))
         return channel
 
 
-class FakeAdapter(BackendAdapter):
+class FakeBluetooth(BackendBluetooth):
     """
-    An adapter that hands out fake channels.
+    Bluetooth that hands out fake channels and services.
     """
 
     def __init__(self) -> None:
-        super().__init__()
         self.open_calls = 0
+        self.opens_block = False
+        # What a blocked open does when cancelled: re-raise, raise this
+        # instead, or finish the open regardless.
+        self.open_cancel_raises: BaseException | None = None
+        self.open_cancel_finishes = False
         self.channels: list[FakeChannel] = []
         self.services: list[FakeService] = []
+        self.listed = 0
 
     @override
     async def list_known_devices(
         self, *, service: UUID | Collection[UUID] | None = None
     ) -> list[RfcommDeviceInfo]:
+        self.listed += 1
         return [DEVICE]
 
     @override
     def open_service(
-        self, device: RfcommDeviceInfo | str, service: UUID
+        self, device: RfcommDeviceInfo, service: UUID
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._open()
 
     @override
     def open_channel(
-        self, device: RfcommDeviceInfo | str, channel: int
+        self, device: RfcommDeviceInfo, channel: int
     ) -> AbstractAsyncContextManager[BackendChannel]:
         return self._open()
 
@@ -200,11 +218,18 @@ class FakeAdapter(BackendAdapter):
             yield published
         finally:
             published.withdrawn = True
-            published.discard_queued()
 
     @asynccontextmanager
     async def _open(self) -> AsyncGenerator[BackendChannel, None]:
         self.open_calls += 1
+        if self.opens_block:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if self.open_cancel_raises is not None:
+                    raise self.open_cancel_raises from None
+                if not self.open_cancel_finishes:
+                    raise
         channel = FakeChannel()
         self.channels.append(channel)
         try:
@@ -212,37 +237,47 @@ class FakeAdapter(BackendAdapter):
         finally:
             channel.closed = True
 
-    # -- test controls -------------------------------------------------
-
-    def go_away(
-        self, reason: AdapterLostReason = AdapterLostReason.SWITCHED_OFF
-    ) -> None:
-        """
-        End the adapter, as the backend would on noticing it had gone.
-        """
-        self._mark_gone(reason)
-
 
 class FakeProvider(BackendProvider):
     """
-    A provider that hands out fake adapters.
+    A provider whose availability the test sets by hand.
     """
 
-    def __init__(self) -> None:
-        self.adapters: list[FakeAdapter] = []
+    def __init__(self, first: Availability | None = Availability.USABLE) -> None:
+        """
+        Args:
+            first: What to report on opening, or ``None`` to report nothing
+                until the test says.
+        """
+        self.backend = FakeBluetooth()
+        self.opened = 0
+        self._first = first
+        self._state: AvailabilityState | None = None
 
     @override
-    async def list_adapters(self) -> list[RfcommAdapterInfo]:
-        return [ADAPTER]
-
-    @override
-    def open_adapter(
-        self, adapter: RfcommAdapterInfo | None = None
-    ) -> AbstractAsyncContextManager[BackendAdapter]:
-        return self._open()
+    def open(
+        self, state: AvailabilityState
+    ) -> AbstractAsyncContextManager[BackendBluetooth]:
+        return self._open(state)
 
     @asynccontextmanager
-    async def _open(self) -> AsyncGenerator[BackendAdapter, None]:
-        backend = FakeAdapter()
-        self.adapters.append(backend)
-        yield backend
+    async def _open(
+        self, state: AvailabilityState
+    ) -> AsyncGenerator[BackendBluetooth, None]:
+        self.opened += 1
+        self._state = state
+        if self._first is not None:
+            state.set(self._first)
+        try:
+            yield self.backend
+        finally:
+            self._state = None
+
+    # -- test controls -------------------------------------------------
+
+    def report(self, availability: Availability, detail: str | None = None) -> None:
+        """
+        Report availability, as the platform would on a change.
+        """
+        assert self._state is not None, "nothing has opened Bluetooth"
+        self._state.set(availability, detail)
