@@ -32,6 +32,7 @@ import ctypes
 import itertools
 import logging
 import os
+import socket
 import stat
 import time
 from collections.abc import AsyncGenerator, Callable, Collection, Iterable
@@ -77,6 +78,7 @@ __all__ = [
     "MachError",
     "Service",
     "hear_open_results",
+    "keep_unread_bytes",
     "list_known_devices",
     "open_channel",
     "read_authorization",
@@ -775,6 +777,26 @@ class _QueryComplete(NSObject):
             self.future.set_result(None)
 
 
+# Bytes read out of a closing channel's stream, by the address of its
+# IOBluetoothRFCOMMChannel. Written on a framework thread and taken on the main
+# thread, in the delegate's rfcommChannelClosed:.
+_unread: dict[int, bytes] = {}
+
+
+def _address_of(channel: object) -> int:
+    """
+    Get the address an IOBluetoothRFCOMMChannel is known by in ``_unread``.
+
+    Args:
+        channel: The channel, or ``None`` where the framework gave none.
+
+    Returns:
+        Its address, or 0 for anything that has none.
+    """
+    pointer = getattr(channel, "ptr", None)
+    return cast(int, getattr(pointer, "value", None) or 0)
+
+
 class _ChannelDelegate(NSObject, protocols=[IOBluetoothRFCOMMChannelDelegate]):
     """
     Everything one open RFCOMM channel reports back.
@@ -819,7 +841,13 @@ class _ChannelDelegate(NSObject, protocols=[IOBluetoothRFCOMMChannelDelegate]):
         self.arrived.put_nowait(ctypes.string_at(_data, cast(int, _length)))
 
     @objc_method
-    def rfcommChannelClosed_(self, _channel: ObjCInstance) -> None:
+    def rfcommChannelClosed_(self, channel: ObjCInstance) -> None:
+        # What IOBluetooth was about to throw away. See keep_unread_bytes.
+        unread = _unread.pop(_address_of(channel), None)
+
+        if unread:
+            self.arrived.put_nowait(unread)
+
         self.ended.set()
 
     @objc_method
@@ -1056,6 +1084,7 @@ class Channel:
         if not hasattr(self, "_channel"):
             return
 
+        _unread.pop(_address_of(self._channel), None)
         # Dropped inside a pool for the reason close() explains at length.
         with autoreleasepool():
             del self._channel
@@ -1094,6 +1123,7 @@ class Channel:
         except TimeoutError:
             logger.warning("RFCOMM channel did not finish closing")
         finally:
+            _unread.pop(_address_of(self._channel), None)
             with autoreleasepool():
                 # Deleted rather than set aside, because this object is
                 # finished: anything that reaches for the channel afterwards
@@ -1376,6 +1406,9 @@ def _close_unclaimed_socket(opened: _OpenResult) -> None:
 # framework calls through them on threads of its own.
 _hooked: list[object] = []
 
+# The same for the hook keep_unread_bytes installs.
+_keeping: list[object] = []
+
 
 def hear_open_results() -> None:
     """
@@ -1423,6 +1456,153 @@ def hear_open_results() -> None:
 
     replacement = _HandleOpened(opened)
     _hooked.extend([original, replacement])
+    _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
+
+
+_Removal = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+# How much of a closing channel's stream is read at a time. Only a buffer size.
+_UNREAD_PIECE_BYTES = 4096
+_RFCOMMCHANNEL = _objc.sel_registerName(b"rfcommchannel")
+_INPUT_STREAM = _objc.sel_registerName(b"inputStream")
+_PROPERTY_FOR_KEY = _objc.sel_registerName(b"propertyForKey:")
+_DELEGATE = _objc.sel_registerName(b"delegate")
+_NSDATA = _objc.objc_getClass(b"NSData")
+_core_foundation = ctypes.CDLL(
+    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+)
+_core_foundation.CFDataGetLength.restype = ctypes.c_long
+_core_foundation.CFDataGetLength.argtypes = [ctypes.c_void_p]
+_core_foundation.CFDataGetBytePtr.restype = ctypes.c_void_p
+_core_foundation.CFDataGetBytePtr.argtypes = [ctypes.c_void_p]
+_SOCKET_HANDLE = ctypes.c_void_p.in_dll(
+    _core_foundation, "kCFStreamPropertySocketNativeHandle"
+).value
+
+
+def _socket_of(stream: int) -> int | None:
+    """
+    Find the socket under a channel's input stream.
+
+    Runs on a framework thread, so it uses plain message sends only.
+
+    Args:
+        stream: The address of the stream.
+
+    Returns:
+        The socket's descriptor, or ``None`` if the stream does not say.
+    """
+    handle = _send_with_object(stream, _PROPERTY_FOR_KEY, _SOCKET_HANDLE)
+
+    if not handle or not _send_is_kind(handle, _IS_KIND_OF_CLASS, _NSDATA):
+        return None
+
+    if _core_foundation.CFDataGetLength(handle) != ctypes.sizeof(ctypes.c_int):
+        return None
+
+    return ctypes.c_int.from_address(_core_foundation.CFDataGetBytePtr(handle)).value
+
+
+def _read_unread(channel: int) -> bytes:
+    """
+    Read what is left in a channel's input stream.
+
+    Runs on a framework thread, so it uses plain message sends only.
+
+    Args:
+        channel: The address of the IOBluetoothRFCOMMChannel.
+
+    Returns:
+        The bytes, if any.
+    """
+    rfcomm = _send_for_object(channel, _RFCOMMCHANNEL)
+    stream = _send_for_object(rfcomm, _INPUT_STREAM) if rfcomm else None
+
+    if not stream:
+        return b""
+
+    descriptor = _socket_of(stream)
+
+    if descriptor is None:
+        return b""
+
+    # Straight from the socket, without waiting, and never through the stream.
+    # The stream's read can wait on a socket that has already ended: measured
+    # on macOS 26.6.2 against a Pybricks EV3 on firmware 4.1.0b6, it waited on
+    # one that poll() called hung up and empty, holding up the framework queue
+    # this runs on, and every open after it failed until the helper exited.
+    #
+    # The main run loop may be reading the same socket through the stream. What
+    # it has read it has already handed to the delegate, and the close reaches
+    # the main thread only after this runs.
+    pieces: list[bytes] = []
+
+    with socket.socket(fileno=os.dup(descriptor)) as reader:
+        while True:
+            try:
+                piece = reader.recv(_UNREAD_PIECE_BYTES, socket.MSG_DONTWAIT)
+            except BlockingIOError:
+                break
+
+            if not piece:
+                break
+
+            pieces.append(piece)
+
+    return b"".join(pieces)
+
+
+def keep_unread_bytes() -> None:
+    """
+    Keep the bytes a channel received just before the device hung up.
+
+    Wraps ``-[IOBluetoothRFCOMMChannel removeRFCOMMChannelforDevice]``, in
+    this process only, to read the channel's socket dry before its input
+    stream is closed. The delegate's ``rfcommChannelClosed:`` hands the bytes
+    over.
+
+    Does nothing if this macOS has no such method, and nothing the second time.
+    """
+    # When the device hangs up, the removal closes the input stream on a
+    # framework thread without reading what is left, while the stream's own
+    # reads happen on the main run loop. So bytes that arrive just before the
+    # hang-up are thrown away. Read in the disassembly of IOBluetooth on macOS
+    # 26.6.2 (25G83). Measured on the same macOS against a BlueZ 5.85 server
+    # that sends and hangs up at once, with the helper's main thread held up
+    # for 0.3 s as the channel opened: 12 of 12 sends lost without this hook,
+    # none with it. The removal sends rfcommChannelClosed: to the main thread
+    # after it has run, so the bytes are in place by then.
+    if _keeping:
+        return
+
+    try:
+        selector = _objc.sel_registerName(b"removeRFCOMMChannelforDevice")
+        method = _objc.class_getInstanceMethod(
+            _class("IOBluetoothRFCOMMChannel").ptr, selector
+        )
+    except Exception:  # noqa: BLE001
+        method = None
+    if not method:
+        logger.debug("IOBluetooth has no removeRFCOMMChannelforDevice to wrap")
+        return
+
+    original = _Removal(_objc.method_getImplementation(method))
+
+    def removing(channel: int, selector: int) -> None:
+        try:
+            # A channel nobody has taken yet has nobody to hand bytes to.
+            if _send_for_object(channel, _DELEGATE):
+                unread = _read_unread(channel)
+
+                if unread:
+                    _unread[channel] = unread
+        except Exception:
+            # Losing these bytes is what happened without the hook.
+            logger.debug("could not read a closing channel's stream", exc_info=True)
+
+        original(channel, selector)
+
+    replacement = _Removal(removing)
+    _keeping.extend([original, replacement])
     _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
 
 

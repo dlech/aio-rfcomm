@@ -17,6 +17,7 @@ key-value observable property, which is all the real one is from here.
 # peer name its version.
 
 import asyncio
+import ctypes
 import os
 import socket
 import sys
@@ -32,7 +33,7 @@ from typing_extensions import override
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
-from rubicon.objc import NSObject, ObjCInstance, ns_from_py, objc_property
+from rubicon.objc import NSObject, ObjCInstance, ns_from_py, objc_method, objc_property
 from rubicon.objc.runtime import set_ivar
 
 from aio_rfcomm.availability import Availability
@@ -805,6 +806,135 @@ def _is_open(descriptor: int) -> bool:
         return False
 
     return True
+
+
+# Never set: the stream's own read waits, as it did on macOS 26.6.2 on a socket
+# that had already ended.
+_never = threading.Event()
+
+
+class _Stream(NSObject):
+    """
+    The input stream of a channel, over a real socket.
+    """
+
+    @objc_method
+    def hasBytesAvailable(self) -> bool:
+        # Yes even with nothing there, as measured on macOS 26.6.2.
+        return True
+
+    @objc_method
+    def propertyForKey_(self, key: ObjCInstance) -> ObjCInstance:
+        descriptor: int | None = cast(Any, self).descriptor
+        said = b""
+
+        if str(key) == "kCFStreamPropertySocketNativeHandle" and descriptor is not None:
+            said = bytes(c_int(descriptor))
+
+        return cast(ObjCInstance, ns_from_py(said))
+
+    @objc_method
+    def read_maxLength_(self, buffer: ctypes.c_void_p, length: ctypes.c_ulong) -> int:
+        _never.wait()
+        return 0
+
+
+class _RFCOMMChannel(NSObject):
+    """
+    CoreBluetooth's ``CBRFCOMMChannel``, which only gives its stream here.
+    """
+
+    inputStream = objc_property()
+
+
+class _ClosingChannel(NSObject):
+    """
+    An ``IOBluetoothRFCOMMChannel`` as its removal finds it.
+    """
+
+    rfcommchannel = objc_property()
+
+
+def _closing_channel(descriptor: int | None) -> NSObject:
+    stream = _Stream.alloc().init()
+    cast(Any, stream).descriptor = descriptor
+    rfcomm = _RFCOMMChannel.alloc().init()
+    cast(Any, rfcomm).inputStream = stream
+    channel = _ClosingChannel.alloc().init()
+    cast(Any, channel).rfcommchannel = rfcomm
+    return channel
+
+
+def _read_unread_on_a_thread(channel: NSObject) -> bytes:
+    # A thread with a bound, so that a read that waits fails the test rather
+    # than hanging the suite.
+    read: list[bytes] = []
+    framework = threading.Thread(
+        target=lambda: read.append(_native._read_unread(_pointer(channel))),
+        daemon=True,
+    )
+    framework.start()
+    framework.join(5)
+    assert read, "the read waited"
+    return read[0]
+
+
+def test_what_a_closing_channel_had_not_read_is_read_out() -> None:
+    left = bytes(range(256)) * 20 + b"tail"
+    ours, theirs = socket.socketpair()
+
+    with ours, theirs:
+        theirs.sendall(left)
+        theirs.shutdown(socket.SHUT_WR)
+
+        assert _read_unread_on_a_thread(_closing_channel(ours.fileno())) == left
+
+
+def test_a_closing_channel_with_nothing_unread_does_not_wait() -> None:
+    ours, theirs = socket.socketpair()
+
+    with ours, theirs:
+        assert _read_unread_on_a_thread(_closing_channel(ours.fileno())) == b""
+
+
+def test_a_socket_that_has_ended_with_nothing_left_does_not_wait() -> None:
+    ours, theirs = socket.socketpair()
+
+    with ours:
+        theirs.close()
+
+        assert _read_unread_on_a_thread(_closing_channel(ours.fileno())) == b""
+
+
+def test_what_arrived_is_read_out_without_waiting_for_the_end() -> None:
+    ours, theirs = socket.socketpair()
+
+    with ours, theirs:
+        theirs.sendall(b"tail")
+
+        assert _read_unread_on_a_thread(_closing_channel(ours.fileno())) == b"tail"
+
+
+def test_a_stream_that_does_not_say_its_socket_has_nothing_unread() -> None:
+    assert _read_unread_on_a_thread(_closing_channel(None)) == b""
+
+
+def test_a_channel_with_no_stream_left_has_nothing_unread() -> None:
+    channel = _ClosingChannel.alloc().init()
+
+    assert _native._read_unread(_pointer(channel)) == b""
+
+
+async def test_bytes_read_out_at_close_arrive_before_the_end() -> None:
+    delegate = cast(Any, _native._ChannelDelegate.alloc().init())
+    channel = _ClosingChannel.alloc().init()
+    _native._unread[_pointer(channel)] = b"tail"
+
+    delegate.rfcommChannelClosed_(channel)
+
+    assert delegate.arrived.get_nowait() == b"tail"
+    assert delegate.ended.is_set()
+    assert not _native._unread
 
 
 def test_the_null_device_a_failed_open_leaves_is_closed() -> None:

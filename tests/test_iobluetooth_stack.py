@@ -147,6 +147,32 @@ async def test_a_peer_that_hangs_up_ends_the_stream(
         assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
+async def test_what_arrives_as_the_peer_hangs_up_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The last bytes and the hang-up can arrive together while the helper is
+    still waiting to pass on what came before. The bytes go first.
+    """
+    fake_framework(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        fake = opened[-1]
+        # More than every buffer between here and the helper holds.
+        fake.arrive(bytes(4 * 1024 * 1024))
+        await asyncio.sleep(0.05)
+        fake.arrive(b"tail")
+        fake.hang_up()
+
+        received = bytearray()
+        async with asyncio.timeout(5):
+            with pytest.raises(ChannelClosedError):
+                while True:
+                    received += await channel.receive()
+
+        assert len(received) == 4 * 1024 * 1024 + 4
+        assert received.endswith(b"tail")
+
+
 async def test_a_lost_link_is_not_mistaken_for_a_hang_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

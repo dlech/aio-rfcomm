@@ -423,7 +423,20 @@ async def _carry(
             settle(CloseReason.LINK_LOST)
 
     async def watch_channel() -> None:
-        settle(await channel.wait_until_ended())
+        reason = await channel.wait_until_ended()
+
+        # The last bytes can arrive with the end, while from_device still
+        # waits to pass on what came before. They go out before the end does.
+        try:
+            while not channel.arrived.empty():
+                writer.write(channel.arrived.get_nowait())
+
+            await writer.drain()
+        except OSError:
+            settle(CloseReason.LINK_LOST)
+            return
+
+        settle(reason)
 
     async with asyncio.TaskGroup() as group:
         tasks = [
@@ -473,6 +486,7 @@ def main() -> int:
 
     sock = socket.socket(fileno=fd)
     _native.hear_open_results()
+    _native.keep_unread_bytes()
     # Every IOBluetooth call below runs on this thread, driven by the
     # CFRunLoop this loop is built on. Anywhere else, asynchronous calls
     # return success and then never complete.
