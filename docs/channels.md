@@ -38,40 +38,37 @@ far end may arrive split across several `receive` calls, or share one with the
 message after it. Anything message-shaped has to be framed by your code.
 
 A delimiter is the simplest thing that works, and a newline is the usual one
-for text protocols:
+for text protocols.
+[`receive_until`][aio_rfcomm.RfcommChannel.receive_until] takes the bytes up
+to one, takes the delimiter too, and returns what came before it:
 
 ```python
-def split_lines(buffer: bytearray, arrived: bytes) -> Iterator[str]:
-    buffer += arrived
-    while (end := buffer.find(b"\n")) >= 0:
-        line = bytes(buffer[:end])
-        del buffer[: end + 1]
-        yield line.decode("utf-8", errors="replace")
+line = await channel.receive_until(b"\n", max_bytes=1024)
 ```
+
+`max_bytes` is required, delimiter included, so that a peer that never sends
+one cannot make your program buffer for ever; past it,
+[`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError] is raised
+and nothing is taken.
 
 Binary protocols usually put a length at the front instead, which means
-reading an exact number of bytes:
+reading an exact number of bytes, as
+[`receive_exactly`][aio_rfcomm.RfcommChannel.receive_exactly] does:
 
 ```python
-async def read_exactly(channel, count: int, buffer: bytearray) -> bytes:
-    while len(buffer) < count:
-        buffer += await channel.receive()
-    taken = bytes(buffer[:count])
-    del buffer[:count]
-    return taken
-
-
-async def read_message(channel, buffer: bytearray) -> bytes:
-    (length,) = struct.unpack("<H", await read_exactly(channel, 2, buffer))
-    return await read_exactly(channel, length, buffer)
+async def read_message(channel) -> bytes:
+    (length,) = struct.unpack("<H", await channel.receive_exactly(2))
+    return await channel.receive_exactly(length)
 ```
 
-The buffer has to outlive the call in both cases: whatever arrived past the
-end of one message is the start of the next, and dropping it corrupts
-everything that follows.
+Every way of receiving shares one buffer kept by the channel, so they can be
+mixed freely, and whatever arrives past the end of one message is kept for the
+next. Cancelling one loses nothing: what it had gathered is left for the next
+call. A channel that ends part way through raises its ending, and leaves what
+had arrived for `receive`.
 
 !!! tip "Do not size reads to messages"
 
     `receive(max_bytes)` caps how much comes back; it does not wait for that
     much. Asking for exactly the number of bytes you want does not get you
-    them, which is why the loop above exists.
+    them — that is what `receive_exactly` is for.

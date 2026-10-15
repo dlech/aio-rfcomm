@@ -71,6 +71,10 @@ A channel that Bluetooth going away ended raises
 [`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError]
 instead, in the same way: the connection did not fail, Bluetooth did.
 
+[`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError] means
+[`receive_until`][aio_rfcomm.RfcommChannel.receive_until] found no delimiter
+within its limit: the peer sent something your program did not expect.
+
 ## Limits
 
 | Error | Means |

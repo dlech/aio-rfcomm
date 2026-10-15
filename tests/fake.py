@@ -78,6 +78,13 @@ class FakeChannel(BackendChannel):
 
     # -- test controls -------------------------------------------------
 
+    @property
+    def undelivered(self) -> int:
+        """
+        How many delivered bytes the channel has not yet taken.
+        """
+        return len(self._incoming)
+
     def deliver(self, data: bytes) -> None:
         """
         Hand the channel some incoming bytes.

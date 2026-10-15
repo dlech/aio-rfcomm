@@ -7,6 +7,8 @@ The channel handle callers hold.
 
 import asyncio
 import copy
+from collections.abc import Generator
+from contextlib import contextmanager
 
 from aio_rfcomm._scope import Scope
 from aio_rfcomm.backend.provider import BackendChannel
@@ -15,6 +17,7 @@ from aio_rfcomm.errors import (
     ChannelBrokenError,
     ChannelBusyError,
     ChannelClosedError,
+    DelimiterNotFoundError,
     RfcommError,
 )
 
@@ -54,6 +57,9 @@ class RfcommChannel:
         self._receiving = False
         self._send_cancelled = False
         self._ending: RfcommError | None = None
+        # What was taken from the backend and not yet handed out, shared by
+        # every way of receiving so that mixing them loses nothing.
+        self._unread = bytearray()
 
     async def send(self, data: bytes) -> None:
         """
@@ -121,17 +127,121 @@ class RfcommChannel:
         if max_bytes is not None and max_bytes < 1:
             raise ValueError(f"max_bytes must be at least 1, not {max_bytes}")
 
+        with self._reading():
+            if self._unread:
+                return self._take(len(self._unread) if max_bytes is None else max_bytes)
+            return await self._more(max_bytes)
+
+    async def receive_exactly(self, count: int) -> bytes:
+        """
+        Take exactly ``count`` bytes, waiting for as many as it takes.
+
+        Cancelling it loses nothing: what it had gathered is left for the next
+        call.
+
+        Args:
+            count: How many bytes, at least 1.
+
+        Returns:
+            Exactly ``count`` bytes.
+
+        Raises:
+            ChannelClosedError: The connection ended first. Whatever had
+                arrived is left for :meth:`receive`.
+            BluetoothUnavailableError: Bluetooth went away first, likewise.
+            ValueError: ``count`` is less than 1.
+        """
+        if count < 1:
+            raise ValueError(f"count must be at least 1, not {count}")
+
+        with self._reading():
+            while len(self._unread) < count:
+                self._unread += await self._more(None)
+            return self._take(count)
+
+    async def receive_until(self, delimiter: bytes, *, max_bytes: int) -> bytes:
+        """
+        Take the bytes up to a delimiter, which is taken too and not returned.
+
+        A line is ``await channel.receive_until(b"\\n", max_bytes=1024)``.
+        Cancelling it loses nothing: what it had gathered is left for the next
+        call.
+
+        Args:
+            delimiter: What ends the bytes wanted. Not empty.
+            max_bytes: The most to look through for it, delimiter included,
+                so that a peer that never sends one cannot make this buffer
+                for ever. At least as long as the delimiter.
+
+        Returns:
+            The bytes before the delimiter.
+
+        Raises:
+            DelimiterNotFoundError: No delimiter within ``max_bytes``. Nothing
+                is taken.
+            ChannelClosedError: The connection ended first. Whatever had
+                arrived is left for :meth:`receive`.
+            BluetoothUnavailableError: Bluetooth went away first, likewise.
+            ValueError: ``delimiter`` is empty, or longer than ``max_bytes``.
+        """
+        if not delimiter:
+            raise ValueError("the delimiter must not be empty")
+        if max_bytes < len(delimiter):
+            raise ValueError(
+                f"max_bytes must be at least the delimiter's length, not {max_bytes}"
+            )
+
+        with self._reading():
+            searched = 0
+            # Bounded, so only a delimiter that ends within max_bytes is found.
+            while (found := self._unread.find(delimiter, searched, max_bytes)) < 0:
+                if len(self._unread) >= max_bytes:
+                    raise DelimiterNotFoundError(
+                        f"no {delimiter!r} within {max_bytes} bytes"
+                    )
+                # A delimiter can straddle what was there and what arrives.
+                searched = max(0, len(self._unread) - len(delimiter) + 1)
+                self._unread += await self._more(None)
+
+            line = self._take(found)
+            del self._unread[: len(delimiter)]
+            return line
+
+    @contextmanager
+    def _reading(self) -> Generator[None, None, None]:
+        """
+        Hold the receiving direction for one call.
+
+        Raises:
+            ScopeClosedError: The channel's block has ended.
+            ChannelBusyError: Another task is receiving.
+        """
         self._scope.check()
         if self._receiving:
             raise ChannelBusyError("another task is already receiving on this channel")
 
         self._receiving = True
         try:
+            yield
+        finally:
+            self._receiving = False
+
+    async def _more(self, max_bytes: int | None) -> bytes:
+        """
+        Wait for the backend to hand over more.
+
+        Raises:
+            RfcommError: How the channel ended.
+        """
+        try:
             return await self._backend.receive(max_bytes)
         except ChannelClosedError as closed:
             raise self._settle(closed) from closed
-        finally:
-            self._receiving = False
+
+    def _take(self, count: int) -> bytes:
+        taken = bytes(self._unread[:count])
+        del self._unread[:count]
+        return taken
 
     def _over(self) -> bool:
         return self._ending is not None or self._backend.ended

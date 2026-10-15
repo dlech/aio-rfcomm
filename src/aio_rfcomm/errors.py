@@ -33,6 +33,7 @@ __all__ = [
     "ChannelInUseError",
     "CloseReason",
     "ConnectionFailedError",
+    "DelimiterNotFoundError",
     "DeviceNotFoundError",
     "RfcommError",
     "ScopeClosedError",
@@ -168,6 +169,17 @@ class ChannelClosedError(RfcommError):
     def __reduce__(self) -> tuple[type[Self], tuple[CloseReason]]:
         # Rebuilt from the reason, not from the message it was turned into.
         return type(self), (self.reason,)
+
+
+class DelimiterNotFoundError(RfcommError):
+    """
+    :meth:`~aio_rfcomm.RfcommChannel.receive_until` looked through as many
+    bytes as it was allowed without finding its delimiter.
+
+    The peer sent something the program did not expect -- a line longer than
+    any it should send, say. Nothing was taken, so what arrived can still be
+    read with :meth:`~aio_rfcomm.RfcommChannel.receive`.
+    """
 
 
 # --------------------------------------------------------------------------
