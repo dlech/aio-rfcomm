@@ -124,6 +124,13 @@ is not noticed until the program opens Bluetooth again, and one switched off
 later is noticed by the channels it ends rather than by
 [`watch_availability`][aio_rfcomm.Bluetooth.watch_availability].
 
+**A refused channel number is not told apart yet.** Opening a channel nothing
+on the device is listening on raises
+[`ConnectionFailedError`][aio_rfcomm.errors.ConnectionFailedError] here, after
+the usual retries, rather than the
+[`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] macOS and
+Linux raise, because what Windows reports for it has not been measured.
+
 **Serving accepts connections on its own thread** rather than through asyncio.
 Windows' default event loop cannot accept Bluetooth connections: to accept, it
 duplicates the listening socket, and it creates the duplicate without naming a

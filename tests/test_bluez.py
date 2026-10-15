@@ -10,6 +10,7 @@ all ordinary logic. They are also where the bugs have actually been, so they
 are worth pinning down here rather than leaving to a machine with Bluetooth.
 """
 
+import errno
 import os
 import socket
 import uuid
@@ -28,6 +29,7 @@ from aio_rfcomm.backend.bluez import (
     _Profiles,
     _translate_connect,
     _translate_registration,
+    _translate_socket_connect,
     _wanted,
 )
 from aio_rfcomm.discovery import RfcommDeviceInfo
@@ -293,6 +295,22 @@ async def test_channel_numbers_need_bluetooth_sockets(
     with pytest.raises(UnsupportedOperationError, match="libbluetooth"):
         async with _bluetooth().open_channel(RfcommDeviceInfo("00:11:22:33:44:55"), 1):
             pass
+
+
+def test_a_refused_channel_means_nothing_is_listening() -> None:
+    error = _translate_socket_connect(
+        ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused"),
+        "00:11:22:33:44:55",
+        12,
+    )
+    assert isinstance(error, ServiceNotFoundError)
+
+
+def test_other_socket_failures_are_failed_connections() -> None:
+    error = _translate_socket_connect(
+        OSError(errno.EHOSTDOWN, "Host is down"), "00:11:22:33:44:55", 12
+    )
+    assert isinstance(error, ConnectionFailedError)
 
 
 # --------------------------------------------------------------------------

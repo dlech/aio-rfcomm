@@ -246,7 +246,10 @@ class Bluetooth:
             exit. Entering it raises what opening the channel raises:
             :class:`~aio_rfcomm.errors.BluetoothUnavailableError` if Bluetooth
             is or becomes unusable,
-            :class:`~aio_rfcomm.errors.DeviceNotFoundError` or
+            :class:`~aio_rfcomm.errors.DeviceNotFoundError`,
+            :class:`~aio_rfcomm.errors.ServiceNotFoundError` if the device
+            refused the channel -- on macOS and Linux, and usually because
+            nothing there is listening on it -- or
             :class:`~aio_rfcomm.errors.ConnectionFailedError`.
 
         Raises:

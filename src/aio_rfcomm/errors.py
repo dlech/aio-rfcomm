@@ -103,7 +103,9 @@ class DeviceNotFoundError(RfcommError):
 
 class ServiceNotFoundError(RfcommError):
     """
-    The device does not offer the requested service.
+    The device does not offer the requested service, or, opening by channel
+    number on macOS or Linux, refused the channel -- usually because nothing
+    there is listening on it.
 
     The service record may simply not be cached. Refreshing it is not
     something this library can do on every platform; see the design notes.

@@ -345,6 +345,7 @@ def main() -> int:
     )
 
     sock = socket.socket(fileno=fd)
+    _native.hear_open_results()
     # Every IOBluetooth call below runs on this thread, driven by the
     # CFRunLoop this loop is built on. Anywhere else, asynchronous calls
     # return success and then never complete.

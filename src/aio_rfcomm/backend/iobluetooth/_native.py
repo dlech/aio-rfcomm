@@ -63,10 +63,12 @@ from aio_rfcomm.errors import (
 __all__ = [
     "Channel",
     "MachError",
+    "hear_open_results",
     "list_known_devices",
     "open_channel",
     "read_authorization",
     "read_power_state",
+    "record_open_result",
     "report_states",
 ]
 
@@ -217,6 +219,18 @@ IOBluetoothRFCOMMChannelDelegate = ObjCProtocol("IOBluetoothRFCOMMChannelDelegat
 # and at module scope a class a future macOS lacks would take the backend down.
 _COORDINATOR = "IOBluetoothCoreBluetoothCoordinator"
 
+# The runtime calls the hook in hear_open_results needs, declared on a handle
+# of its own so as not to disturb rubicon's declarations of the same functions.
+_objc = ctypes.CDLL("/usr/lib/libobjc.dylib")
+_objc.sel_registerName.restype = ctypes.c_void_p
+_objc.sel_registerName.argtypes = [ctypes.c_char_p]
+_objc.class_getInstanceMethod.restype = ctypes.c_void_p
+_objc.class_getInstanceMethod.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_objc.method_getImplementation.restype = ctypes.c_void_p
+_objc.method_getImplementation.argtypes = [ctypes.c_void_p]
+_objc.method_setImplementation.restype = ctypes.c_void_p
+_objc.method_setImplementation.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
 if TYPE_CHECKING:
 
     def _mach_error_string(code: int) -> bytes: ...
@@ -301,6 +315,16 @@ class _Completion(Protocol):
 # arrives leaks one small object, which is the cheaper of the two failures.
 _awaiting_completion: dict[int, _Completion] = {}
 _completion_tokens = itertools.count()
+
+# bluetoothd's result for an RFCOMM channel the device answers for but nothing
+# on it listens on -- measured against BlueZ. CoreBluetooth has no name for it
+# and hands IOBluetooth 0, and the open is then never reported at all.
+_RESULT_REFUSED = 913
+
+# bluetoothd's own result for each channel open, before CoreBluetooth reduces
+# it to an error code, by device address and channel. Written on a framework
+# thread by the hook hear_open_results installs.
+_open_results: dict[tuple[str, int], int] = {}
 
 # Devices a caller is using. Claimed before the link is brought up and held
 # until after the channel closes, so for part of its life there is no channel
@@ -1125,6 +1149,84 @@ async def _wait_for_relink(key: str) -> None:
         await asyncio.sleep(left)
 
 
+_HandleOpened = ctypes.CFUNCTYPE(
+    None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+)
+
+# The hook and what it replaced, kept for the life of the process: the
+# framework calls through them on threads of its own.
+_hooked: list[object] = []
+
+
+def hear_open_results() -> None:
+    """
+    Keep bluetoothd's result for each channel open, which nothing else sees.
+
+    ``-[CBClassicPeer handleRFCOMMChannelOpened:]`` turns the daemon's result
+    into an ``NSError`` and passes IOBluetooth only its code, which is 0 for
+    any result CoreBluetooth has no name for -- a refused channel among them
+    (follow-ups §13.6). So the method is wrapped, in this process only, to
+    note the result first and then do exactly what it did.
+
+    Does nothing if this macOS has no such method, and nothing the second time.
+    """
+    if _hooked:
+        return
+
+    try:
+        selector = _objc.sel_registerName(b"handleRFCOMMChannelOpened:")
+        method = _objc.class_getInstanceMethod(_class("CBClassicPeer").ptr, selector)
+    except Exception:  # noqa: BLE001
+        method = None
+    if not method:
+        logger.debug("CoreBluetooth has no handleRFCOMMChannelOpened: to hear")
+        return
+
+    original = _HandleOpened(_objc.method_getImplementation(method))
+
+    def opened(peer: int, selector: int, info: int) -> None:
+        try:
+            _note_open_result(ObjCInstance(objc_id(peer)), ObjCInstance(objc_id(info)))
+        except Exception:
+            # Losing the note costs a clearer error, never the open itself.
+            logger.debug("could not read a channel open's result", exc_info=True)
+        original(peer, selector, info)
+
+    replacement = _HandleOpened(opened)
+    _hooked.extend([original, replacement])
+    _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
+
+
+def _note_open_result(peer: ObjCInstance, info: ObjCInstance) -> None:
+    """
+    Note one channel open's result as bluetoothd reported it.
+
+    Args:
+        peer: The ``CBClassicPeer`` the channel was opened to.
+        info: What bluetoothd sent: ``kCBMsgArgResult`` and
+            ``kCBMsgArgRFCOMMChannelID`` among it.
+    """
+    result = info.objectForKey_("kCBMsgArgResult")
+    channel = info.objectForKey_("kCBMsgArgRFCOMMChannelID")
+    if result is None or channel is None:
+        return
+    record_open_result(
+        str(peer.addressString), int(channel.intValue), int(result.intValue)
+    )
+
+
+def record_open_result(address: str, channel: int, result: int) -> None:
+    """
+    Record bluetoothd's result for one channel open.
+
+    Args:
+        address: The device's address, in any of the forms IOBluetooth writes.
+        channel: The RFCOMM channel number.
+        result: The daemon's ``kCBMsgArgResult``, 0 for success.
+    """
+    _open_results[(_normalise(address), channel)] = result
+
+
 async def _open_reported(device: _Device, number: int, address: str) -> Channel:
     """
     Open a channel, asking again if the framework never says whether it did.
@@ -1144,10 +1246,14 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
         The channel, open.
 
     Raises:
+        ServiceNotFoundError: The device refused the channel, usually
+            because nothing there is listening on it.
         ConnectionFailedError: The channel could not be opened, or the
             framework never reported one open.
     """
+    key = (_normalise(address), number)
     for _attempt in range(_OPEN_REPORT_ATTEMPTS):
+        _open_results.pop(key, None)
         opening = await _request(device, number, address)
         try:
             async with asyncio.timeout(_OPEN_REPORT_SECONDS):
@@ -1158,12 +1264,18 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
                 f"could not open channel {number} on {address}: {error}"
             ) from error
         except TimeoutError:
+            opening.release()
+            if _open_results.get(key) == _RESULT_REFUSED:
+                # Asking again would be refused again.
+                raise ServiceNotFoundError(
+                    f"{address} refused channel {number}; usually nothing there "
+                    "is listening on it"
+                ) from None
             logger.debug(
                 "channel %d to %s was never reported open; asking again",
                 number,
                 address,
             )
-            opening.release()
             continue
         except BaseException:
             await opening.close()

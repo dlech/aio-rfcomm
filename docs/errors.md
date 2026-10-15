@@ -42,7 +42,7 @@ user, and a program that cannot tell them apart tells them the wrong one.
 | Error | Means |
 | --- | --- |
 | [`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError] | The device did not answer. Switched off, out of range, or never there. |
-| [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] | The device does not offer that service — or its record is not cached. See [Platforms](platforms.md). |
+| [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] | The device does not offer that service — or its record is not cached. See [Platforms](platforms.md). From [`open_channel`][aio_rfcomm.Bluetooth.open_channel] on macOS and Linux: the device refused the channel, usually because nothing there is listening on it. |
 | [`ConnectionFailedError`][aio_rfcomm.errors.ConnectionFailedError] | The channel could not be opened, after any retries. |
 
 ## Using a channel

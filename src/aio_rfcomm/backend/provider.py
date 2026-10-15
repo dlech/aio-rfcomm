@@ -262,6 +262,8 @@ class BackendBluetooth(ABC):
         Raises:
             BluetoothUnavailableError: Bluetooth turned out not to be usable.
             DeviceNotFoundError: The device could not be reached.
+            ServiceNotFoundError: The device refused the channel, usually
+                because nothing there is listening on it.
             ConnectionFailedError: The channel could not be opened.
             UnsupportedOperationError: The platform cannot open a channel
                 now, though it could at another time. macOS holds only one

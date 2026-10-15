@@ -817,9 +817,7 @@ class BlueZBluetooth(BackendBluetooth):
             try:
                 await asyncio.get_running_loop().sock_connect(sock, (address, channel))
             except OSError as error:
-                raise ConnectionFailedError(
-                    f"could not reach {address} on channel {channel}: {error}"
-                ) from error
+                raise _translate_socket_connect(error, address, channel) from error
 
             transport, protocol = await open_stream(sock)
             opened = BlueZChannel(transport, protocol, self.refresh)
@@ -1206,3 +1204,31 @@ def _translate_connect(error: Exception, address: str, uuid: str) -> RfcommError
     if "page-timeout" in text or "NotReady" in text or "Host is down" in text:
         return DeviceNotFoundError(f"{address} did not answer")
     return ConnectionFailedError(f"could not open a channel to {address}: {text}")
+
+
+def _translate_socket_connect(
+    error: OSError, address: str, channel: int
+) -> RfcommError:
+    """
+    Turn a failed RFCOMM socket connect into one of ours.
+
+    Args:
+        error: What ``connect`` raised.
+        address: The device being connected to.
+        channel: The channel number.
+
+    Returns:
+        The error to raise instead.
+    """
+    match error.errno:
+        case errno.ECONNREFUSED:
+            # Any refusal reads the same; nothing listening is the one measured
+            # (5.72).
+            return ServiceNotFoundError(
+                f"{address} refused channel {channel}; usually nothing there is "
+                "listening on it"
+            )
+        case _:
+            return ConnectionFailedError(
+                f"could not reach {address} on channel {channel}: {error}"
+            )

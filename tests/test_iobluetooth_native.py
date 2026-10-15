@@ -14,13 +14,15 @@ import asyncio
 import sys
 import time
 from ctypes import c_int
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from typing_extensions import override
 
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
+from rubicon.objc import ObjCInstance, ns_from_py
 from rubicon.objc.runtime import set_ivar
 
 from aio_rfcomm.availability import Availability
@@ -31,6 +33,7 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ConnectionFailedError,
     DeviceNotFoundError,
+    ServiceNotFoundError,
     UnsupportedOperationError,
 )
 from tests.fake_iobluetooth import (
@@ -607,6 +610,7 @@ def quick(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_native, "_OPEN_REPORT_SECONDS", 0.05)
     monkeypatch.setattr(_native, "_SETTLE_SECONDS", 0.01)
     monkeypatch.setattr(_native, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(_native, "_open_results", {})
     monkeypatch.setattr(
         _native,
         "IOBluetoothRFCOMMChannel",
@@ -642,6 +646,76 @@ async def test_an_open_never_reported_at_all_gives_up_and_says_so(
     with pytest.raises(ConnectionFailedError, match="never reported"):
         await _native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == _native._OPEN_REPORT_ATTEMPTS
+
+
+class RefusingDevice(FlakyDevice):
+    """
+    A device with nothing listening on the channel asked for.
+
+    Measured against BlueZ: bluetoothd reports result 913 for each attempt,
+    within a second of it, and neither delegate method is ever called.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(report_on=99)
+
+    @override
+    def openRFCOMMChannelAsync(
+        self, _out: object, /, *, withChannelID: int, delegate: object
+    ) -> int:
+        self.attempts += 1
+        asyncio.get_running_loop().call_soon(
+            _native.record_open_result, ADDRESS, withChannelID, 913
+        )
+        return 0
+
+
+async def test_a_refused_channel_is_not_asked_for_again(quick: None) -> None:
+    device = RefusingDevice()
+    with pytest.raises(ServiceNotFoundError, match="refused channel 4"):
+        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == 1
+
+
+class _Peer:
+    # As measured: CBClassicPeer writes the address upper case with colons.
+    addressString = "00:1A:7D:DA:71:0C"
+
+
+async def test_the_result_the_daemon_sent_is_noted_by_address_and_channel(
+    quick: None,
+) -> None:
+    info = cast(
+        ObjCInstance,
+        ns_from_py({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12}),
+    )
+    _native._note_open_result(cast(Any, _Peer()), info)
+    assert _native._open_results == {(ADDRESS, 12): 913}
+
+
+async def test_a_result_without_a_channel_is_ignored(quick: None) -> None:
+    info = cast(ObjCInstance, ns_from_py({"kCBMsgArgResult": 913}))
+    _native._note_open_result(cast(Any, _Peer()), info)
+    assert _native._open_results == {}
+
+
+async def test_a_refusal_of_another_channel_is_not_taken_for_this_one(
+    quick: None,
+) -> None:
+    _native.record_open_result(ADDRESS, 5, 913)
+    device = FlakyDevice(report_on=99)
+    with pytest.raises(ConnectionFailedError, match="never reported"):
+        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+
+
+async def test_a_refusal_left_from_before_is_forgotten(quick: None) -> None:
+    """
+    Something may be listening by now, so only this attempt's result counts.
+    """
+    _native.record_open_result(ADDRESS, 4, 913)
+    device = FlakyDevice(report_on=2)
+    await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == 2
 
 
 async def test_a_channel_still_open_from_before_is_waited_out(quick: None) -> None:

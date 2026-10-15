@@ -64,7 +64,11 @@ async with bluetooth.open_channel(DEVICE, 1) as channel:
 ```
 
 A number outside 1 to 30 is not an RFCOMM channel, and raises `ValueError`
-before anything is contacted.
+before anything is contacted. A device with nothing listening on the channel
+refuses it, which on macOS and Linux raises
+[`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError], as asking for
+a service it does not offer would; Windows does not tell a refusal apart yet
+(see [Platforms](platforms.md#windows)).
 
 Skipping the lookup is also how you get past a stale service record, which
 both macOS and Linux can hand you — but only when the channel is fixed and you
