@@ -379,7 +379,7 @@ def _adapter_with(powered: bool, power_state: str | None) -> _Adapter:
     ("powered", "power_state", "availability"),
     [
         (True, "on", Availability.USABLE),
-        # Measured on BlueZ 5.72: switching off reads like this for about 50
+        # Measured on BlueZ 5.85: switching off reads like this for about 50
         # ms, while the radio's links are already dropping.
         (True, "on-disabling", Availability.SWITCHED_OFF),
         (False, "off", Availability.SWITCHED_OFF),

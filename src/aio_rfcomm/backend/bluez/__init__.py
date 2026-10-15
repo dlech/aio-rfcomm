@@ -22,6 +22,13 @@ listens on, which falls back to a guess (:meth:`BlueZBluetooth._reserve_channel`
 # the D-Bus signature, and under PEP 563 an annotation is stored as its own
 # source text rather than the object, so the lookup would fail.
 
+# Measurements cited in this module name the BlueZ they were made on, one of:
+# - BlueZ 5.72: Ubuntu 24.04, package 5.72-0ubuntu5.5, before 2026-10-05. The
+#   kernel was not recorded.
+# - BlueZ 5.85: Ubuntu 26.04.1, package 5.85-4ubuntu0.3 or later, on kernel
+#   7.0.0-38-generic.
+# The peer was a Mac on macOS 26.6.2 (25G83).
+
 import asyncio
 import errno
 import itertools
@@ -285,7 +292,7 @@ class BlueZChannel(StreamChannel):
         Make sure a radio going off is known before the end is put down to
         the peer.
 
-        Measured on BlueZ 5.72: switching the radio off ends the channel about
+        Measured on BlueZ 5.85: switching the radio off ends the channel about
         50 ms before the adapter is reported off, while its power state
         already reads as going off. So the adapter is read again here, and if
         Bluetooth is no longer usable that is reported first, and becomes why
@@ -688,9 +695,8 @@ class BlueZBluetooth(BackendBluetooth):
 
         BlueZ will not publish a record unless it is told which channel to
         listen on: registering without one succeeds and quietly advertises
-        nothing, which was measured rather than assumed. So a channel is
-        always settled here -- see :meth:`_reserve_channel` -- and always
-        reported back.
+        nothing, measured on BlueZ 5.72. So a channel is always settled here
+        -- see :meth:`_reserve_channel` -- and always reported back.
         """
         channel = self._reserve_channel(channel)
 
@@ -784,9 +790,9 @@ class BlueZBluetooth(BackendBluetooth):
         BlueZ offers no way to do this over D-Bus. ``ConnectProfile`` is its
         only route, and that looks the service UUID up in what the device
         advertises before it considers anything else. Pinning ``Channel`` on
-        the profile registration does not change that, which was measured
-        rather than assumed. So this needs a real socket, and a Python built
-        without Bluetooth support cannot do it at all.
+        the profile registration does not change that, measured on BlueZ 5.72.
+        So this needs a real socket, and a Python built without Bluetooth
+        support cannot do it at all.
         """
         if not hasattr(socket, "AF_BLUETOOTH"):
             raise UnsupportedOperationError(
@@ -915,7 +921,7 @@ _NOBODY_THERE = (
 # What can change whether Bluetooth is usable: an adapter's properties (which
 # include whether it is powered), adapters arriving and leaving, and BlueZ
 # itself starting and stopping. The first was measured against a radio being
-# switched off and on (BlueZ 5.72). The others are only documented.
+# switched off and on (BlueZ 5.85). The others are only documented.
 _WATCHED = (
     (
         "type='signal',sender='org.bluez',"
@@ -1031,7 +1037,7 @@ def _powered(adapter: _Adapter) -> tuple[Availability, str | None]:
     """
     Say whether an adapter's radio is usable.
 
-    Measured on BlueZ 5.72: switching off goes through ``on-disabling`` for
+    Measured on BlueZ 5.85: switching off goes through ``on-disabling`` for
     about 50 ms while ``Powered`` still reads true, and the radio's links drop
     during it. So only ``on`` counts, where BlueZ reports a power state.
 
@@ -1223,13 +1229,13 @@ def _translate_socket_connect(
     match error.errno:
         case errno.ECONNREFUSED:
             # Any refusal reads the same. Nothing listening is the one measured
-            # (5.72).
+            # (BlueZ 5.85).
             return ServiceNotFoundError(
                 f"{address} refused channel {channel}. Usually nothing there is "
                 "listening on it"
             )
         case errno.EHOSTDOWN:
-            # Measured (5.72): a device that is not there, after the page
+            # Measured (BlueZ 5.85): a device that is not there, after the page
             # timeout.
             return DeviceNotFoundError(
                 f"{address} did not answer. It may be switched off or out of range"

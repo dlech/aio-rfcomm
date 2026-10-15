@@ -86,7 +86,7 @@ class StreamProtocol(asyncio.Protocol):
     def connection_lost(self, exc: Exception | None) -> None:
         # The cause is not kept. RFCOMM reports a peer's orderly hang-up as a
         # reset, at least to the side that accepted the connection -- measured
-        # against BlueZ, where a macOS peer leaving its ``async with`` block
+        # against BlueZ 5.72, where a macOS 26.6.2 peer leaving its block
         # arrives as ECONNRESET -- so a failure here says nothing reliable
         # about why, and the backend is asked instead.
         self._end()

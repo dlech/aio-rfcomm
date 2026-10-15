@@ -228,7 +228,7 @@ class RfcommChannel:
         Decide, once, how the channel ended, and give out a copy each time.
 
         Bluetooth going away is recorded by :meth:`_end` as it happens, which
-        is before the channel hears its link drop -- measured on macOS, where
+        is before the channel hears its link drop -- measured on macOS 26.6.2, where
         the radio is reported off a millisecond earlier -- so by then this
         keeps Bluetooth's reason rather than the connection's.
 

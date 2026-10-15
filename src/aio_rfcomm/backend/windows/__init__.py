@@ -19,6 +19,12 @@ care what family it is. And connecting is flaky in a way that is not an error:
 it fails and then succeeds with nothing changed, so it is retried.
 """
 
+# Measurements cited in this module were made by 2026-09-20 on a Windows
+# machine whose version was not recorded. With any new one, record the Windows
+# version and build and the file versions of the Bluetooth stack: bthport.sys,
+# rfcomm.sys, bthenum.sys, bthusb.sys and bthserv.dll, which Windows updates
+# through servicing, apart from its own version.
+
 from __future__ import annotations
 
 import asyncio

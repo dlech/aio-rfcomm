@@ -5,7 +5,7 @@
 Stand-ins for IOBluetooth and CoreBluetooth, and nothing above them.
 
 Each one reproduces what the real framework was measured doing on macOS 26.6.2
-against a BlueZ peer, and every report reaches the library through the
+against a BlueZ 5.85 peer, and every report reaches the library through the
 delegate's own Objective-C methods, so the code that receives it runs for
 real. Reports are deferred to the next turn of the loop, because the framework
 always reports later than the call that asked. The measured latencies are
@@ -14,6 +14,12 @@ noted but not reproduced, since none of the code under test depends on them.
 macOS only: the manager is a real Objective-C object, so key-value observing
 it is the real thing too.
 """
+
+# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
+# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
+# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
+# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
+# peer name its version.
 
 import asyncio
 import ctypes

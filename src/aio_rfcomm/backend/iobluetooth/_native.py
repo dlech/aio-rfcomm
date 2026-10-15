@@ -21,6 +21,12 @@ thread.
 # stored as its own source text rather than the object, so a callback would
 # be given the wrong signature and read rubbish off the stack.
 
+# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
+# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
+# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
+# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
+# peer name its version.
+
 import asyncio
 import ctypes
 import itertools
@@ -368,7 +374,7 @@ _awaiting_completion: dict[int, _Completion] = {}
 _completion_tokens = itertools.count()
 
 # bluetoothd's result for an RFCOMM channel the device answers for but nothing
-# on it listens on -- measured against BlueZ. CoreBluetooth has no name for it
+# on it listens on -- measured against BlueZ 5.85. CoreBluetooth has no name for it
 # and hands IOBluetooth 0, and the open is then never reported at all.
 _RESULT_REFUSED = 913
 

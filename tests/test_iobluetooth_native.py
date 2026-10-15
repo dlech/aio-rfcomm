@@ -10,6 +10,12 @@ A fake manager stands in for it: an ordinary Objective-C object with a
 key-value observable property, which is all the real one is from here.
 """
 
+# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
+# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
+# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
+# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
+# peer name its version.
+
 import asyncio
 import os
 import socket
@@ -659,7 +665,7 @@ class RefusingDevice(FlakyDevice):
     """
     A device whose every open bluetoothd fails, without telling the delegate.
 
-    Measured against BlueZ, for a channel nothing listens on: bluetoothd
+    Measured against BlueZ 5.85, for a channel nothing listens on: bluetoothd
     reports result 913 for each attempt, within a second of it, and neither
     delegate method is ever called.
 
