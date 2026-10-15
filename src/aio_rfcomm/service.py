@@ -112,8 +112,8 @@ class RfcommConnectionRequest:
         """
         Turn the device away by hanging up.
 
-        The device's connection is already open, so it sees the connection open and
-        then close. This always takes effect, even if it is cancelled. It does not
+        The device sees its connection fail, or open and then close at once. This
+        always takes effect, even if it is cancelled. It does not
         raise if hanging up fails. Declining twice does nothing.
 
         Raises:

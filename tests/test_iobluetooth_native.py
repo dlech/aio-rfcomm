@@ -695,6 +695,36 @@ async def test_a_refused_channel_is_not_asked_for_again(quick: None) -> None:
     assert device.attempts == 1
 
 
+async def test_a_device_hanging_up_as_the_channel_opens_is_not_asked_again(
+    quick: None,
+) -> None:
+    device = RefusingDevice(927)
+    with pytest.raises(ConnectionFailedError, match="hung up as channel 4 opened"):
+        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == 1
+
+
+async def test_any_other_answer_from_bluetoothd_is_not_asked_for_again(
+    quick: None,
+) -> None:
+    device = RefusingDevice(911)
+    with pytest.raises(ConnectionFailedError, match="bluetoothd said 911"):
+        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == 1
+
+
+async def test_an_open_bluetoothd_says_succeeded_is_asked_for_again(
+    quick: None,
+) -> None:
+    """
+    The open went through, so the silence is the framework's own.
+    """
+    device = RefusingDevice(0)
+    with pytest.raises(ConnectionFailedError, match="never reported"):
+        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == _native._OPEN_REPORT_ATTEMPTS
+
+
 class _Peer(NSObject):
     """
     A ``CBClassicPeer``, which the hook only asks for its address.
@@ -762,13 +792,6 @@ def test_the_daemon_s_report_is_read_off_the_main_thread() -> None:
     framework.start()
     framework.join()
     assert read == [_native._OpenResult(ADDRESS, 12, 913, None)]
-
-
-async def test_giving_up_says_what_bluetoothd_last_reported(quick: None) -> None:
-    device = RefusingDevice(result=1)
-    with pytest.raises(ConnectionFailedError, match="bluetoothd last said 1: "):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
-    assert device.attempts == _native._OPEN_REPORT_ATTEMPTS
 
 
 def _failed_open(result: int, descriptor: int) -> _native._OpenResult:

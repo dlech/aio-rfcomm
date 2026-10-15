@@ -5,14 +5,21 @@
 Numbers the frameworks hand back, under the names Apple publishes for them.
 
 Each enum mirrors one in an SDK header, with Apple's prefix dropped and its
-values kept, because the framework reports them as bare numbers. Nothing here
-imports rubicon, so both the library and its helper can use them.
+values kept, because the framework reports them as bare numbers. The exception
+is ``OIStatus``, which no header publishes. Nothing here imports rubicon,
+so both the library and its helper can use them.
 """
 
 import ctypes
 import enum
 
-__all__ = ["CBError", "CBManagerAuthorization", "CBManagerState", "IOReturn"]
+__all__ = [
+    "CBError",
+    "CBManagerAuthorization",
+    "CBManagerState",
+    "IOReturn",
+    "OIStatus",
+]
 
 
 class CBManagerAuthorization(enum.IntEnum):
@@ -157,4 +164,27 @@ class IOReturn(enum.IntEnum):
     UNDERRUN = _iokit_common(0x2E7)
     """
     ``kIOReturnUnderrun`` -- a write to a channel whose daemon restarted.
+    """
+
+
+class OIStatus(enum.IntEnum):
+    """
+    The results of bluetoothd's own Bluetooth stack that the library acts on.
+
+    bluetoothd reports these with each channel open, and CoreBluetooth hands
+    IOBluetooth 0 for both, so the open is never reported at all. The names are
+    the stack's own, read from the status-name table in bluetoothd on macOS
+    26.6.2 (25G83).
+    """
+
+    RFCOMM_REMOTE_REJECT = 913
+    """
+    ``OI_RFCOMM_REMOTE_REJECT`` -- the device refused the channel. Measured
+    against BlueZ 5.85 for a channel nothing listens on.
+    """
+
+    RFCOMM_REMOTE_DEVICE_DISCONNECTED = 927
+    """
+    ``OI_RFCOMM_REMOTE_DEVICE_DISCONNECTED`` -- the device hung up as the
+    channel opened. Measured against a BlueZ 5.85 server declining it.
     """

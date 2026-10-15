@@ -38,9 +38,8 @@ from, and [`accept`][aio_rfcomm.RfcommConnectionRequest.accept] opens it as a
 channel, in an `async with` block of its own.
 
 To turn a device away, call
-[`decline`][aio_rfcomm.RfcommConnectionRequest.decline] instead. The device's
-connection is already open by the time the request arrives, so the device
-sees it open and then close.
+[`decline`][aio_rfcomm.RfcommConnectionRequest.decline] instead. The device
+sees its connection fail, or open and then close at once.
 
 Every request must be accepted or declined. A request that is neither is hung
 up on when it is garbage collected, with a `ResourceWarning` that Python shows

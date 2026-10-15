@@ -58,6 +58,7 @@ from aio_rfcomm.backend.iobluetooth._codes import (
     CBManagerAuthorization,
     CBManagerState,
     IOReturn,
+    OIStatus,
 )
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
@@ -372,11 +373,6 @@ class _Completion(Protocol):
 # arrives leaks one small object, which is the cheaper of the two failures.
 _awaiting_completion: dict[int, _Completion] = {}
 _completion_tokens = itertools.count()
-
-# bluetoothd's result for an RFCOMM channel the device answers for but nothing
-# on it listens on -- measured against BlueZ 5.85. CoreBluetooth has no name for it
-# and hands IOBluetooth 0, and the open is then never reported at all.
-_RESULT_REFUSED = 913
 
 # bluetoothd's own result for each channel open, before CoreBluetooth reduces
 # it to an error code, by device address and channel. Written on a framework
@@ -1455,7 +1451,6 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
             framework never reported one open.
     """
     key = (_normalise(address), number)
-    result = None
     for _attempt in range(_OPEN_REPORT_ATTEMPTS):
         _open_results.pop(key, None)
         opening = await _request(device, number, address)
@@ -1470,32 +1465,42 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
         except TimeoutError:
             opening.release()
             result = _open_results.get(key)
-            if result == _RESULT_REFUSED:
-                # Asking again would be refused again.
-                raise ServiceNotFoundError(
-                    f"{address} refused channel {number}. Usually nothing there "
-                    "is listening on it"
-                ) from None
-            logger.debug(
-                "channel %d to %s was never reported open (bluetoothd: %s). "
-                "asking again",
-                number,
-                address,
-                result,
-            )
-            continue
+            # Only silence is worth asking again about. Every other result
+            # bluetoothd gave over four days of opens on macOS 26.6.2 (911,
+            # 913, 927 and 1902) was a definite failure.
+            match result:
+                case None | 0:
+                    logger.debug(
+                        "channel %d to %s was never reported open "
+                        "(bluetoothd: %s). asking again",
+                        number,
+                        address,
+                        result,
+                    )
+                    continue
+                case OIStatus.RFCOMM_REMOTE_REJECT:
+                    raise ServiceNotFoundError(
+                        f"{address} refused channel {number}. Usually nothing "
+                        "there is listening on it"
+                    ) from None
+                case OIStatus.RFCOMM_REMOTE_DEVICE_DISCONNECTED:
+                    raise ConnectionFailedError(
+                        f"{address} hung up as channel {number} opened"
+                    ) from None
+                case _:
+                    raise ConnectionFailedError(
+                        f"could not open channel {number} on {address} "
+                        f"(bluetoothd said {result}: {_describe_result(result)})"
+                    ) from None
         except BaseException:
             await opening.close()
             raise
         return opening
 
-    message = (
+    raise ConnectionFailedError(
         f"the framework never reported channel {number} on {address} open, "
         f"after {_OPEN_REPORT_ATTEMPTS} attempts"
     )
-    if result:
-        message += f" (bluetoothd last said {result}: {_describe_result(result)})"
-    raise ConnectionFailedError(message)
 
 
 async def _request(device: _Device, number: int, address: str) -> Channel:
