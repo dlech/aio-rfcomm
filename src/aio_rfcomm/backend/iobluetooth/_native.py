@@ -969,7 +969,7 @@ class Channel:
     anybody has asked for it, and there is no synchronous receive to call.
 
     This object is the only thing that holds the framework's channel. That is
-    a requirement rather than a convention -- see :meth:`close`.
+    a requirement rather than a convention -- see ``close``.
     """
 
     def __init__(
@@ -1611,7 +1611,7 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
     Open a channel, asking again if the framework never says whether it did.
 
     A failed open that reports no error reaches neither delegate method, so the
-    caller would otherwise wait for ever -- see :data:`_OPEN_REPORT_SECONDS`.
+    caller would otherwise wait for ever -- see ``_OPEN_REPORT_SECONDS``.
     Asking again costs nothing on the air: an open that did land leaves the
     channel where the framework finds it and hands it straight back, and one
     that did not never reached the peer.

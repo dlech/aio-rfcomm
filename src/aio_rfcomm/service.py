@@ -49,13 +49,13 @@ class RfcommConnectionRequest:
     A device that has connected to a service.
 
     Accept it, or decline it. A request that is neither is hung up on when it is
-    garbage collected, with a :class:`ResourceWarning`.
+    garbage collected, with a ``ResourceWarning``.
     """
 
     def __init__(self, backend: BackendRequest, service: RfcommService) -> None:
         """
         Not called directly. Requests come from
-        :meth:`RfcommService.connection_requests`.
+        [`RfcommService.connection_requests`][RfcommService.connection_requests].
 
         Args:
             backend: The backend's request.
@@ -79,12 +79,12 @@ class RfcommConnectionRequest:
         Returns:
             An async context manager that gives the channel, and closes it when the
             block ends. The channel carries on even if the service stops first.
-            Entering it raises :class:`~aio_rfcomm.errors.BluetoothUnavailableError`
-            if Bluetooth stopped being usable since the request arrived.
 
         Raises:
             RuntimeError: The request was already accepted or declined.
             ScopeClosedError: The service's block has ended.
+            BluetoothUnavailableError: Bluetooth stopped being usable since the
+                request arrived.
         """
         self._service._scope.check()
         match self._answer:
@@ -167,14 +167,14 @@ class ConnectionRequests:
     """
     The devices connecting to a service, one request each.
 
-    Made by :meth:`RfcommService.connection_requests`. When Bluetooth stops being
+    Made by [`RfcommService.connection_requests`][RfcommService.connection_requests]. When Bluetooth stops being
     usable, the ``async for`` loop raises
-    :class:`~aio_rfcomm.errors.BluetoothUnavailableError`.
+    [`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError].
     """
 
     def __init__(self, service: RfcommService) -> None:
         """
-        Not called directly. Use :meth:`RfcommService.connection_requests`.
+        Not called directly. Use [`RfcommService.connection_requests`][RfcommService.connection_requests].
 
         Args:
             service: The service being listened on.
@@ -214,7 +214,7 @@ class RfcommService:
     ) -> None:
         """
         Not called directly. Services come from
-        :meth:`~aio_rfcomm.Bluetooth.serve`.
+        [`serve`][aio_rfcomm.Bluetooth.serve].
 
         Args:
             bluetooth: The Bluetooth object it was published through.
@@ -259,11 +259,11 @@ class RfcommService:
         """
         Get each device that connects, as it arrives.
 
-        ::
-
-            async with asyncio.TaskGroup() as group:
-                async for request in service.connection_requests():
-                    group.create_task(talk(request))
+        ```python
+        async with asyncio.TaskGroup() as group:
+            async for request in service.connection_requests():
+                group.create_task(talk(request))
+        ```
 
         Returns:
             An async iterator of requests. It never ends by itself.

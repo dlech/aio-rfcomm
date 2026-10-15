@@ -133,7 +133,7 @@ class WindowsService(BackendService):
         ``WSAEPROTONOSUPPORT``. ``asyncio.start_server`` fails the same way,
         only later and into the loop's exception handler. So the blocking
         accept runs on a daemon thread, the same shape the outgoing connect
-        uses and for the same reasons (see :func:`_reach`). The accepted
+        uses and for the same reasons (see ``_reach``). The accepted
         socket then works with overlapped I/O like any other.
         """
         loop = asyncio.get_running_loop()

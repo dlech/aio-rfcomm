@@ -25,10 +25,12 @@ class RfcommDeviceInfo:
     """
     A Bluetooth device.
 
-    :meth:`~aio_rfcomm.Bluetooth.list_known_devices` gives these, and you can
-    also make one from an address::
+    [`list_known_devices`][aio_rfcomm.Bluetooth.list_known_devices] gives these, and you can
+    also make one from an address:
 
-        device = RfcommDeviceInfo("00:1A:7D:DA:71:0C")
+    ```python
+    device = RfcommDeviceInfo("00:1A:7D:DA:71:0C")
+    ```
 
     Raises:
         ValueError: ``address`` is not a Bluetooth address.
@@ -46,7 +48,7 @@ class RfcommDeviceInfo:
     """
     The device's name, if the system knows one.
 
-    It can be out of date, so match devices on :attr:`address` instead.
+    It can be out of date, so match devices on [`address`][address] instead.
     """
 
     id: str | None = None

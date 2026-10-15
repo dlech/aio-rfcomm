@@ -13,8 +13,8 @@ on a Python that has never heard of Bluetooth.
 
 Two things are better with a socket, and both degrade rather than fail without
 one: connecting to a bare channel number, which cannot be done over D-Bus at
-all (:meth:`BlueZBluetooth.open_channel`), and choosing the channel a service
-listens on, which falls back to a guess (:meth:`BlueZBluetooth._reserve_channel`).
+all (``BlueZBluetooth.open_channel``), and choosing the channel a service
+listens on, which falls back to a guess (``BlueZBluetooth._reserve_channel``).
 """
 
 # Do not add ``from __future__ import annotations`` to this module. dbus-fast
@@ -125,7 +125,7 @@ class _Profile(ServiceInterface):
     The object BlueZ calls back with a connected file descriptor.
 
     One of these is shared by every connection attempt for a service UUID,
-    because BlueZ allows only one registration per UUID. See :class:`_Profiles`.
+    because BlueZ allows only one registration per UUID. See ``_Profiles``.
     Callbacks are routed to whoever is waiting on that device.
     """
 
@@ -153,7 +153,7 @@ class _Profile(ServiceInterface):
 
         Args:
             device_path: The device's object path.
-            waiter: The future returned by :meth:`expect`.
+            waiter: The future returned by ``expect``.
         """
         waiters = self._waiting.get(device_path)
         if waiters and waiter in waiters:
@@ -607,7 +607,7 @@ class BlueZBluetooth(BackendBluetooth):
         profile holds, and so would report every channel free.
 
         Without a socket there is no probe and no safe guess, so the caller
-        has to name a channel. See :meth:`_unprobed_channel`.
+        has to name a channel. See ``_unprobed_channel``.
 
         The socket is closed before the profile is registered, because BlueZ
         wants to listen on that channel itself and cannot while we hold it.
@@ -702,7 +702,7 @@ class BlueZBluetooth(BackendBluetooth):
         BlueZ will not publish a record unless it is told which channel to
         listen on: registering without one succeeds and quietly advertises
         nothing, measured on BlueZ 5.72. So a channel is always settled here
-        -- see :meth:`_reserve_channel` -- and always reported back.
+        -- see ``_reserve_channel`` -- and always reported back.
         """
         channel = self._reserve_channel(channel)
 

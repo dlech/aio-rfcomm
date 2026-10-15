@@ -4,7 +4,7 @@
 """
 Cross-platform asyncio RFCOMM.
 
-Open Bluetooth with :func:`open_bluetooth`, then either reach out to a
+Open Bluetooth with [`open_bluetooth`][open_bluetooth], then either reach out to a
 device's service or publish one of your own and wait for peers.
 """
 

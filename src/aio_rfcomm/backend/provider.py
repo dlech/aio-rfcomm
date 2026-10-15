@@ -7,7 +7,7 @@ The interface every platform backend implements.
 The classes come in the order a caller meets them: the backend itself, what
 it opens to stand for Bluetooth on this machine, and then either a channel
 opened through that or a service published on it, with the requests it
-receives. Each is an :class:`~abc.ABC`, so a backend that forgets a method
+receives. Each is an ``ABC``, so a backend that forgets a method
 fails at construction with the method named, rather than at the first call.
 
 Everything that opens something returns an async context manager. Nothing here
@@ -83,14 +83,14 @@ class AvailabilityState:
         self.on_unusable: Callable[[UnavailableReason, str | None], None] | None = None
         """
         Called with every change away from usable, as it is set. A change and
-        back can happen between two looks at :attr:`value`, and what it ended
+        back can happen between two looks at ``value``, and what it ended
         has to be ended all the same.
         """
 
     @property
     def value(self) -> Availability:
         """
-        The availability now. Only read once :meth:`known` has returned.
+        The availability now. Only read once ``known`` has returned.
         """
         assert self._value is not None, "availability read before it was reported"
         return self._value
@@ -130,7 +130,7 @@ class AvailabilityState:
         """
         Something to wait on for the next change.
 
-        Taken before looking at :attr:`value`, so that a change in between is
+        Taken before looking at ``value``, so that a change in between is
         not missed.
 
         Returns:
@@ -334,13 +334,13 @@ class BackendChannel(ABC):
     """
     An open RFCOMM channel, as the backend sees it.
 
-    Every ending is raised: once the channel is over, :meth:`receive` -- after
-    handing over whatever arrived before the end -- and :meth:`send` raise
-    :class:`~aio_rfcomm.errors.ChannelClosedError`, with the same reason
+    Every ending is raised: once the channel is over, ``receive`` -- after
+    handing over whatever arrived before the end -- and ``send`` raise
+    ``ChannelClosedError``, with the same reason
     every time.
 
     Subclasses must call ``super().__init__()``, and record the end with
-    :meth:`_mark_gone` once they know why.
+    ``_mark_gone`` once they know why.
     """
 
     def __init__(self) -> None:
@@ -448,8 +448,8 @@ class BackendRequest(ABC):
     """
     A peer that has connected, and the connection it is holding.
 
-    The connection belongs to the request until :meth:`open` hands it to a
-    channel. Closing it before then, by :meth:`close` or :meth:`decline`, is
+    The connection belongs to the request until ``open`` hands it to a
+    channel. Closing it before then, by ``close`` or ``decline``, is
     the only other way it ends.
     """
 
@@ -467,7 +467,7 @@ class BackendRequest(ABC):
         Take the connection as a channel.
 
         The connection passes to the channel only when the context manager is
-        entered. Until then :meth:`close` still closes it.
+        entered. Until then ``close`` still closes it.
 
         Returns:
             An async context manager yielding the channel, closed on exit.

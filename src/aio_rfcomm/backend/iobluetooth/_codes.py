@@ -106,7 +106,7 @@ class CBError(enum.IntEnum):
     IOBluetooth sometimes passes one of these where it documents an IOKit
     status: CoreBluetooth turns the daemon's result into an ``NSError`` and
     hands on only its code. A result it has no name for becomes
-    :attr:`UNKNOWN`, which is 0 and so reads as success.
+    ``UNKNOWN``, which is 0 and so reads as success.
     """
 
     UNKNOWN = 0

@@ -1,0 +1,28 @@
+/* Each class or function on a page starts a block of its own. */
+.md-content__inner > .doc-object {
+  margin-top: 3.5rem;
+}
+
+.md-content__inner > .doc-object:first-of-type {
+  margin-top: 1.5rem;
+}
+
+/* Its heading, shaded and marked, so the start of each block stands out. */
+.md-content__inner > .doc-object > .doc-heading {
+  margin-top: 0;
+  padding: 0.5rem 0.8rem;
+  border-left: 0.3rem solid var(--md-primary-fg-color);
+  background: var(--md-code-bg-color);
+}
+
+/* Members sit inside the block, under a rule of their own. */
+.md-content__inner > .doc-object > .doc-contents {
+  padding-left: 1rem;
+  border-left: 0.1rem solid var(--md-default-fg-color--lightest);
+}
+
+.doc-children > .doc-object {
+  margin-top: 1.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}

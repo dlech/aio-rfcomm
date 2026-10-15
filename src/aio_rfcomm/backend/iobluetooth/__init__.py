@@ -8,7 +8,7 @@ IOBluetooth will only work from the main thread of a process running a
 CFRunLoop, and macOS ends any process that touches Bluetooth without an
 application bundle saying why it wants to. A library cannot impose either
 condition on the program that imports it, so it brings its own process that
-meets both. See :mod:`aio_rfcomm.backend.iobluetooth.__main__`.
+meets both. See ``aio_rfcomm.backend.iobluetooth.__main__``.
 
 Nothing on this side imports rubicon or the framework. What comes back from
 the helper is an ordinary connected file descriptor, which is exactly what the

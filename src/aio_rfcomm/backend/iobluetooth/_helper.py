@@ -60,7 +60,7 @@ _own_reason: str | None = None
 def prompt_under_name(*, name: str, reason: str) -> None:
     """
     Record the name the helper asks for permission under. See
-    :func:`aio_rfcomm.macos.prompt_under_name`.
+    ``aio_rfcomm.macos.prompt_under_name``.
 
     Args:
         name: The program's name, as the user knows it.
@@ -74,7 +74,7 @@ class HelperFailedError(RfcommError):
     """
     The helper process stopped, or never started.
 
-    Not exported from :mod:`aio_rfcomm.errors`: it is specific to macOS, and
+    Not exported from ``aio_rfcomm.errors``: it is specific to macOS, and
     what a caller can do about it is the same as for any other failure to
     reach Bluetooth.
     """
@@ -156,7 +156,7 @@ class Helper:
     Replies and events arrive on one socket in whatever order the helper
     produces them, so a reader task hands each to whoever is waiting: replies
     to the request they answer, the end of a channel to that channel, and the
-    manager's state to whoever reads :meth:`next_state`.
+    manager's state to whoever reads ``next_state``.
     """
 
     def __init__(self, link: Link) -> None:
@@ -576,7 +576,7 @@ def _rebuild(name: str, message: str, reason: str | None = None) -> RfcommError:
     Args:
         name: The exception's class name.
         message: Its message.
-        reason: The :class:`~aio_rfcomm.Availability` member's name, for an
+        reason: The ``Availability`` member's name, for an
             error built from one.
 
     Returns:

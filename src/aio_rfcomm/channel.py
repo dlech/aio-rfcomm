@@ -29,10 +29,10 @@ class RfcommChannel:
     It carries a stream of bytes, not separate messages. One send on the other end
     may arrive in several pieces, or joined to the next.
 
-    When the connection ends, :meth:`receive` first returns any bytes that arrived
-    before the end. After that, every call to :meth:`receive` or :meth:`send`
-    raises the same error: :class:`~aio_rfcomm.errors.ChannelClosedError`, or
-    :class:`~aio_rfcomm.errors.BluetoothUnavailableError` if Bluetooth stopped
+    When the connection ends, [`receive`][receive] first returns any bytes that arrived
+    before the end. After that, every call to [`receive`][receive] or [`send`][send]
+    raises the same error: [`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError], or
+    [`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError] if Bluetooth stopped
     being usable.
 
     One task can send while another receives. Two tasks receiving at once, or two
@@ -122,10 +122,10 @@ class RfcommChannel:
             Exactly ``count`` bytes.
 
         Raises:
-            ChannelClosedError: The connection ended first. :meth:`receive` returns
+            ChannelClosedError: The connection ended first. [`receive`][receive] returns
                 the bytes that did arrive.
             BluetoothUnavailableError: Bluetooth stopped being usable first.
-                :meth:`receive` returns the bytes that did arrive.
+                [`receive`][receive] returns the bytes that did arrive.
             ValueError: ``count`` is less than 1.
         """
         if count < 1:
@@ -137,12 +137,14 @@ class RfcommChannel:
             return self._take(count)
 
     async def receive_until(self, delimiter: bytes, *, max_bytes: int) -> bytes:
-        """
+        r"""
         Read up to a delimiter, and return the bytes before it.
 
-        The delimiter is read too, but not returned. To read a line::
+        The delimiter is read too, but not returned. To read a line:
 
-            line = await channel.receive_until(b"\n", max_bytes=1024)
+        ```python
+        line = await channel.receive_until(b"\n", max_bytes=1024)
+        ```
 
         If it is cancelled, the bytes it has read so far are kept for the next call.
 
@@ -156,12 +158,13 @@ class RfcommChannel:
             The bytes before the delimiter.
 
         Raises:
-            DelimiterNotFoundError: No delimiter arrived within ``max_bytes``. The
-                bytes are left for the next call.
-            ChannelClosedError: The connection ended first. :meth:`receive` returns
+            DelimiterNotFoundError: ``max_bytes`` arrived with no delimiter.
+                None of them are read, so calling this again raises again.
+                Read them with [`receive`][receive], or end the connection.
+            ChannelClosedError: The connection ended first. [`receive`][receive] returns
                 the bytes that did arrive.
             BluetoothUnavailableError: Bluetooth stopped being usable first.
-                :meth:`receive` returns the bytes that did arrive.
+                [`receive`][receive] returns the bytes that did arrive.
             ValueError: ``delimiter`` is empty, or longer than ``max_bytes``.
         """
         if not delimiter:
@@ -227,7 +230,7 @@ class RfcommChannel:
         """
         Decide, once, how the channel ended, and give out a copy each time.
 
-        Bluetooth going away is recorded by :meth:`_end` as it happens, which
+        Bluetooth going away is recorded by [`_end`][_end] as it happens, which
         is before the channel hears its link drop -- measured on macOS 26.6.2, where
         the radio is reported off a millisecond earlier -- so by then this
         keeps Bluetooth's reason rather than the connection's.

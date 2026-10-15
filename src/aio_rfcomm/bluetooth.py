@@ -54,13 +54,13 @@ class AvailabilityWatcher:
     """
     Gives whether Bluetooth can be used: the current state first, then each change.
 
-    Made by :meth:`Bluetooth.watch_availability`.
+    Made by [`Bluetooth.watch_availability`][Bluetooth.watch_availability].
     """
 
     def __init__(self, state: AvailabilityState, scope: Scope) -> None:
         """
         Not called directly. Watchers come from
-        :meth:`Bluetooth.watch_availability`.
+        [`Bluetooth.watch_availability`][Bluetooth.watch_availability].
 
         Args:
             state: Where the backend reports availability.
@@ -98,7 +98,7 @@ class AvailabilityWatcher:
 class _Interruption:
     """
     Ends one wait when Bluetooth stops being usable, the way
-    :func:`asyncio.timeout` ends one at a deadline.
+    ``asyncio.timeout`` ends one at a deadline.
     """
 
     def __init__(self, task: asyncio.Task[object]) -> None:
@@ -134,14 +134,14 @@ class Bluetooth:
     """
     Bluetooth on this computer.
 
-    Made by :func:`open_bluetooth`. Everything else is opened through it.
+    Made by [`open_bluetooth`][open_bluetooth]. Everything else is opened through it.
     """
 
     def __init__(
         self, backend: BackendBluetooth, state: AvailabilityState, scope: Scope
     ) -> None:
         """
-        Not called directly. Use :func:`open_bluetooth`.
+        Not called directly. Use [`open_bluetooth`][open_bluetooth].
 
         Args:
             backend: The platform's implementation.
@@ -167,7 +167,7 @@ class Bluetooth:
         its own.
 
         Returns:
-            An async iterator of :class:`~aio_rfcomm.Availability`. It never ends by
+            An async iterator of [`Availability`][aio_rfcomm.Availability]. It never ends by
             itself.
         """
         self._scope.check()
@@ -210,13 +210,17 @@ class Bluetooth:
 
         Returns:
             An async context manager that gives the open channel, and closes it when
-            the block ends. Entering it can raise
-            :class:`~aio_rfcomm.errors.BluetoothUnavailableError`,
-            :class:`~aio_rfcomm.errors.DeviceNotFoundError`,
-            :class:`~aio_rfcomm.errors.ServiceNotFoundError`,
-            :class:`~aio_rfcomm.errors.ConnectionFailedError` or
-            :class:`~aio_rfcomm.errors.UnsupportedOperationError` (on macOS, the
-            device already has a channel open).
+            the block ends.
+
+        Raises:
+            BluetoothUnavailableError: Bluetooth cannot be used.
+            aio_rfcomm.errors.DeviceNotFoundError: The device did not answer.
+            aio_rfcomm.errors.ServiceNotFoundError: The device does not offer the
+                service.
+            aio_rfcomm.errors.ConnectionFailedError: The channel could not be
+                opened.
+            aio_rfcomm.errors.UnsupportedOperationError: On macOS, the device
+                already has a channel open.
         """
         self._scope.check()
         return self._open(lambda: self._backend.open_service(device, service))
@@ -228,7 +232,7 @@ class Bluetooth:
         Open a channel to a device by its number, without looking up a service.
 
         Use it when the device's channel number is fixed and known. It is faster than
-        :meth:`open_service`.
+        [`open_service`][open_service].
 
         Args:
             device: The device.
@@ -236,18 +240,19 @@ class Bluetooth:
 
         Returns:
             An async context manager that gives the open channel, and closes it when
-            the block ends. Entering it can raise
-            :class:`~aio_rfcomm.errors.BluetoothUnavailableError`,
-            :class:`~aio_rfcomm.errors.DeviceNotFoundError`,
-            :class:`~aio_rfcomm.errors.ServiceNotFoundError` (nothing on the device is
-            listening on that channel),
-            :class:`~aio_rfcomm.errors.ConnectionFailedError` or
-            :class:`~aio_rfcomm.errors.UnsupportedOperationError` (on macOS, the
-            device already has a channel open, and on Linux, Python lacks
-            Bluetooth socket support).
+            the block ends.
 
         Raises:
             ValueError: ``channel`` is not from 1 to 30.
+            BluetoothUnavailableError: Bluetooth cannot be used.
+            aio_rfcomm.errors.DeviceNotFoundError: The device did not answer.
+            aio_rfcomm.errors.ServiceNotFoundError: Nothing on the device is
+                listening on that channel.
+            aio_rfcomm.errors.ConnectionFailedError: The channel could not be
+                opened.
+            aio_rfcomm.errors.UnsupportedOperationError: On macOS, the device
+                already has a channel open. On Linux, Python lacks Bluetooth
+                socket support.
         """
         self._scope.check()
         check_channel(channel)
@@ -259,11 +264,11 @@ class Bluetooth:
         """
         Publish a service and listen for devices that connect to it.
 
-        ::
-
-            async with bluetooth.serve(CHAT, name="chat") as service:
-                async for request in service.connection_requests():
-                    ...
+        ```python
+        async with bluetooth.serve(CHAT, name="chat") as service:
+            async for request in service.connection_requests():
+                ...
+        ```
 
         Leaving the block stops new connections. Channels already accepted carry on
         until their own blocks end.
@@ -277,15 +282,16 @@ class Bluetooth:
 
         Returns:
             An async context manager that gives the service, and stops it when the
-            block ends. Entering it can raise
-            :class:`~aio_rfcomm.errors.BluetoothUnavailableError`,
-            :class:`~aio_rfcomm.errors.ChannelInUseError`,
-            :class:`~aio_rfcomm.errors.ConnectionFailedError` (the service could
-            not be published) or
-            :class:`~aio_rfcomm.errors.UnsupportedOperationError`.
+            block ends.
 
         Raises:
             ValueError: ``channel`` is not from 1 to 30.
+            BluetoothUnavailableError: Bluetooth cannot be used.
+            aio_rfcomm.errors.ChannelInUseError: The channel is already in use.
+            aio_rfcomm.errors.ConnectionFailedError: The service could not be
+                published.
+            aio_rfcomm.errors.UnsupportedOperationError: On Linux, choosing a
+                channel needs Bluetooth socket support, and Python lacks it.
         """
         self._scope.check()
         if channel is not None:
@@ -322,7 +328,7 @@ class Bluetooth:
         Refuse at once if Bluetooth is unusable, and stop waiting if it
         becomes so.
 
-        Works the way :func:`asyncio.timeout` does: the waiting task is
+        Works the way ``asyncio.timeout`` does: the waiting task is
         cancelled, and the cancellation is taken back and replaced on the way
         out, unless something else cancelled it too.
 
@@ -462,7 +468,7 @@ class Bluetooth:
 @asynccontextmanager
 async def _open_bluetooth(provider: BackendProvider) -> AsyncGenerator[Bluetooth, None]:
     """
-    Open Bluetooth through a given backend. See :func:`open_bluetooth`.
+    Open Bluetooth through a given backend. See [`open_bluetooth`][open_bluetooth].
 
     Args:
         provider: The platform's backend, or a stand-in for one.
@@ -499,16 +505,17 @@ def open_bluetooth() -> AbstractAsyncContextManager[Bluetooth]:
     Open Bluetooth.
 
     This succeeds even when Bluetooth is turned off or missing. Use
-    :meth:`Bluetooth.watch_availability` to find out whether it can be used.
+    [`Bluetooth.watch_availability`][Bluetooth.watch_availability] to find out whether it can be used.
 
     Open it once in a program, and pass the object to the functions that need it.
 
     Returns:
-        An async context manager that gives the :class:`Bluetooth` object. Leaving
-        the block closes everything that was opened through it. Entering it
-        raises :class:`~aio_rfcomm.errors.BluetoothAlreadyOpenError` if
-        Bluetooth is already open in this program, and
-        :class:`~aio_rfcomm.errors.RfcommError` if the library itself cannot
-        start (on macOS, its helper process).
+        An async context manager that gives the [`Bluetooth`][Bluetooth] object.
+        Leaving the block closes everything that was opened through it.
+
+    Raises:
+        BluetoothAlreadyOpenError: Bluetooth is already open in this program.
+        RfcommError: The library itself cannot start. On macOS, that is its
+            helper process.
     """
     return _open_bluetooth(get_backend())

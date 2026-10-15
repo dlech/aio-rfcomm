@@ -6,7 +6,7 @@ Whether Bluetooth can be used, and why not.
 
 One enum covers both answers, so that whatever reports availability reports a
 named value every time -- including the one that means usable. Errors carry
-only the reasons, through :data:`UnavailableReason`, so that matching on an
+only the reasons, through [`UnavailableReason`][UnavailableReason], so that matching on an
 error's reason never has a case that cannot happen.
 """
 
@@ -62,7 +62,7 @@ UnavailableReason: TypeAlias = Literal[
     Availability.UNSUPPORTED,
 ]
 """
-Every :class:`Availability` except :attr:`~Availability.USABLE`: the reasons
+Every [`Availability`][Availability] except [`USABLE`][Availability.USABLE]: the reasons
 Bluetooth cannot be used. A type checker can confirm that a ``match`` on one
 covers every case.
 """

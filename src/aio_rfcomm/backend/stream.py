@@ -11,7 +11,7 @@ is written once here.
 
 What does differ is how the end of the stream is explained. The socket says
 the stream is over but not why, and a platform that can tell a peer hanging up
-from a link dropping says so by overriding :meth:`StreamChannel.explain_end`.
+from a link dropping says so by overriding ``StreamChannel.explain_end``.
 
 The channel keeps its own receive buffer rather than using asyncio's
 ``StreamReader``, which discards what it holds as soon as the transport
@@ -58,7 +58,7 @@ class StreamProtocol(asyncio.Protocol):
     Keeps what the transport reports until the channel asks for it.
 
     Nothing here is lost when the connection ends: bytes that arrived before
-    the end stay in :attr:`buffer` until they are taken.
+    the end stay in ``buffer`` until they are taken.
     """
 
     def __init__(self) -> None:
@@ -70,7 +70,7 @@ class StreamProtocol(asyncio.Protocol):
         self.ended = False
         """
         Whether the stream is over: the peer closed it, or the connection
-        failed. Bytes may still be waiting in :attr:`buffer`.
+        failed. Bytes may still be waiting in ``buffer``.
         """
 
         self._transport: asyncio.Transport | None = None

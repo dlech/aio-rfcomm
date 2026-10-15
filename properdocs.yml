@@ -12,6 +12,7 @@ theme:
   name: material
   features:
     - content.code.copy
+    - navigation.indexes
     - navigation.sections
     - navigation.top
     - toc.follow
@@ -36,12 +37,19 @@ nav:
   - Guide:
       - Bluetooth: bluetooth.md
       - Connecting: connecting.md
-      - Channels: channels.md
       - Serving: serving.md
+      - Channels: channels.md
       - Lifetimes: lifetimes.md
       - Errors: errors.md
   - Platforms: platforms.md
-  - API reference: reference.md
+  - API reference:
+      - reference/index.md
+      - Bluetooth: reference/bluetooth.md
+      - Devices: reference/devices.md
+      - Serving: reference/serving.md
+      - Channels: reference/channels.md
+      - Errors: reference/errors.md
+      - macOS: reference/macos.md
 
 plugins:
   - search
@@ -51,18 +59,27 @@ plugins:
           paths: [src]
           options:
             docstring_style: google
+            docstring_options:
+              # Our Returns sections describe one value, over several lines.
+              returns_multiple_items: false
             # Nothing here is constructed by the caller -- every object comes
             # out of an async with block -- so __init__ is noise in the index.
             filters: ["!^_"]
-            docstring_section_style: table
-            heading_level: 3
+            docstring_section_style: list
+            heading_level: 2
             members_order: source
+            # Lets a docstring link a sibling by its short name.
+            scoped_crossrefs: true
             separate_signature: true
+            show_source: false
             show_root_heading: true
             show_signature_annotations: true
             show_symbol_type_heading: true
             show_symbol_type_toc: true
             signature_crossrefs: true
+
+extra_css:
+  - css/reference.css
 
 markdown_extensions:
   - admonition

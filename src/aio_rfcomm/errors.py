@@ -5,11 +5,11 @@
 Errors raised by aio-rfcomm.
 
 Errors that Bluetooth or the other device cause derive from
-:class:`RfcommError`, and are the same on every platform. The platform's own
+[`RfcommError`][RfcommError], and are the same on every platform. The platform's own
 error, if there is one, is kept as ``__cause__``.
 
-Errors caused by mistakes in your own code derive from :class:`RuntimeError`
-instead, so catching :class:`RfcommError` never hides a bug.
+Errors caused by mistakes in your own code derive from ``RuntimeError``
+instead, so catching [`RfcommError`][RfcommError] never hides a bug.
 """
 
 import enum
@@ -58,7 +58,7 @@ _DESCRIPTIONS: dict[UnavailableReason, str] = {
 
 class BluetoothUnavailableError(RfcommError):
     """
-    Bluetooth cannot be used. :attr:`reason` says why.
+    Bluetooth cannot be used. [`reason`][reason] says why.
     """
 
     def __init__(self, reason: UnavailableReason, detail: str | None = None) -> None:
@@ -71,7 +71,7 @@ class BluetoothUnavailableError(RfcommError):
         super().__init__(detail or _DESCRIPTIONS[reason])
         self.reason: UnavailableReason = reason
         """
-        Why Bluetooth cannot be used. See :class:`~aio_rfcomm.Availability`.
+        Why Bluetooth cannot be used. See [`Availability`][aio_rfcomm.Availability].
         """
 
     @override
@@ -130,11 +130,11 @@ class CloseReason(enum.Enum):
 
 class ChannelClosedError(RfcommError):
     """
-    The connection has ended. :attr:`reason` says how.
+    The connection has ended. [`reason`][reason] says how.
 
     Once a connection has ended, and any bytes that arrived before the end
-    have been received, every call to :meth:`~aio_rfcomm.RfcommChannel.receive`
-    and :meth:`~aio_rfcomm.RfcommChannel.send` raises this, with the same
+    have been received, every call to [`receive`][aio_rfcomm.RfcommChannel.receive]
+    and [`send`][aio_rfcomm.RfcommChannel.send] raises this, with the same
     reason.
     """
 
@@ -157,10 +157,10 @@ class ChannelClosedError(RfcommError):
 
 class DelimiterNotFoundError(RfcommError):
     """
-    :meth:`~aio_rfcomm.RfcommChannel.receive_until` found no delimiter within
+    [`receive_until`][aio_rfcomm.RfcommChannel.receive_until] found no delimiter within
     ``max_bytes``.
 
-    No bytes were read, so :meth:`~aio_rfcomm.RfcommChannel.receive` can still
+    No bytes were read, so [`receive`][aio_rfcomm.RfcommChannel.receive] can still
     read them.
     """
 

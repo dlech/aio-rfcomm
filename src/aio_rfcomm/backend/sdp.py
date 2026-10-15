@@ -95,8 +95,8 @@ def parse_element(data: bytes) -> Any:
         data: The element, which may be followed by more bytes.
 
     Returns:
-        The value: ``None``, an :class:`int`, a :class:`bool`, a
-        :class:`~uuid.UUID`, :class:`bytes` for a text string, a :class:`str`
+        The value: ``None``, an ``int``, a ``bool``, a
+        ``UUID``, ``bytes`` for a text string, a ``str``
         for a URL, or a list for a sequence.
 
     Raises:
