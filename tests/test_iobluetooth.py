@@ -44,6 +44,7 @@ from aio_rfcomm.backend.iobluetooth._helper import (
     Helper,
     HelperFailedError,
     _rebuild,
+    run_helper,
 )
 from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, ProtocolError
 from aio_rfcomm.discovery import RfcommDeviceInfo
@@ -699,3 +700,18 @@ async def test_the_helper_says_so_when_it_has_let_the_device_go() -> None:
 
         said, _fds = await there.receive() or ({}, [])
         assert said["event"] == "finished"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="IOBluetooth is macOS only")
+async def test_a_helper_that_ran_the_program_does_not_start_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured with PyInstaller 6.22.3: without the run-time hook, the helper of
+    a frozen program runs the whole program again, which opens Bluetooth and
+    starts a helper of its own.
+    """
+    monkeypatch.setenv("AIO_RFCOMM_CONTROL_FD", "9")
+    with pytest.raises(HelperFailedError, match="ran the program instead"):
+        async with run_helper():
+            pass

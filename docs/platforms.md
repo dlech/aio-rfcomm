@@ -8,8 +8,15 @@ places where the platforms still differ.
 ### Permission
 
 macOS asks the user before a program can use Bluetooth, and remembers the
-answer under the program's name. A bundled application has a name already. A
-script run from a terminal does not, so give it one before opening Bluetooth:
+answer under the program's name.
+
+A bundled application is asked about under its own name. Put
+`NSBluetoothAlwaysUsageDescription` in the application's `Info.plist`, with
+the reason to show in the dialog. Without it, macOS can end the program
+instead of asking.
+
+A script run from a terminal has no name of its own, so give it one before
+opening Bluetooth:
 
 ```python
 import aio_rfcomm.macos

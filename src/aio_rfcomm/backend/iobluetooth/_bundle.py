@@ -4,12 +4,13 @@
 """
 Building the application bundle the helper process runs from.
 
-macOS refuses Bluetooth to a process whose responsible process has no
-``NSBluetoothAlwaysUsageDescription`` in its ``Info.plist``, and it refuses by
-sending ``SIGABRT`` rather than by returning an error. A wheel unpacked into
-site-packages has no ``Info.plist`` to put the key in, so one is built here:
-a minimal ``.app`` around a copy of the running interpreter, cached under the
-user's cache directory and rebuilt only when the interpreter changes.
+macOS asks about Bluetooth on behalf of the responsible process, and ends the
+process with ``SIGABRT`` rather than asking when that process has no
+``NSBluetoothAlwaysUsageDescription`` in its ``Info.plist``. A wheel unpacked
+into site-packages has no ``Info.plist`` to put the key in, so one is built
+here: a minimal ``.app`` around a copy of the running interpreter, cached
+under the user's cache directory and rebuilt only when the interpreter
+changes.
 
 Two things about this are worth knowing before changing it.
 
@@ -29,6 +30,12 @@ Xcode command line tools, for no benefit.
 # The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
 # after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
 # peer name its version.
+#
+# tccd forgives a missing usage description in an application linked against
+# an old SDK, and asks with generic wording instead. It did for PyInstaller
+# 6.22.3 (SDK 12.1) and py2app 0.28.10 (SDK 11.3) launchers, and aborted
+# Claude Code (SDK 26.5). Where the cutoff lies was not established, so the
+# key is treated as required.
 
 from __future__ import annotations
 
@@ -112,6 +119,16 @@ def _assemble(app: Path, interpreter: Path, name: str, reason: str) -> None:
     for directory in ("lib", "Frameworks"):
         if (beside / directory).is_dir():
             (app / "Contents" / directory).symlink_to(beside / directory)
+
+    # PyInstaller's launcher, run from inside a bundle, looks for its files in
+    # Contents/Frameworks. A command line build keeps them in _internal beside
+    # it instead, and sys._MEIPASS says where they are either way. Measured
+    # with PyInstaller 6.22.3: the copied launcher could not load Python.
+    frozen = getattr(sys, "_MEIPASS", None)
+    frameworks = app / "Contents" / "Frameworks"
+
+    if frozen is not None and not frameworks.exists():
+        frameworks.symlink_to(frozen)
 
     with (app / "Contents" / "Info.plist").open("wb") as plist:
         plistlib.dump(

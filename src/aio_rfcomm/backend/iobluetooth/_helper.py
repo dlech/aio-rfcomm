@@ -465,6 +465,14 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
     if sys.platform != "darwin":
         raise RuntimeError("the helper process is macOS only")
 
+    # A frozen program is its own helper. If it ran the program instead of the
+    # helper, a helper started from here would do the same, without end.
+    if "AIO_RFCOMM_CONTROL_FD" in os.environ:
+        raise HelperFailedError(
+            "this process was started as the macOS Bluetooth helper but ran "
+            "the program instead, so it cannot start a helper of its own"
+        )
+
     # Left to its defaults the bundle is never the one macOS asks about:
     # it inherits the responsibility of whatever started this process.
     executable = (
@@ -549,10 +557,9 @@ def _died(pid: int) -> RfcommError:
         return BluetoothUnavailableError(
             Availability.NOT_ALLOWED,
             "macOS refused Bluetooth to the helper process and ended it. "
-            "Bluetooth is granted to the application responsible for this "
-            "process, which must carry NSBluetoothAlwaysUsageDescription in "
-            "its Info.plist. If this program is not a bundled application -- "
-            "a script, a REPL or a command line tool -- call "
+            "A bundled application needs NSBluetoothAlwaysUsageDescription "
+            "in its Info.plist. Any other program -- a script, a REPL or a "
+            "command line tool -- needs to call "
             "aio_rfcomm.macos.prompt_under_name() before opening "
             "Bluetooth, so the helper can ask for permission itself. Once "
             "it is allowed, start the program again.",

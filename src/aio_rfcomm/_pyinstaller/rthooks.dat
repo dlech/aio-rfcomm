@@ -1,0 +1,3 @@
+{
+    "aio_rfcomm": ["pyi_rth_aio_rfcomm.py"],
+}

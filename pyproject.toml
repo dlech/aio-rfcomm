@@ -34,6 +34,10 @@ Homepage = "https://github.com/dlech/aio-rfcomm"
 Repository = "https://github.com/dlech/aio-rfcomm"
 Issues = "https://github.com/dlech/aio-rfcomm/issues"
 
+# Lets a program frozen with PyInstaller start the macOS helper.
+[project.entry-points.pyinstaller40]
+hook-dirs = "aio_rfcomm._pyinstaller:get_hook_dirs"
+
 [build-system]
 requires = ["uv_build>=0.9.26,<0.13.0"]
 build-backend = "uv_build"
@@ -110,3 +114,5 @@ filterwarnings = ["error"]
 # Tests stand in for a second, misbehaving caller, which is exactly what the
 # structured concurrency rule forbids in the library itself.
 "tests/**" = ["TID251"]
+# PyInstaller finds hooks by this file name.
+"src/aio_rfcomm/_pyinstaller/hook-*.py" = ["N999"]
