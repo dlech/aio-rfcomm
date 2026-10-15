@@ -290,8 +290,16 @@ class RfcommService:
         self._scope.check()
         self._check_ending()
 
-        with self._bluetooth._interrupted():
-            backend = await self._backend.accept()
+        backend = None
+
+        try:
+            with self._bluetooth._interrupted():
+                backend = await self._backend.accept()
+        except BaseException:
+            # Accepted, and then Bluetooth went before anyone could have it.
+            if backend is not None:
+                backend.close()
+            raise
 
         request = RfcommConnectionRequest(backend, self)
         self._requests.add(request)

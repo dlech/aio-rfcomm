@@ -319,3 +319,20 @@ async def test_an_accept_entered_after_the_service_s_block_refuses(
         async with accepting:
             pass
     assert fake.closed
+
+
+async def test_a_peer_accepted_as_bluetooth_goes_is_hung_up_on(
+    bluetooth: Bluetooth, provider: FakeProvider
+) -> None:
+    async with bluetooth.serve(CHAT, name="chat") as service:
+        published = _published(provider)
+        published.accept_cancel_finishes = True
+        waiting = asyncio.ensure_future(anext(service.connection_requests()))
+        await asyncio.sleep(0)
+
+        provider.report(Availability.SWITCHED_OFF)
+        fake = published.connect()
+        with pytest.raises(BluetoothUnavailableError):
+            async with asyncio.timeout(1):
+                await waiting
+        assert fake.closed

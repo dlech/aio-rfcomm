@@ -143,6 +143,9 @@ class FakeService(BackendService):
         self.service = service
         self.name = name
         self.withdrawn = False
+        # Whether a cancelled accept takes the next peer anyway. Not measured
+        # on any platform: a contract the core must survive, not a backend.
+        self.accept_cancel_finishes = False
         self._channel = channel
         self._arriving: asyncio.Queue[FakeRequest] = asyncio.Queue()
 
@@ -153,7 +156,12 @@ class FakeService(BackendService):
 
     @override
     async def accept(self) -> BackendRequest:
-        return await self._arriving.get()
+        try:
+            return await self._arriving.get()
+        except asyncio.CancelledError:
+            if not self.accept_cancel_finishes:
+                raise
+            return await self._arriving.get()
 
     # -- test controls -------------------------------------------------
 
