@@ -52,20 +52,20 @@ user, and a program that cannot tell them apart tells them the wrong one.
 
 ```python
 except ChannelClosedError as error:
-    if error.reason is CloseReason.PEER_CLOSED:
-        print("the other end hung up")
-    else:
-        print(f"lost the channel: {error}")
+    match error.reason:
+        case CloseReason.PEER_CLOSED:
+            print("the other end hung up")
+        case CloseReason.LINK_LOST:
+            print("lost the connection")
+        case _:
+            assert_never(error.reason)
 ```
 
-There is an asymmetry worth knowing:
-
-- [`receive`][aio_rfcomm.RfcommChannel.receive] raises it only for the
-  *abnormal* reasons. An orderly hang-up by the peer is not an error there —
-  the stream simply ends and it returns `b""`.
-- [`fail_when_gone`][aio_rfcomm.RfcommChannel.fail_when_gone] raises it for
-  every reason, because a caller who asked to stop when the channel closes
-  meant all of them.
+Every ending is raised, the peer hanging up included. Once a channel is over,
+[`receive`][aio_rfcomm.RfcommChannel.receive] — after handing over whatever
+arrived before the end — and [`send`][aio_rfcomm.RfcommChannel.send] raise it,
+with the same reason every time, so a reader and a writer that both notice
+agree on what happened.
 
 ## Limits
 

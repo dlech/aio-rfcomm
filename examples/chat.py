@@ -24,7 +24,8 @@ import argparse
 import asyncio
 import contextlib
 import sys
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Generator, Iterator
+from typing import NoReturn, assert_never
 from uuid import UUID
 
 from prompt_toolkit import PromptSession
@@ -69,20 +70,18 @@ def split_lines(buffer: bytearray, arrived: bytes) -> Iterator[str]:
         yield line.decode("utf-8", errors="replace").rstrip("\r")
 
 
-async def show(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
+async def show(channel: aio_rfcomm.RfcommChannel, who: str) -> NoReturn:
     """
-    Print what the peer says until it stops saying anything.
+    Print what the peer says, until the channel ends.
 
     Args:
         channel: The open channel.
         who: What to label the peer's lines with.
     """
     buffer = bytearray()
+
     while True:
-        arrived = await channel.receive()
-        if not arrived:
-            return
-        for line in split_lines(buffer, arrived):
+        for line in split_lines(buffer, await channel.receive()):
             print(f"{who}: {line}")
 
 
@@ -102,43 +101,70 @@ async def send_typing(channel: aio_rfcomm.RfcommChannel) -> None:
         await channel.send(line.encode() + b"\n")
 
 
-async def converse(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
+@contextlib.contextmanager
+def unwrap_ending() -> Generator[None, None, None]:
     """
-    Talk until either end hangs up.
+    Raise a channel's ending plainly from a task group that shares it.
 
-    Reading and typing run as two tasks in one group, so whichever finishes
-    first takes the other down with it -- and ``fail_when_gone`` stops both
-    if the channel goes away while the typing task sits waiting for a key it
-    will never get.
-
-    Args:
-        channel: The open channel.
-        who: What to label the peer's lines with.
+    Every task using a channel sees the same ending, so a group made only of
+    endings holds one fact, possibly several times over. Anything else in the
+    group is a bug and goes on up untouched.
     """
-    print(f"connected to {who}. Ctrl-D to hang up.")
     try:
-        with patch_stdout():
-            async with channel.fail_when_gone(), asyncio.TaskGroup() as group:
-                group.create_task(show(channel, who))
-                group.create_task(send_typing(channel))
-    except ChannelClosedError as error:
-        # Not a group: fail_when_gone reports its task group's lone failure as
-        # itself, so callers never have to write except* for one error.
-        _report(error)
+        yield
+    except ExceptionGroup as failed:
+        match failed.split(ChannelClosedError):
+            case (ExceptionGroup() as endings, None):
+                # split() keeps any nesting, so dig down to an exception.
+                ending = endings.exceptions[0]
+
+                while isinstance(ending, ExceptionGroup):
+                    ending = ending.exceptions[0]
+
+                raise ending from None
+            case _:
+                raise
 
 
-def _report(error: BaseException) -> None:
+def _report(error: ChannelClosedError) -> None:
     """
     Say how the conversation ended.
 
     Args:
         error: The channel error that ended it.
     """
-    reason = getattr(error, "reason", None)
-    if reason is CloseReason.PEER_CLOSED:
-        print("the other end hung up")
-    else:
-        print(f"lost the channel: {error}")
+    match error.reason:
+        case CloseReason.PEER_CLOSED:
+            print("the other end hung up")
+        case CloseReason.LINK_LOST:
+            print("lost the connection")
+        case _:
+            assert_never(error.reason)
+
+
+async def converse(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
+    """
+    Talk until either end hangs up.
+
+    Reading runs as a task beside the typing. The channel's end is raised by
+    its receive(), which also cancels the typing; the user hanging up returns
+    from the typing, which then stops the reading. The task group is only how
+    this does two things at once, so the end comes out of it as itself.
+
+    Args:
+        channel: The open channel.
+        who: What to label the peer's lines with.
+    """
+    print(f"connected to {who}. Ctrl-D to hang up.")
+
+    try:
+        with patch_stdout(), unwrap_ending():
+            async with asyncio.TaskGroup() as group:
+                reading = group.create_task(show(channel, who))
+                await send_typing(channel)
+                reading.cancel()
+    except ChannelClosedError as error:
+        _report(error)
 
 
 # --------------------------------------------------------------------------

@@ -52,7 +52,7 @@ from aio_rfcomm.backend.provider import (
     BackendService,
 )
 from aio_rfcomm.backend.sdp import SdpError, read_channel
-from aio_rfcomm.backend.stream import StreamChannel
+from aio_rfcomm.backend.stream import StreamChannel, open_stream
 from aio_rfcomm.backend.windows import _service
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
@@ -200,10 +200,10 @@ async def _take(conn: socket.socket) -> AsyncGenerator[BackendChannel, None]:
         The channel.
     """
     async with AsyncExitStack() as stack:
-        stack.callback(conn.close)
-        reader, writer = await asyncio.open_connection(sock=conn)
-        stack.callback(writer.close)
-        yield WindowsChannel(reader, writer)
+        transport, protocol = await open_stream(conn)
+        opened = WindowsChannel(transport, protocol)
+        stack.push_async_callback(opened.close)
+        yield opened
 
 
 class WindowsAdapter(BackendAdapter):
@@ -336,10 +336,11 @@ class WindowsAdapter(BackendAdapter):
             # family -- so once the socket is connected, by whatever means,
             # the standard APIs drive it unchanged. That is what lets this
             # share a stream channel with backends on other platforms.
-            reader, writer = await asyncio.open_connection(sock=sock)
-            stack.callback(writer.close)
+            transport, protocol = await open_stream(sock)
+            opened = WindowsChannel(transport, protocol)
+            stack.push_async_callback(opened.close)
 
-            yield WindowsChannel(reader, writer)
+            yield opened
 
 
 class WindowsBackend(BackendProvider):

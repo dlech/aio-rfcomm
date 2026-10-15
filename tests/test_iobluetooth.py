@@ -47,6 +47,7 @@ from aio_rfcomm.discovery import RfcommAdapterInfo
 from aio_rfcomm.errors import (
     AdapterLostReason,
     BluetoothUnavailableError,
+    ChannelClosedError,
     CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
@@ -321,16 +322,6 @@ async def _channel(
             there.send({"event": "finished", "handle": handle})
 
 
-async def test_a_channel_nobody_reads_still_ends() -> None:
-    async with (
-        _helper() as (helper, there),
-        _channel(helper, there, 7) as (channel, _far),
-    ):
-        there.send({"event": "gone", "handle": 7, "reason": "PEER_CLOSED"})
-        async with asyncio.timeout(1):
-            assert await channel.wait_until_gone() is CloseReason.PEER_CLOSED
-
-
 async def test_a_reader_giving_up_leaves_the_others_their_answer() -> None:
     """
     The stream and the reason for its end come over different sockets, so a
@@ -351,7 +342,9 @@ async def test_a_reader_giving_up_leaves_the_others_their_answer() -> None:
 
         there.send({"event": "gone", "handle": 7, "reason": "LINK_LOST"})
         async with asyncio.timeout(1):
-            assert await channel.wait_until_gone() is CloseReason.LINK_LOST
+            with pytest.raises(ChannelClosedError) as caught:
+                await channel.receive()
+        assert caught.value.reason is CloseReason.LINK_LOST
 
 
 async def test_giving_up_on_a_request_tells_the_helper_to_stop() -> None:

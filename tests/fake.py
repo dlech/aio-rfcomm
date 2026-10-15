@@ -23,7 +23,12 @@ from aio_rfcomm.backend.provider import (
     BackendService,
 )
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
-from aio_rfcomm.errors import AdapterLostReason, ChannelInUseError, CloseReason
+from aio_rfcomm.errors import (
+    AdapterLostReason,
+    ChannelClosedError,
+    ChannelInUseError,
+    CloseReason,
+)
 
 DEVICE = RfcommDeviceInfo("00:11:22:33:44:55", "fake device")
 ADAPTER = RfcommAdapterInfo("fake0", "AA:BB:CC:DD:EE:FF", "fake adapter")
@@ -32,6 +37,9 @@ ADAPTER = RfcommAdapterInfo("fake0", "AA:BB:CC:DD:EE:FF", "fake adapter")
 class FakeChannel(BackendChannel):
     """
     A channel whose every event the test drives by hand.
+
+    Keeps the backend contract: what was delivered is handed over first, and
+    only then is the end raised, the same way every time.
     """
 
     def __init__(self) -> None:
@@ -39,17 +47,28 @@ class FakeChannel(BackendChannel):
         self.sent = bytearray()
         self.closed = False
         self.send_blocks = False
-        self._incoming: asyncio.Queue[bytes] = asyncio.Queue()
+        self._incoming = bytearray()
+        self._changed = asyncio.Event()
 
     @override
     async def send(self, data: bytes) -> None:
+        if self.reason is not None:
+            raise ChannelClosedError(self.reason)
         if self.send_blocks:
             await asyncio.Event().wait()
         self.sent += data
 
     @override
     async def receive(self, max_bytes: int | None = None) -> bytes:
-        return await self._incoming.get()
+        while not self._incoming:
+            if self.reason is not None:
+                raise ChannelClosedError(self.reason)
+            self._changed.clear()
+            await self._changed.wait()
+        count = len(self._incoming) if max_bytes is None else max_bytes
+        taken = bytes(self._incoming[:count])
+        del self._incoming[:count]
+        return taken
 
     # -- test controls -------------------------------------------------
 
@@ -57,13 +76,15 @@ class FakeChannel(BackendChannel):
         """
         Hand the channel some incoming bytes.
         """
-        self._incoming.put_nowait(data)
+        self._incoming += data
+        self._changed.set()
 
     def go_away(self, reason: CloseReason = CloseReason.PEER_CLOSED) -> None:
         """
         End the channel, as the backend would on noticing it had gone.
         """
         self._mark_gone(reason)
+        self._changed.set()
 
 
 class FakeService(BackendService):

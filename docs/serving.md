@@ -17,8 +17,11 @@ async def talk(
 ) -> None:
     await channel.send(b"hello\n")
 
-    while data := await channel.receive():
-        print(f"{peer.address}: {data!r}")
+    try:
+        while True:
+            print(f"{peer.address}: {await channel.receive()!r}")
+    except ChannelClosedError:
+        print(f"{peer.address} hung up")
 
 
 async with adapter.serve(CHAT, talk, name="my thing") as service:

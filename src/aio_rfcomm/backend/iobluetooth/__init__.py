@@ -35,7 +35,7 @@ from aio_rfcomm.backend.provider import (
     BackendProvider,
     BackendService,
 )
-from aio_rfcomm.backend.stream import StreamChannel
+from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     AdapterLostReason,
@@ -55,31 +55,18 @@ class IOBluetoothChannel(StreamChannel):
 
     def __init__(
         self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
+        transport: asyncio.Transport,
+        protocol: StreamProtocol,
         ending: Ending,
     ) -> None:
         """
         Args:
-            reader: Reads bytes the device sent.
-            writer: Writes bytes to send.
+            transport: Carries the socket the helper handed back.
+            protocol: What the transport reports to.
             ending: Where the helper's report of the channel's end arrives.
         """
-        super().__init__(reader, writer)
+        super().__init__(transport, protocol)
         self._ending = ending
-
-    @override
-    async def wait_until_gone(self) -> CloseReason:
-        """
-        Wait for the helper to report the channel's end.
-
-        Asked of the helper rather than of the stream, which says nothing
-        until somebody reads it: a channel nobody is reading still ends.
-
-        Returns:
-            Why the channel went away.
-        """
-        return await self.explain_end()
 
     @override
     async def explain_end(self) -> CloseReason:
@@ -202,11 +189,11 @@ class IOBluetoothAdapter(BackendAdapter):
             stack.push_async_callback(self._helper.wait_until_finished, handle)
 
             sock = socket.socket(fileno=fds[0])
-            stack.callback(sock.close)
-            reader, writer = await asyncio.open_connection(sock=sock)
-            stack.callback(writer.close)
+            transport, protocol = await open_stream(sock)
+            opened = IOBluetoothChannel(transport, protocol, ending)
+            stack.push_async_callback(opened.close)
 
-            yield IOBluetoothChannel(reader, writer, ending)
+            yield opened
 
 
 class IOBluetoothBackend(BackendProvider):

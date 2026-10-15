@@ -244,43 +244,41 @@ class BackendChannel(ABC):
     """
     An open RFCOMM channel, as the backend sees it.
 
-    Subclasses must call ``super().__init__()``, and must either call
-    :meth:`_mark_gone` once when they notice the channel has ended or override
-    :meth:`wait_until_gone` to ask whatever does notice.
+    Every ending is raised: once the channel is over, :meth:`receive` -- after
+    handing over whatever arrived before the end -- and :meth:`send` raise
+    :class:`~aio_rfcomm.errors.ChannelClosedError`, with the same reason
+    every time.
+
+    Subclasses must call ``super().__init__()``, and record the end with
+    :meth:`_mark_gone` once they know why.
     """
 
     def __init__(self) -> None:
-        self._gone = asyncio.Event()
         self._reason: CloseReason | None = None
 
     def _mark_gone(self, reason: CloseReason) -> None:
         """
-        Record that the channel has ended.
-
-        Called by the backend when it detects the channel is gone. Only the
-        first call counts, so a backend that notices twice does no harm.
+        Record why the channel ended. Only the first call counts.
 
         Args:
             reason: Why the channel is gone.
         """
         if self._reason is None:
             self._reason = reason
-            self._gone.set()
 
-    async def wait_until_gone(self) -> CloseReason:
+    @property
+    def reason(self) -> CloseReason | None:
         """
-        Wait until the channel is gone.
-
-        Implemented once here rather than by every backend: detecting the end
-        is platform work, but waiting on it and handing the reason to however
-        many callers are interested is not.
-
-        Returns:
-            Why the channel went away.
+        Why the channel ended, once that is known.
         """
-        await self._gone.wait()
-        assert self._reason is not None
         return self._reason
+
+    @property
+    def ended(self) -> bool:
+        """
+        Whether the channel is over, which may be known before why it is.
+        """
+        return self._reason is not None
 
     @abstractmethod
     async def send(self, data: bytes) -> None:
@@ -293,8 +291,7 @@ class BackendChannel(ABC):
                 the caller's.
 
         Raises:
-            ChannelBrokenError: A previous send was cancelled.
-            ChannelClosedError: The channel went away.
+            ChannelClosedError: The channel is over.
         """
         raise NotImplementedError
 
@@ -304,14 +301,15 @@ class BackendChannel(ABC):
         Take the next bytes to arrive.
 
         Args:
-            max_bytes: At most this many bytes. ``None`` for any amount.
+            max_bytes: At most this many bytes, at least 1. ``None`` for
+                whatever has arrived.
 
         Returns:
-            Between 1 and ``max_bytes`` bytes, or ``b""`` once the peer has
-            hung up (:attr:`~aio_rfcomm.errors.CloseReason.PEER_CLOSED`).
+            Between 1 and ``max_bytes`` bytes. Never empty.
 
         Raises:
-            ChannelClosedError: The channel went away unexpectedly.
+            ChannelClosedError: The channel is over, and everything that
+                arrived before the end has been taken.
         """
         raise NotImplementedError
 

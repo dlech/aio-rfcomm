@@ -26,20 +26,29 @@ blocked on anything *else* — reading the keyboard, waiting on a queue, sleepin
 ago. This is the failure that makes ad-hoc connection code hang, and no amount
 of care inside the receiving task fixes it.
 
-[`fail_when_gone`][aio_rfcomm.RfcommChannel.fail_when_gone] is the answer. It
-wraps a block and raises [`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError]
-*inside* it the moment the channel goes:
+The answer is a task group with a task receiving in it. Every ending is raised
+by [`receive`][aio_rfcomm.RfcommChannel.receive], the peer hanging up
+included, and a task group cancels the rest of its tasks when one fails:
 
 ```python
-async with channel.fail_when_gone(), asyncio.TaskGroup() as group:
+async with asyncio.TaskGroup() as group:
     group.create_task(read_from_peer(channel))
     group.create_task(read_from_keyboard(channel))
 ```
 
 The keyboard task is not watching the channel and does not have to. When the
-peer hangs up, the block it is running in fails, and the task group cancels it.
+peer hangs up, the reading task raises, and the task group cancels the
+keyboard task. A program that only sends keeps a task receiving for the same
+reason.
 
-Adapters have the same method:
+A task group reports what its tasks raised as an `ExceptionGroup`, even when
+there is only one, and the reader and a writer may both have seen the end. The
+task group is only how your function does two things at once, so that function
+is the place to turn a group made only of the channel's ending back into the
+ending itself. The chat example's `unwrap_ending` does exactly that, and lets
+anything else go on up untouched.
+
+Adapters have a method for the same purpose:
 [`RfcommAdapter.fail_when_gone`][aio_rfcomm.RfcommAdapter.fail_when_gone]
 raises when the radio is switched off. That is the one a server wants, since a
 published service is only as alive as the radio under it.
@@ -47,18 +56,7 @@ published service is only as alive as the radio under it.
 !!! note "One error, not a group"
 
     `fail_when_gone` runs a task group internally, but reports its lone failure
-    as itself. Callers catch `ChannelClosedError`, not `except*`.
-
-## Asking instead of failing
-
-Where you want to *wait* for the end rather than be interrupted by it,
-[`wait_until_gone`][aio_rfcomm.RfcommChannel.wait_until_gone] returns the
-[`CloseReason`][aio_rfcomm.errors.CloseReason] instead of raising:
-
-```python
-reason = await channel.wait_until_gone()
-print(f"finished: {reason.value}")
-```
+    as itself. Callers catch `AdapterLostError`, not `except*`.
 
 ## Cancellation
 
@@ -115,11 +113,15 @@ it happens.
 
 ### Cancelling a send
 
-A cancelled [`send`][aio_rfcomm.RfcommChannel.send] leaves an unknown number of
-bytes on the wire. There is no way to find out how many, and no way to resume,
-so the channel cannot be trusted afterwards: every later call raises
-[`ChannelBrokenError`][aio_rfcomm.errors.ChannelBrokenError]. Close the channel
-and open a new one.
+After a cancelled [`send`][aio_rfcomm.RfcommChannel.send], whether the peer
+received the data is unknown, so a protocol with any framing cannot trust what
+follows. Every later `send` on that channel raises
+[`ChannelBrokenError`][aio_rfcomm.errors.ChannelBrokenError]; leave the
+channel's block and open a new one. Receiving carries on unaffected, and if
+the channel has ended meanwhile, the ending is raised instead.
 
-This is deliberate. Silently continuing would corrupt whatever protocol you are
-speaking, at a point far from the cancellation that caused it.
+The usual way to get here is a deadline around a send, and then a retry. The
+retry is refused where it happens rather than allowed to corrupt the stream at
+some point far from the cancellation that caused it. The rule is njs's, from
+[Trio issue #889](https://github.com/python-trio/trio/issues/889): once a send
+is cancelled, the stream is doomed.

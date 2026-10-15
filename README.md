@@ -10,8 +10,8 @@ async with aio_rfcomm.open_adapter() as adapter:
     async with device.open_service(MY_SERVICE) as channel:
         await channel.send(b"hello\n")
 
-        while data := await channel.receive():
-            print(data.decode(), end="")
+        while True:  # until the device hangs up, raising ChannelClosedError
+            print((await channel.receive()).decode(), end="")
 ```
 
 That is the whole idea. RFCOMM is how most Bluetooth gadgets that predate BLE

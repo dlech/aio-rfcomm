@@ -47,7 +47,7 @@ from aio_rfcomm.backend.provider import (
     BackendProvider,
     BackendService,
 )
-from aio_rfcomm.backend.stream import StreamChannel
+from aio_rfcomm.backend.stream import StreamChannel, open_stream
 from aio_rfcomm.discovery import RfcommAdapterInfo, RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
@@ -378,10 +378,10 @@ async def _take_connection(fd: int) -> AsyncGenerator[BackendChannel, None]:
     """
     async with AsyncExitStack() as stack:
         sock = socket.socket(fileno=fd)
-        stack.callback(sock.close)
-        reader, writer = await asyncio.open_connection(sock=sock)
-        stack.callback(writer.close)
-        yield BlueZChannel(reader, writer)
+        transport, protocol = await open_stream(sock)
+        opened = BlueZChannel(transport, protocol)
+        stack.push_async_callback(opened.close)
+        yield opened
 
 
 class BlueZAdapter(BackendAdapter):
@@ -664,11 +664,11 @@ class BlueZAdapter(BackendAdapter):
 
             fd = await waiter
             sock = socket.socket(fileno=fd)
-            stack.callback(sock.close)
-            reader, writer = await asyncio.open_connection(sock=sock)
-            stack.callback(writer.close)
+            transport, protocol = await open_stream(sock)
+            opened = BlueZChannel(transport, protocol)
+            stack.push_async_callback(opened.close)
 
-            yield BlueZChannel(reader, writer)
+            yield opened
 
     @asynccontextmanager
     async def _connect_by_channel(
@@ -717,10 +717,11 @@ class BlueZAdapter(BackendAdapter):
                     f"could not reach {address} on channel {channel}: {error}"
                 ) from error
 
-            reader, writer = await asyncio.open_connection(sock=sock)
-            stack.callback(writer.close)
+            transport, protocol = await open_stream(sock)
+            opened = BlueZChannel(transport, protocol)
+            stack.push_async_callback(opened.close)
 
-            yield BlueZChannel(reader, writer)
+            yield opened
 
 
 class BlueZBackend(BackendProvider):

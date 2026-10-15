@@ -13,14 +13,18 @@ blocking until something has:
 ```python
 await channel.send(b"hello\n")
 
-while data := await channel.receive():
-    print(data.decode(), end="")
+try:
+    while True:
+        print((await channel.receive()).decode(), end="")
+except ChannelClosedError as ended:
+    print(f"\nchannel over: {ended}")
 ```
 
-Once the peer hangs up, `receive` returns `b""` — and keeps returning it, so
-it is an end rather than an error. That is what ends the loop above. If you
-would rather be interrupted than check a return value, see
-[Lifetimes](lifetimes.md).
+`receive` never returns empty. Once the channel is over — the peer hanging up
+included — it hands over whatever arrived before the end and then raises
+[`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError], and goes on
+raising the same error. That is what ends the loop above. See
+[Lifetimes](lifetimes.md) for a channel used by more than one task.
 
 One task may send while another receives — the two directions are independent
 and do not block each other. Two tasks using the *same* direction is a bug,
@@ -51,10 +55,7 @@ reading an exact number of bytes:
 ```python
 async def read_exactly(channel, count: int, buffer: bytearray) -> bytes:
     while len(buffer) < count:
-        arrived = await channel.receive()
-        if not arrived:
-            raise EOFError(f"wanted {count} bytes, stream ended with {len(buffer)}")
-        buffer += arrived
+        buffer += await channel.receive()
     taken = bytes(buffer[:count])
     del buffer[:count]
     return taken

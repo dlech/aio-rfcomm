@@ -187,16 +187,12 @@ class CloseReason(enum.Enum):
 
 class ChannelClosedError(RfcommError):
     """
-    The channel is no longer usable.
+    The channel is over.
 
-    :meth:`~aio_rfcomm.RfcommChannel.receive` raises this only when the
-    channel went away for a reason other than
-    :attr:`CloseReason.PEER_CLOSED`; an orderly hang-up by the peer is not an
-    error there, it ends the stream and returns ``b""``.
-
-    :meth:`~aio_rfcomm.RfcommChannel.fail_when_gone` raises it for every
-    reason, since a caller who asked to stop when the channel closes meant all
-    of them. :attr:`reason` says which.
+    Every ending is raised, the peer hanging up included: by
+    :meth:`~aio_rfcomm.RfcommChannel.send`, and by
+    :meth:`~aio_rfcomm.RfcommChannel.receive` once whatever arrived before the
+    end has been taken, with the same :attr:`reason` every time.
     """
 
     def __init__(self, reason: CloseReason) -> None:

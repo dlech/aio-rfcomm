@@ -109,8 +109,9 @@ async def test_a_peer_that_hangs_up_ends_the_stream(
     ):
         opened[-1].hang_up()
         async with asyncio.timeout(1):
-            assert await channel.receive() == b""
-            assert await channel.wait_until_gone() is CloseReason.PEER_CLOSED
+            with pytest.raises(ChannelClosedError) as caught:
+                await channel.receive()
+        assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
 async def test_a_lost_link_is_not_mistaken_for_a_hang_up(

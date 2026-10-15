@@ -8,6 +8,7 @@ import asyncio
 from uuid import UUID
 
 import aio_rfcomm
+from aio_rfcomm.errors import ChannelClosedError
 
 SERIAL_PORT = UUID("00001101-0000-1000-8000-00805f9b34fb")
 
@@ -19,8 +20,11 @@ async def main() -> None:
         async with device.open_service(SERIAL_PORT) as channel:
             await channel.send(b"hello\n")
 
-            while data := await channel.receive():
-                print(data.decode(), end="")
+            try:
+                while True:
+                    print((await channel.receive()).decode(), end="")
+            except ChannelClosedError:
+                print("the other end hung up")
 
 
 asyncio.run(main())
