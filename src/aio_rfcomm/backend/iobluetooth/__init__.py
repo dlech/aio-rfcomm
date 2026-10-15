@@ -8,7 +8,7 @@ IOBluetooth will only work from the main thread of a process running a
 CFRunLoop, and macOS ends any process that touches Bluetooth without an
 application bundle saying why it wants to. A library cannot impose either
 condition on the program that imports it, so it brings its own process that
-meets both; see :mod:`aio_rfcomm.backend.iobluetooth.__main__`.
+meets both. See :mod:`aio_rfcomm.backend.iobluetooth.__main__`.
 
 Nothing on this side imports rubicon or the framework. What comes back from
 the helper is an ordinary connected file descriptor, which is exactly what the
@@ -545,7 +545,7 @@ class IOBluetoothBackend(BackendProvider):
                     raise
                 if not running:
                     # A replacement that will not start would not start next
-                    # time either; trying again would only spin.
+                    # time either. Trying again would only spin.
                     state.set(
                         Availability.SERVICE_UNAVAILABLE,
                         f"the macOS Bluetooth helper could not be restarted: {failed}",
@@ -553,7 +553,7 @@ class IOBluetoothBackend(BackendProvider):
                     return
                 logger.info("the macOS Bluetooth helper stopped: %s", failed)
             else:
-                logger.info("the Bluetooth service restarted; starting a new helper")
+                logger.info("the Bluetooth service restarted. Starting a new helper")
 
             replacing = True
 
@@ -584,7 +584,7 @@ async def _relay(helper: Helper, state: AvailabilityState) -> None:
             case Availability.SWITCHED_OFF:
                 state.set(
                     Availability.SWITCHED_OFF,
-                    "this Mac's Bluetooth is switched off; turn it on",
+                    "this Mac's Bluetooth is switched off. Turn it on",
                 )
             case Availability.NOT_ALLOWED:
                 state.set(Availability.NOT_ALLOWED, _not_allowed(authorization))
@@ -645,7 +645,7 @@ def _not_allowed(authorization: int) -> str:
         case CBManagerAuthorization.NOT_DETERMINED:
             return (
                 "Bluetooth permission for this program has not been answered. "
-                "A dialog should have appeared; if it was dismissed, run the "
+                "A dialog should have appeared. If it was dismissed, run the "
                 "program again and allow it."
             )
         case _:

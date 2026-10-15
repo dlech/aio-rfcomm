@@ -684,7 +684,7 @@ async def test_the_helper_says_so_when_it_has_let_the_device_go() -> None:
     and there was never a channel at all.
 
     Everything from the helper's request handling down through the native
-    layer runs; only the framework is stood in for.
+    layer runs. Only the framework is stood in for.
     """
     from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
     from tests.fake_iobluetooth import fake_framework

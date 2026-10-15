@@ -233,7 +233,7 @@ async def test_a_cancelled_receive_loses_nothing() -> None:
 async def test_data_that_arrives_as_a_receive_is_cancelled_survives() -> None:
     """
     The receive has been woken by the data but not yet run when the cancel
-    lands; nothing may have been taken by then.
+    lands. Nothing may have been taken by then.
     """
     channel, protocol, _transport = _driven()
     waiting = asyncio.ensure_future(channel.receive())

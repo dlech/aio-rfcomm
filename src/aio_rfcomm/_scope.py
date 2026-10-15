@@ -65,7 +65,7 @@ class Scope:
         while scope is not None:
             if scope.closed:
                 raise ScopeClosedError(
-                    f"the {scope.what} is closed; it cannot be used outside the "
+                    f"the {scope.what} is closed. It cannot be used outside the "
                     "'async with' block that created it"
                 )
             scope = scope.parent

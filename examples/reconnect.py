@@ -56,13 +56,13 @@ def explain(reason: UnavailableReason) -> str:
     # A match rather than a dict, so that a new reason is a type error here.
     match reason:
         case Availability.SWITCHED_OFF:
-            return "Bluetooth is switched off; turn it on to connect"
+            return "Bluetooth is switched off. Turn it on to connect"
         case Availability.NO_ADAPTER:
-            return "this computer has no Bluetooth adapter; plug one in"
+            return "this computer has no Bluetooth adapter. Plug one in"
         case Availability.NOT_ALLOWED:
-            return "this program may not use Bluetooth; allow it in settings"
+            return "this program may not use Bluetooth. Allow it in settings"
         case Availability.SERVICE_UNAVAILABLE:
-            return "the Bluetooth service is restarting; waiting for it"
+            return "the Bluetooth service is restarting. Waiting for it"
         case Availability.UNSUPPORTED:
             return "this system has no Bluetooth"
         case _:
@@ -80,7 +80,7 @@ async def wait_until_usable(bluetooth: aio_rfcomm.Bluetooth) -> bool:
         bluetooth: The open Bluetooth object.
 
     Returns:
-        True once Bluetooth is usable; False if it never will be, since
+        True once Bluetooth is usable. False if it never will be, since
         nobody can do anything about a system with no Bluetooth.
     """
     async for availability in bluetooth.watch_availability():
@@ -119,7 +119,7 @@ async def wait_for_retry() -> bool:
     which would keep the process alive until someone pressed Enter.
 
     Returns:
-        True to try again; False if the user would rather stop.
+        True to try again. False if the user would rather stop.
     """
     try:
         await PromptSession[str]().prompt_async("press Enter to try again ")
@@ -151,7 +151,7 @@ async def stay_connected(
         except ChannelClosedError as lost:
             match lost.reason:
                 case CloseReason.LINK_LOST:
-                    print("[chat] lost the connection; reconnecting")
+                    print("[chat] lost the connection. Reconnecting")
                 case CloseReason.PEER_CLOSED:
                     # Hung up on, or turned away while the server was busy.
                     print("[chat] the server hung up")
@@ -190,7 +190,7 @@ async def main(server: aio_rfcomm.RfcommDeviceInfo) -> int:
     )
 
     try:
-        # Opens whatever Bluetooth is like right now, usable or not; the
+        # Opens whatever Bluetooth is like right now, usable or not. The
         # wait in stay_connected is what reports which.
         async with aio_rfcomm.open_bluetooth() as bluetooth:
             return await stay_connected(bluetooth, server)

@@ -8,7 +8,7 @@ Everything here must run on the main thread of a process whose event loop is
 backed by a CFRunLoop. That is not a style preference: an asynchronous
 IOBluetooth call made from anywhere else returns success and then never
 completes, and ``openRFCOMMChannelSync`` is refused outright. The helper
-process exists to provide such a thread; nothing in this module arranges one.
+process exists to provide such a thread. Nothing in this module arranges one.
 
 This module knows nothing about the helper or its control protocol, so the
 same code serves an in-process caller that already owns a CFRunLoop main
@@ -81,7 +81,7 @@ __all__ = [
 
 # Loading the framework is what makes its classes findable by name. It does
 # not touch the radio, so it does not trigger the permission check that ends
-# the process; the first call that needs Bluetooth does.
+# the process. The first call that needs Bluetooth does.
 load_library("IOBluetooth")
 
 # CoreBluetooth is loaded only for CBManager.authorization, which is the one
@@ -322,7 +322,7 @@ _SETTLE_SECONDS = 0.1
 _OPEN_REPORT_SECONDS = 1.0
 _OPEN_REPORT_ATTEMPTS = 4
 
-# How often to look again while the manager's state is unknown; see
+# How often to look again while the manager's state is unknown. See
 # report_states.
 _UNKNOWN_POLL_SECONDS = 0.05
 
@@ -337,7 +337,7 @@ _OBSERVE_INITIAL = 1 | 4
 
 # How long a device is left alone after a channel on it closes. Closing the
 # last channel tears down the RFCOMM session, and the L2CAP link underneath it
-# goes about thirty milliseconds after the close is reported finished; an open
+# goes about thirty milliseconds after the close is reported finished. An open
 # issued inside that window is handed the dying link and fails as a nil channel
 # with a zero status, reported to nobody. Measured swallowed at 25 ms and never
 # at 50, so twice that. A deadline rather than a delay: a caller that did
@@ -519,7 +519,7 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
     real toggle: the manager goes from powered on to powered off, on a
     framework thread, about a millisecond before the channel is told.
 
-    Every value is reported, the temporary ones included; what they mean is
+    Every value is reported, the temporary ones included. What they mean is
     for the caller to decide.
 
     If the manager cannot be reached, the controller's power state is
@@ -590,8 +590,8 @@ async def _wait_for_state(manager: _Manager, wanted: Callable[[int], bool]) -> N
         observer, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
     )
     try:
-        # The state can settle while the observer is being added, unheard;
-        # see report_states.
+        # The state can settle while the observer is being added, unheard.
+        # See report_states.
         if wanted(manager.state):
             observer.reached.set()
         await observer.reached.wait()
@@ -618,11 +618,11 @@ def _unusable(state: int) -> RfcommError:
             if read_authorization() == CBManagerAuthorization.ALLOWED_ALWAYS:
                 return BluetoothUnavailableError(
                     Availability.SWITCHED_OFF,
-                    "this Mac's Bluetooth is switched off; turn it on",
+                    "this Mac's Bluetooth is switched off. Turn it on",
                 )
             return BluetoothUnavailableError(
                 Availability.NOT_ALLOWED,
-                "Bluetooth is not allowed for this program; check Privacy & "
+                "Bluetooth is not allowed for this program. Check Privacy & "
                 "Security > Bluetooth in System Settings",
             )
         case CBManagerState.UNSUPPORTED:
@@ -1032,7 +1032,7 @@ class Channel:
 
         Returns:
             Why it closed. The baseband link tells the two cases apart: if it
-            is still up, the peer closed just this channel; if it is gone, the
+            is still up, the peer closed just this channel. If it is gone, the
             whole link went away.
         """
         await self._delegate.ended.wait()
@@ -1467,11 +1467,11 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
             if result == _RESULT_REFUSED:
                 # Asking again would be refused again.
                 raise ServiceNotFoundError(
-                    f"{address} refused channel {number}; usually nothing there "
+                    f"{address} refused channel {number}. Usually nothing there "
                     "is listening on it"
                 ) from None
             logger.debug(
-                "channel %d to %s was never reported open (bluetoothd: %s); "
+                "channel %d to %s was never reported open (bluetoothd: %s). "
                 "asking again",
                 number,
                 address,
@@ -1488,7 +1488,7 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
         f"after {_OPEN_REPORT_ATTEMPTS} attempts"
     )
     if result:
-        message += f"; bluetoothd last said {result}: {_describe_result(result)}"
+        message += f" (bluetoothd last said {result}: {_describe_result(result)})"
     raise ConnectionFailedError(message)
 
 
@@ -1516,7 +1516,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
     ``registerForChannelCloseNotification`` never fires, for a close this
     program asks for or one the peer causes, where the delegate callback
     does: measured with a real ``SEL``. The disassembly says why. A
-    ``CBClassicPeer`` has one disconnect callback; the coordinator that would
+    ``CBClassicPeer`` has one disconnect callback. The coordinator that would
     pass a close on to notifications sets it, and every
     ``IOBluetoothRFCOMMChannel`` set up on that peer replaces it with its own.
 
@@ -1551,7 +1551,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
             return Channel(opened, delegate, device)
 
         logger.debug(
-            "channel %d on %s is still open from an earlier use; waiting",
+            "channel %d on %s is still open from an earlier use. Waiting",
             number,
             address,
         )
@@ -1594,8 +1594,8 @@ async def _look_up(device: _Device, address: str, service: UUID) -> int:
     Find which RFCOMM channel a service is on.
 
     The cached record is tried first. macOS fills its cache from a real SDP
-    query rather than from advertising data, so a hit here is trustworthy;
-    a miss is worth one query before giving up.
+    query rather than from advertising data, so a hit here is trustworthy.
+    A miss is worth one query before giving up.
 
     Args:
         device: The connected ``IOBluetoothDevice``.
@@ -1649,7 +1649,7 @@ def _translate(error: MachError, address: str) -> RfcommError:
     """
     if error.code == IOReturn.TIMEOUT:
         return DeviceNotFoundError(
-            f"{address} did not answer; it may be switched off or out of range"
+            f"{address} did not answer. It may be switched off or out of range"
         )
     return ConnectionFailedError(f"could not reach {address}: {error}")
 
@@ -1663,7 +1663,7 @@ def _translate(error: MachError, address: str) -> RfcommError:
 _INCOMING = 1
 
 # bluetoothd never registers these two with its RFCOMM stack (disassembly), so
-# a service on one is not like a service anywhere else; they are left alone.
+# a service on one is not like a service anywhere else. They are left alone.
 _NOT_CHOSEN = (10, 15)
 
 # The protocol UUIDs a record names to say it is reached over RFCOMM.
@@ -1686,7 +1686,7 @@ def _record(service: UUID, name: str, number: int) -> ObjCInstance:
     # Sequences as plain arrays. Written as data element dictionaries, which
     # is what the framework's own documentation shows, the encoder writes out
     # the dictionaries' key names in place of their contents (follow-ups
-    # §10.1); arrays it encodes correctly, measured.
+    # §10.1). Arrays it encodes correctly, measured.
     record: dict[str, Any] = {
         "0001": [_sdp_uuid(service)],
         "0004": [
@@ -1753,7 +1753,7 @@ def _choose_channel(channel: int | None, avoiding: Collection[int]) -> int:
     # handle it gave out), and every connection to a channel, accepted ones
     # included, is kept in a list never cleared. The next registration on the
     # channel, in a later process, takes one off the list and accepts it
-    # instead of listening; the accept fails, the peer being long gone, and
+    # instead of listening. The accept fails, the peer being long gone, and
     # the service never hears a peer at all.
     used = _channels_in_use() | set(avoiding)
     if channel is not None:
@@ -1762,7 +1762,7 @@ def _choose_channel(channel: int | None, avoiding: Collection[int]) -> int:
                 f"RFCOMM channel {channel} already has a service published on "
                 "this Mac, by this program or another. macOS keeps a channel "
                 "it has served on, and may not deliver connections on it "
-                "again, until Bluetooth has been switched off and on; do that, "
+                "again, until Bluetooth has been switched off and on. Do that, "
                 "or let the library choose a channel."
             )
         return channel

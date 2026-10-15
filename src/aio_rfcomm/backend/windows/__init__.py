@@ -127,7 +127,7 @@ class WindowsService(BackendService):
         ``WSAEPROTONOSUPPORT``. ``asyncio.start_server`` fails the same way,
         only later and into the loop's exception handler. So the blocking
         accept runs on a daemon thread, the same shape the outgoing connect
-        uses and for the same reasons (see :func:`_reach`); the accepted
+        uses and for the same reasons (see :func:`_reach`). The accepted
         socket then works with overlapped I/O like any other.
         """
         loop = asyncio.get_running_loop()
@@ -277,7 +277,7 @@ class WindowsBluetooth(BackendBluetooth):
             if address is None:
                 # Nothing to identify it by, and the caller asked for no
                 # filter, so there is no device object to fall back on.
-                logger.debug("%s reports no Bluetooth address; skipping", info.name)
+                logger.debug("%s reports no Bluetooth address. Skipping", info.name)
                 continue
             found.append(RfcommDeviceInfo(address, info.name or None, info.id))
         return found
@@ -395,7 +395,7 @@ class WindowsBackend(BackendProvider):
 
         REVISIT: availability is read only when Bluetooth is opened. Windows
         reports a radio's changes through ``Radio.StateChanged`` and adapters
-        arriving through a device watcher, neither yet measured; until they
+        arriving through a device watcher, neither yet measured. Until they
         are, a radio switched off later is noticed by the channels it ends
         rather than reported here.
 
@@ -426,7 +426,7 @@ class WindowsBackend(BackendProvider):
         else:
             state.set(
                 Availability.SWITCHED_OFF,
-                f"{name or identifier} is switched off; turn Bluetooth on",
+                f"{name or identifier} is switched off. Turn Bluetooth on",
             )
 
         yield WindowsBluetooth(address)
@@ -520,7 +520,7 @@ async def _look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int
     Returns:
         The RFCOMM channel number of the first record offering the service.
         A device publishing several is rare and there is no way for a caller
-        to say which it meant; see the note where that is decided.
+        to say which it meant. See the note where that is decided.
 
     Raises:
         DeviceNotFoundError: The device could not be reached.
@@ -552,14 +552,14 @@ async def _look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int
         # A device may publish the same service class more than once, on
         # different channels. The first is taken, to match macOS, whose
         # getServiceRecordForUUID returns a single record and so cannot offer
-        # a choice at all; BlueZ likewise picks inside ConnectProfile without
+        # a choice at all. BlueZ likewise picks inside ConnectProfile without
         # saying which. Windows is the only platform where the choice is even
         # visible, and making it behave differently here would mean the same
         # device answered differently depending on what it was called from.
         # Recorded rather than hidden, since a caller who needs a particular
         # one can ask for its channel number directly.
         logger.debug(
-            "%s publishes %d records for %s; using the first",
+            "%s publishes %d records for %s. Using the first",
             address,
             len(offered),
             service,

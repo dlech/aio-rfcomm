@@ -61,7 +61,7 @@ def check_channel(channel: int) -> None:
     """
     if not FIRST_CHANNEL <= channel <= LAST_CHANNEL:
         raise ValueError(
-            f"channel {channel} is not an RFCOMM channel; they run from "
+            f"channel {channel} is not an RFCOMM channel. They run from "
             f"{FIRST_CHANNEL} to {LAST_CHANNEL}"
         )
 
@@ -70,7 +70,7 @@ class AvailabilityState:
     """
     Whether Bluetooth is usable, as a backend last reported it.
 
-    The backend sets it; everything else reads it, or waits for it to change.
+    The backend sets it. Everything else reads it, or waits for it to change.
     Only ever touched from the event loop's thread.
     """
 
@@ -179,7 +179,7 @@ class BackendProvider(ABC):
         as it is held: from tasks of its own, or in the course of another call
         when that is where a change is noticed -- a channel finding its link
         gone, say. The first reading may come after the context manager has
-        been entered; nothing is asked of the backend before it has.
+        been entered. Nothing is asked of the backend before it has.
 
         Args:
             state: Where to report availability.
@@ -375,7 +375,7 @@ class BackendChannel(ABC):
         """
         Stop the channel now, because Bluetooth has gone.
 
-        Pending and later calls raise their ending as usual; what arrived
+        Pending and later calls raise their ending as usual. What arrived
         before still comes out first. Must not raise: it is called while
         everything else Bluetooth going ended is being ended too.
         """
@@ -392,7 +392,7 @@ class BackendChannel(ABC):
 
         Args:
             data: The bytes to send. May be longer than the channel can carry
-                in one go; splitting it is the implementation's problem, not
+                in one go. Splitting it is the implementation's problem, not
                 the caller's.
 
         Raises:
@@ -467,7 +467,7 @@ class BackendRequest(ABC):
         Take the connection as a channel.
 
         The connection passes to the channel only when the context manager is
-        entered; until then :meth:`close` still closes it.
+        entered. Until then :meth:`close` still closes it.
 
         Returns:
             An async context manager yielding the channel, closed on exit.

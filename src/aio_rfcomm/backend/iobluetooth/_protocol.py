@@ -160,7 +160,7 @@ class Link:
             except BlockingIOError:
                 break
             except OSError:
-                # The peer is gone. The reader will notice and report it; a
+                # The peer is gone. The reader will notice and report it. A
                 # send has nobody to report to.
                 for _frame, waiting in self._waiting:
                     for fd in waiting:

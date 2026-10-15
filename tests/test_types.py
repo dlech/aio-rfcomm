@@ -144,6 +144,6 @@ def test_a_mistake_in_the_calling_code_is_not_caught_as_bluetooth(
     kind: type[Exception],
 ) -> None:
     # Catching RfcommError is how a program handles what Bluetooth or the
-    # peer did; a bug in the program must not disappear into that.
+    # peer did. A bug in the program must not disappear into that.
     assert issubclass(kind, RuntimeError)
     assert not issubclass(kind, RfcommError)

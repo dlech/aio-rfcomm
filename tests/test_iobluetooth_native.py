@@ -966,7 +966,7 @@ async def test_a_withdrawn_service_lets_new_channels_go(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Unregistering only stops this process listening; bluetoothd still takes
+    Unregistering only stops this process listening. bluetoothd still takes
     the channel, and the framework, with nobody to give it to, closes it.
     """
     framework = fake_framework_parts(monkeypatch)

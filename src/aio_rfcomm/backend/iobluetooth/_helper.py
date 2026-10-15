@@ -11,7 +11,7 @@ not start, rather than as an import error in an unrelated program.
 
 The pair of sockets is the whole lifetime story. When the caller leaves the
 Bluetooth object's ``async with``, this end closes and the helper reads end of file and
-exits; macOS has no ``PDEATHSIG``, so that is also what stops a helper whose
+exits. macOS has no ``PDEATHSIG``, so that is also what stops a helper whose
 parent died without tidying up.
 """
 
@@ -59,26 +59,12 @@ _own_reason: str | None = None
 
 def prompt_under_name(*, name: str, reason: str) -> None:
     """
-    Let the helper ask for Bluetooth permission as itself.
-
-    macOS asks the *responsible* process for permission, which normally means
-    the application that started this one. That is the right behaviour for a
-    bundled application: the dialog names the application, and the user finds
-    it under that name in Privacy & Security.
-
-    A script, a REPL or a command line tool has no such application to speak
-    for it, and macOS ends such a process with ``SIGABRT`` rather than asking
-    anybody anything. Calling this before opening Bluetooth breaks the link
-    to the responsible process, so the helper asks on its own behalf instead.
-
-    The cost is that ``name`` is what the user sees, both in the permission
-    dialog and afterwards in Privacy & Security -- so name it after the
-    program the user thinks they are running, never after this library.
+    Record the name the helper asks for permission under. See
+    :func:`aio_rfcomm.macos.prompt_under_name`.
 
     Args:
-        name: What to call the helper. The user sees this.
-        reason: Why the program needs Bluetooth. The user reads this in the
-            permission dialog, so write it for them.
+        name: The program's name, as the user knows it.
+        reason: Why the program needs Bluetooth.
     """
     global _own_name, _own_reason
     _own_name, _own_reason = name, reason
@@ -102,7 +88,7 @@ class Ending:
     cancelling a task that awaits a future cancels the future, which would
     take the answer away from everyone else waiting for it. A future awaited
     through ``asyncio.shield`` would do as well, but only where every await
-    remembers the shield; here the safe wait is the only one there is.
+    remembers the shield. Here the safe wait is the only one there is.
     """
 
     def __init__(self) -> None:
@@ -234,7 +220,7 @@ class Helper:
             elif self._stopped is None:
                 # Opening a channel can wait on a device that never answers,
                 # so a caller who gives up has to be able to make the helper
-                # give up too. Nothing waits for the acknowledgement; there is
+                # give up too. Nothing waits for the acknowledgement. There is
                 # nothing useful to do with it.
                 self._link.send(
                     {"id": next(self._numbers), "op": "abandon", "of": number}
@@ -278,7 +264,7 @@ class Helper:
         """
         Wait for the helper to report the manager's state.
 
-        The first report is the state when the helper started watching; after
+        The first report is the state when the helper started watching. After
         that, one per change, in order.
 
         Returns:
@@ -411,7 +397,7 @@ class Helper:
                 pass
 
         # Whatever came with an event not taken, a request after withdrawal
-        # among them; closing it is what hangs up on that peer.
+        # among them. Closing it is what hangs up on that peer.
         for fd in fds:
             os.close(fd)
 
@@ -624,7 +610,7 @@ def _rebuild(name: str, message: str, reason: str | None = None) -> RfcommError:
 # at all, and os.posix_spawn exposes only the ones POSIX defines --
 # setpgroup, resetids, setsid, the signal masks and the scheduler. Nor can
 # preexec_fn stand in for it, because disclaiming is not something a forked
-# child does to itself; it is an attribute posix_spawn applies while making
+# child does to itself. It is an attribute posix_spawn applies while making
 # the process, and macOS offers no equivalent afterwards.
 #
 # Without it the helper inherits the responsibility of whatever started this
@@ -801,7 +787,7 @@ async def _wait_for_exit(pid: int) -> None:
             return
         await asyncio.sleep(0.01)
 
-    logger.warning("macOS Bluetooth helper %d did not exit; killing it", pid)
+    logger.warning("macOS Bluetooth helper %d did not exit. Killing it", pid)
     if not _kill(pid):
         return
     for _ in range(100):

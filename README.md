@@ -14,7 +14,7 @@ async with (
         print((await channel.receive()).decode(), end="")
 ```
 
-That is the whole idea. RFCOMM is how most Bluetooth gadgets that predate BLE
+That is the whole idea. RFCOMM is how many Bluetooth gadgets that predate BLE
 still talk — printers, GPS units, robots, serial adapters, a great many
 embedded boards — and reaching one from Python has meant a different library,
 a different API and a different set of surprises on every platform.
@@ -28,6 +28,9 @@ connection owned by an `async with` block that cleans up after itself.
 $ uv add aio-rfcomm
 ```
 
+It needs Python 3.11 or newer. The documentation is at
+<https://dlech.github.io/aio-rfcomm/>.
+
 ## Serving, too
 
 Publish a service and let devices connect to you:
@@ -35,5 +38,5 @@ Publish a service and let devices connect to you:
 ```python
 async with bluetooth.serve(MY_SERVICE, name="my thing") as service:
     async for request in service.connection_requests():
-        ...  # accept it, in a task of your own, or decline it
+        ...  # accept it, in a task of your own
 ```

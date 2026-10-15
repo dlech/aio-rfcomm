@@ -8,7 +8,7 @@ Each one reproduces what the real framework was measured doing on macOS 26.6.2
 against a BlueZ peer, and every report reaches the library through the
 delegate's own Objective-C methods, so the code that receives it runs for
 real. Reports are deferred to the next turn of the loop, because the framework
-always reports later than the call that asked; the measured latencies are
+always reports later than the call that asked. The measured latencies are
 noted but not reproduced, since none of the code under test depends on them.
 
 macOS only: the manager is a real Objective-C object, so key-value observing
@@ -108,7 +108,7 @@ def change_state(manager: FakeManager, *states: int) -> None:
 
     The loop's own thread check is turned on as well. Here the loop's thread
     is only waiting for this one to finish and picks up a careless call on its
-    next pass; in the helper it would be asleep in its run loop, and nothing
+    next pass. In the helper it would be asleep in its run loop, and nothing
     would wake it.
 
     Args:
@@ -384,7 +384,7 @@ class FakeIncomingChannel(NSObject):
     def writeAsync_length_refcon_(
         self, data: c_void_p, length: int, refcon: c_void_p
     ) -> int:
-        # The ctypes annotations are for rubicon's signature; what arrives are
+        # The ctypes annotations are for rubicon's signature. What arrives are
         # plain integers.
         piece = ctypes.string_at(data, length)
         return self.inner.writeAsync(piece, length=length, refcon=cast(int, refcon))
@@ -613,7 +613,7 @@ def fake_framework(
     """
     Stand in for IOBluetooth and CoreBluetooth, and nothing else.
 
-    Everything in the library and in the native layer runs for real; only what
+    Everything in the library and in the native layer runs for real. Only what
     needs a radio is replaced.
 
     Args:
@@ -665,7 +665,7 @@ def clean_state() -> Generator[None, None, None]:
     Clear the state the native layer and the fake framework keep per process.
 
     Objective-C registers its classes by name, so the module cannot be
-    reloaded to get this back; clearing what it holds is the nearest thing to
+    reloaded to get this back. Clearing what it holds is the nearest thing to
     the fresh process each test is written as though it had.
     """
     _native._in_use.clear()

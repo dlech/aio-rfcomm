@@ -18,10 +18,7 @@ __all__ = ["Availability", "UnavailableReason"]
 
 class Availability(enum.Enum):
     """
-    Whether Bluetooth on this machine can be used, and if not, why not.
-
-    Every member but :attr:`USABLE` is a reason, and says what the user can do
-    about it.
+    Whether Bluetooth on this computer can be used, and if not, why not.
     """
 
     USABLE = enum.auto()
@@ -31,30 +28,29 @@ class Availability(enum.Enum):
 
     SWITCHED_OFF = enum.auto()
     """
-    Bluetooth is switched off. The user can turn it on; on Linux it may
-    instead be blocked, by ``rfkill`` or airplane mode.
+    Bluetooth is turned off. The user can turn it on.
     """
 
     NO_ADAPTER = enum.auto()
     """
-    This machine has no Bluetooth adapter. The user can plug one in.
+    The computer has no Bluetooth adapter. The user can plug one in.
     """
 
     NOT_ALLOWED = enum.auto()
     """
-    This program may not use Bluetooth. Usually the user can allow it in the
-    system's settings, but not when a profile or parental controls forbid it.
+    This program does not have permission to use Bluetooth. The user can
+    usually give it permission in the system settings.
     """
 
     SERVICE_UNAVAILABLE = enum.auto()
     """
-    The system's Bluetooth service is not running. Usually it comes back by
-    itself: on macOS, measured, in about a second and a half.
+    The system's Bluetooth service is not running. Wait a moment. It usually
+    restarts by itself.
     """
 
     UNSUPPORTED = enum.auto()
     """
-    This system has no Bluetooth service at all. Nothing the user can do.
+    This system cannot use Bluetooth at all.
     """
 
 
@@ -66,9 +62,7 @@ UnavailableReason: TypeAlias = Literal[
     Availability.UNSUPPORTED,
 ]
 """
-Every :class:`Availability` but :attr:`~Availability.USABLE`.
-
-A type rather than a class, so members are always spelled
-``Availability.SWITCHED_OFF``. Matching on one with a case for each reason and
-``assert_never`` in the last is checked as exhaustive.
+Every :class:`Availability` except :attr:`~Availability.USABLE`: the reasons
+Bluetooth cannot be used. A type checker can confirm that a ``match`` on one
+covers every case.
 """

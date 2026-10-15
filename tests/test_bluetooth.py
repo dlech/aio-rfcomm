@@ -401,7 +401,7 @@ async def test_an_end_already_explained_is_kept(
     opened: tuple[RfcommChannel, FakeChannel], provider: FakeProvider
 ) -> None:
     """
-    A peer that hung up before the radio went off hung up; the radio did not
+    A peer that hung up before the radio went off hung up. The radio did not
     end that channel.
     """
     channel, fake = opened

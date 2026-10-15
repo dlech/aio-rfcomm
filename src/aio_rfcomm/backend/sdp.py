@@ -16,7 +16,7 @@ codec with nothing platform-specific in it, and because BlueZ's experimental
 ``GetServiceRecords`` would hand Linux the same raw bytes.
 
 Reading only. Writing records is the server role's problem, and the server
-role is not implemented; a half-used encoder would be a liability rather than
+role is not implemented. A half-used encoder would be a liability rather than
 a head start.
 """
 

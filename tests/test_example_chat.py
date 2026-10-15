@@ -5,7 +5,7 @@
 How the chat example shows what arrives.
 
 Splitting the stream into lines is the library's ``receive_until``, tested
-with the channel; what is left here is turning a line into something fit to
+with the channel. What is left here is turning a line into something fit to
 print, whatever the peer sent.
 """
 

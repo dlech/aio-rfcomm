@@ -1,14 +1,16 @@
 # Channels
 
-An open [`RfcommChannel`][aio_rfcomm.RfcommChannel] is a byte stream in both
-directions. It comes from [connecting](connecting.md) to a device or from
-[serving](serving.md) one, and behaves the same either way.
+An [`RfcommChannel`][aio_rfcomm.RfcommChannel] carries bytes in both
+directions. You get one by [connecting](connecting.md) to a device or by
+[accepting](serving.md) a connection. Both kinds work the same way.
 
 ## Sending and receiving
 
-[`send`][aio_rfcomm.RfcommChannel.send] delivers all the bytes you give it.
-[`receive`][aio_rfcomm.RfcommChannel.receive] returns whatever has arrived,
-blocking until something has:
+[`send`][aio_rfcomm.RfcommChannel.send] sends all the bytes you give it. It
+returns once they are on their way, which does not mean the other device has
+them yet.
+[`receive`][aio_rfcomm.RfcommChannel.receive] waits until some bytes arrive and
+returns them:
 
 ```python
 await channel.send(b"hello\n")
@@ -16,44 +18,43 @@ await channel.send(b"hello\n")
 try:
     while True:
         print((await channel.receive()).decode(), end="")
-except ChannelClosedError as ended:
-    print(f"\nchannel over: {ended}")
+except ChannelClosedError as error:
+    print(f"\nthe connection ended: {error}")
 ```
 
-`receive` never returns empty. Once the channel is over — the peer hanging up
-included — it hands over whatever arrived before the end and then raises
-[`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError], and goes on
-raising the same error. That is what ends the loop above. See
-[Lifetimes](lifetimes.md) for a channel used by more than one task.
+`receive` never returns empty bytes. When the connection ends, `receive` first
+returns any bytes that arrived before the end. After that, every call to
+`receive` raises [`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError],
+and so does every call to `send`. That is what ends the loop above.
 
-One task may send while another receives — the two directions are independent
-and do not block each other. Two tasks using the *same* direction is a bug,
-and is reported as [`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError]
-rather than left to interleave unpredictably.
+One task can send while another task receives. Two tasks receiving at the same
+time, or two tasks sending, is a bug, and raises
+[`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError].
 
-## Framing
+## Reading messages
 
-RFCOMM is a byte stream. It keeps no message boundaries, so one `send` on the
-far end may arrive split across several `receive` calls, or share one with the
-message after it. Anything message-shaped has to be framed by your code.
+RFCOMM carries a stream of bytes, not separate messages. One `send` on the
+other end may arrive in several pieces, or joined to the next message. To read
+messages, your program has to know where each one ends.
 
-A delimiter is the simplest thing that works, and a newline is the usual one
-for text protocols.
-[`receive_until`][aio_rfcomm.RfcommChannel.receive_until] takes the bytes up
-to one, takes the delimiter too, and returns what came before it:
+For text, ending each message with a newline is the simplest way.
+[`receive_until`][aio_rfcomm.RfcommChannel.receive_until] reads up to a
+delimiter and returns the bytes before it:
 
 ```python
 line = await channel.receive_until(b"\n", max_bytes=1024)
 ```
 
-`max_bytes` is required, delimiter included, so that a peer that never sends
-one cannot make your program buffer for ever; past it,
-[`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError] is raised
-and nothing is taken.
+The delimiter is read too, but not returned. `max_bytes` is the most it reads,
+delimiter included. It is required, so that a device that never sends a
+delimiter cannot make your program use more and more memory. If no delimiter
+arrives within `max_bytes`, `receive_until` raises
+[`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError] and leaves
+the bytes for the next call.
 
-Binary protocols usually put a length at the front instead, which means
-reading an exact number of bytes, as
-[`receive_exactly`][aio_rfcomm.RfcommChannel.receive_exactly] does:
+For binary data, a common way is to send each message's length first.
+[`receive_exactly`][aio_rfcomm.RfcommChannel.receive_exactly] reads an exact
+number of bytes:
 
 ```python
 async def read_message(channel) -> bytes:
@@ -61,14 +62,13 @@ async def read_message(channel) -> bytes:
     return await channel.receive_exactly(length)
 ```
 
-Every way of receiving shares one buffer kept by the channel, so they can be
-mixed freely, and whatever arrives past the end of one message is kept for the
-next. Cancelling one loses nothing: what it had gathered is left for the next
-call. A channel that ends part way through raises its ending, and leaves what
-had arrived for `receive`.
+You can mix `receive`, `receive_until` and `receive_exactly`. Bytes that one
+call does not use are kept for the next, and cancelling a call loses no bytes.
+If the connection ends partway through a message, `receive_until` and
+`receive_exactly` raise `ChannelClosedError`, and `receive` then returns the
+part that arrived.
 
-!!! tip "Do not size reads to messages"
+!!! tip "`receive(max_bytes)` does not wait for that many"
 
-    `receive(max_bytes)` caps how much comes back; it does not wait for that
-    much. Asking for exactly the number of bytes you want does not get you
-    them — that is what `receive_exactly` is for.
+    It returns at most `max_bytes`, as soon as anything has arrived. Use
+    `receive_exactly` when you need an exact number of bytes.

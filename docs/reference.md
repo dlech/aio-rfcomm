@@ -23,7 +23,7 @@ in `aio_rfcomm.macos`.
 ::: aio_rfcomm.ConnectionRequests
 ::: aio_rfcomm.RfcommConnectionRequest
 
-## Descriptions
+## Devices
 
 ::: aio_rfcomm.RfcommDeviceInfo
 

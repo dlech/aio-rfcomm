@@ -2,33 +2,37 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-The macOS-specific corner of the API.
+What only macOS needs.
 
-Some of what macOS needs cannot be decided for the program that imports this
-library -- who it should identify itself to the user as, and in time, whether
-it wants to lend this library its own main runloop rather than have a helper
-process started for it. Those choices live here rather than in the
-cross-platform API, where they would be arguments that mean nothing anywhere
-else.
-
-Importable anywhere, so a cross-platform program can guard the call with
-``sys.platform`` rather than with a try/except around the import. On every
-other platform these do nothing.
+Import and call it on every platform. Elsewhere it does nothing.
 """
 
 import sys
 
 __all__ = ["prompt_under_name"]
 
-if sys.platform == "darwin":
-    from aio_rfcomm.backend.iobluetooth._helper import prompt_under_name
-else:
 
-    def prompt_under_name(*, name: str, reason: str) -> None:
-        """
-        Do nothing. Only macOS asks a program to identify itself this way.
+def prompt_under_name(*, name: str, reason: str) -> None:
+    """
+    Give this program a name for macOS to ask Bluetooth permission under.
 
-        Args:
-            name: Ignored.
-            reason: Ignored.
-        """
+    macOS asks the user before a program can use Bluetooth. A bundled application
+    is asked about under its own name, and does not need this. A script, a REPL
+    or a command line tool has no name of its own. Without one, macOS refuses
+    instead of asking, and the availability is ``NOT_ALLOWED``. Call this before
+    opening Bluetooth.
+
+    The user sees ``name`` in the permission dialog and later in the system
+    settings, and macOS remembers the answer under it. Name it after your program,
+    not after this library, and do not change it: a new name asks the user again.
+
+    Does nothing on Linux and Windows.
+
+    Args:
+        name: The program's name, as the user knows it.
+        reason: Why the program needs Bluetooth, shown in the permission dialog.
+    """
+    if sys.platform == "darwin":
+        from aio_rfcomm.backend.iobluetooth._helper import prompt_under_name
+
+        prompt_under_name(name=name, reason=reason)

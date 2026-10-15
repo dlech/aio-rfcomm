@@ -31,10 +31,10 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-RFCOMM is how most Bluetooth gadgets that predate BLE still talk — printers,
-GPS units, robots, serial adapters, a great many embedded boards. Reaching one
-from Python has meant a different library, a different API and a different set
-of surprises on every platform. This is one API for all three.
+Many Bluetooth devices that are older than Bluetooth Low Energy talk over
+RFCOMM: printers, GPS units, robots, serial adapters and many embedded boards.
+Until now, reaching one from Python meant a different library and a different
+API on every platform. This is one API for all three.
 
 ## Install
 
@@ -46,16 +46,15 @@ $ uv add aio-rfcomm
 
 <div class="grid cards" markdown>
 
-- **[Bluetooth](bluetooth.md)** — open it, find out whether it can be used,
-  and wait for it when it cannot.
-- **[Connecting](connecting.md)** — find a device, open a channel, and split
-  what arrives back into messages. RFCOMM delivers bytes, not messages.
-- **[Serving](serving.md)** — publish a service and let devices connect to
-  you.
-- **[Lifetimes](lifetimes.md)** — why everything is an `async with`, and how a
-  channel that ends takes your tasks down with it.
-- **[Platforms](platforms.md)** — what each operating system can and cannot
-  do, and the permission macOS will ask for.
-- **[API reference](reference.md)** — every public name.
+- **[Bluetooth](bluetooth.md)**: open it, and check that it can be used.
+- **[Connecting](connecting.md)**: find a device and open a channel to it.
+- **[Channels](channels.md)**: send and receive bytes, and read messages.
+- **[Serving](serving.md)**: let devices connect to you.
+- **[Lifetimes](lifetimes.md)**: notice when a connection ends, and cancel
+  safely.
+- **[Errors](errors.md)**: what each error means.
+- **[Platforms](platforms.md)**: where Linux, macOS and Windows differ, and
+  the permission macOS asks for.
+- **[API reference](reference.md)**: every public name.
 
 </div>

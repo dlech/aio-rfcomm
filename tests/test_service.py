@@ -109,7 +109,7 @@ async def test_declining_hangs_up(bluetooth: Bluetooth, provider: FakeProvider) 
         await request.decline()
         assert fake.closed
 
-        # Twice is harmless; taking it after all is not.
+        # Twice is harmless. Taking it after all is not.
         await request.decline()
         with pytest.raises(RuntimeError, match="declined"):
             request.accept()

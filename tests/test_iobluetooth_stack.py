@@ -177,7 +177,7 @@ async def test_a_device_that_does_not_answer_is_reported(
 ) -> None:
     """
     The page is accepted and its timeout reported later, as a CoreBluetooth
-    error code; that has to arrive here as the device not answering.
+    error code. That has to arrive here as the device not answering.
     """
     fake_framework(monkeypatch, answers=False, connected=False)
     async with _stack() as bluetooth:
@@ -197,7 +197,7 @@ async def test_the_first_reading_is_the_manager_s_state(
     fake_framework(monkeypatch, state=CBManagerState.POWERED_OFF)
     async with _stack() as bluetooth:
         assert await anext(bluetooth.watch_availability()) is Availability.SWITCHED_OFF
-        with pytest.raises(BluetoothUnavailableError, match="turn it on"):
+        with pytest.raises(BluetoothUnavailableError, match="Turn it on"):
             async with bluetooth.open_channel(DEVICE, 5):
                 pass
 
@@ -260,7 +260,7 @@ async def test_an_open_the_helper_refuses_says_why(
 
 async def _restart(manager: FakeManager) -> None:
     await until_observed(manager)
-    # Measured when bluetoothd restarted on its way to powering off; here it
+    # Measured when bluetoothd restarted on its way to powering off. Here it
     # comes back on.
     change_state(manager, CBManagerState.RESETTING, CBManagerState.POWERED_ON)
 

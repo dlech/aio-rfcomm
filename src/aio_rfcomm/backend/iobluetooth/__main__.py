@@ -336,7 +336,7 @@ async def _publish(session: _Session, number: int, message: dict[str, Any]) -> N
             try:
                 channel = await service.accept()
             except Exception:
-                # That channel is closed; the service carries on.
+                # That channel is closed. The service carries on.
                 logger.exception("could not take a channel a peer opened")
                 continue
 

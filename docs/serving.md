@@ -1,10 +1,9 @@
 # Serving
 
-Most programs connect *to* something. Sometimes you want to be the thing that
-is connected to — a robot waiting for a laptop, a desktop tool a handheld talks
-to. [`serve`][aio_rfcomm.Bluetooth.serve] publishes a service record and
-listens, the way a listening socket does: each peer that connects arrives as a
-request, which your program accepts or declines.
+Your program can also wait for other devices to connect to it.
+[`serve`][aio_rfcomm.Bluetooth.serve] publishes a service and listens for
+connections, like a listening socket. Each device that connects arrives as a
+request, which you accept.
 
 ```python
 async def talk(request: aio_rfcomm.RfcommConnectionRequest) -> None:
@@ -25,95 +24,81 @@ async with bluetooth.serve(CHAT, name="my thing") as service:
             group.create_task(talk(request))
 ```
 
-Each conversation is a task in your own task group, so nothing runs that you
-did not start, and a conversation that fails takes down whatever its task
-group says it does. Catch what one conversation should survive — a peer
-hanging up, say — inside that conversation.
+Each connection runs as a task in your own task group. Catch errors that end
+only one connection, such as the device hanging up, inside that connection's
+task, as `talk` does. Otherwise the task group cancels every connection.
 
 ## Requests
 
-[`connection_requests`][aio_rfcomm.RfcommService.connection_requests] hands
-over each peer as an
-[`RfcommConnectionRequest`][aio_rfcomm.RfcommConnectionRequest]: who is asking,
-in [`info`][aio_rfcomm.RfcommConnectionRequest.info], and two things to do
-about it.
+[`connection_requests`][aio_rfcomm.RfcommService.connection_requests] gives
+each connection as an
+[`RfcommConnectionRequest`][aio_rfcomm.RfcommConnectionRequest].
+[`info`][aio_rfcomm.RfcommConnectionRequest.info] says which device it is
+from, and [`accept`][aio_rfcomm.RfcommConnectionRequest.accept] opens it as a
+channel, in an `async with` block of its own.
 
-- [`accept`][aio_rfcomm.RfcommConnectionRequest.accept] takes the connection,
-  as a channel in a block of its own. A peer that already hung up still gets a
-  channel, whose first `receive` raises, so every ending arrives the same way.
-- [`decline`][aio_rfcomm.RfcommConnectionRequest.decline] turns the peer away.
-  It hangs up before it awaits anything, so it takes effect even if cancelled,
-  and it never raises for a hang-up that failed.
+To turn a device away, call
+[`decline`][aio_rfcomm.RfcommConnectionRequest.decline] instead. The device's
+connection is already open by the time the request arrives, so the device
+sees it open and then close.
 
-Declining is not a refusal. The peer's channel is already open by the time the
-request reaches your program, so the peer sees its open succeed and the channel
-then end. Measured on macOS with a BlueZ peer, which saw the channel closed by
-its peer; on BlueZ and Windows this has not yet been measured.
+Every request must be accepted or declined. A request that is neither is hung
+up on when it is garbage collected, with a `ResourceWarning` that Python shows
+when run with `-X dev`.
 
-A request that is neither accepted nor declined is a bug. When it is
-garbage-collected it raises `ResourceWarning`, shown under `python -X dev`, and
-is hung up on then, the way an unclosed socket is. Leaving the `serve` block
-closes any that remain.
+When Bluetooth stops being usable, the `async for` loop over
+`connection_requests` raises
+[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError]. To
+serve again, start a new `serve` block once Bluetooth is usable again.
 
-Each request goes to exactly one reader of `connection_requests`, and the
-iterator never ends by itself. When Bluetooth stops being usable it raises
-[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError], and
-goes on raising it: the service is over, and serving again means a new `serve`
-block once Bluetooth is back.
+## When serving stops
 
-## How long things last
+Leaving the `serve` block stops new connections and hangs up on requests that
+are still waiting. Connections already accepted carry on until their own
+`async with` blocks end.
 
-Leaving the `serve` block withdraws the service and closes the requests nobody
-answered. Channels already accepted belong to their own blocks, and outlive
-it, as connections accepted from a listening socket do. With the task group
-inside the `serve` block, as above, every conversation finishes before serving
-stops. With it outside, serving can stop while the conversations finish:
+In the example above, the task group is inside the `serve` block, so leaving
+the block waits for every connection to finish. Put the task group outside to
+stop new connections while the current ones carry on:
 
 ```python
 async with asyncio.TaskGroup() as group:
     async with bluetooth.serve(CHAT, name="my thing") as service:
         async for request in service.connection_requests():
-            group.create_task(talk(request))
             if enough():
+                await request.decline()
                 break
-    # No new peers from here on; the conversations carry on.
+            group.create_task(talk(request))
+    # No new connections from here on. The current ones carry on.
 ```
+
+A request has to be accepted before its `serve` block ends, which is why the
+last one is declined rather than handed to a task.
 
 ## Choosing a channel
 
-Leave `channel` unset and the library picks a free one, which is almost always
-what you want. [`service.channel`][aio_rfcomm.RfcommService.channel] then tells
-you which it got, and peers find it by looking up the service UUID.
+If you do not pass `channel`, the library picks a free one, and
+[`service.channel`][aio_rfcomm.RfcommService.channel] says which. Devices find
+the service by its UUID, so they do not need to know the number.
 
-Set it explicitly when the peer cannot do a lookup and expects a fixed number:
+Pass `channel` when a device expects a fixed number:
 
 ```python
 async with bluetooth.serve(CHAT, name="my thing", channel=5) as service:
     ...
 ```
 
-A number outside 1 to 30 raises `ValueError`. A channel already taken — by
-another program or by another service in this one — raises
-[`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError].
+A channel that is already in use raises
+[`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError]. A number outside 1
+to 30 raises `ValueError`.
 
-!!! note "One Linux case where the choice has to be yours"
+On macOS, a channel can be served only once until Bluetooth is turned off and
+on again. On Linux, choosing a free channel needs a Python with Bluetooth
+socket support, which uv's own Python builds do not have. See
+[Platforms](platforms.md) for both.
 
-    Letting the library choose needs a Bluetooth socket to probe with. A Linux
-    Python built without Bluetooth socket support cannot open one, and BlueZ
-    offers no way to ask over D-Bus — so rather than register a channel that
-    might silently collide, the library refuses and asks you to name one.
-    Everywhere else, and on any normal Linux build, the automatic choice
-    works.
+## One connection per device and channel
 
-    On such a Python a channel you name is used unchecked, and a collision is
-    silent: BlueZ logs `rfcomm_bind: Address already in use` and publishes
-    nothing, and peers reach whatever already holds the channel. Channel 9,
-    for instance, is commonly taken by Object Push.
-
-## One peer per device
-
-RFCOMM allows one connection per device per server channel. Two different
-devices can talk to your service at the same time quite happily; the same
-device opening a second connection to the same channel cannot, and the
-protocol will refuse it. If you need several conversations with one device,
-you need several channels, or your own multiplexing inside the one.
+A device can make only one connection to a given channel. Different devices
+can connect to the same service at the same time. For two connections from
+the same device, serve two channels.

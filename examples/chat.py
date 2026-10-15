@@ -9,7 +9,7 @@ Run it on one machine as a server and on another as a client::
     python examples/chat.py serve
     python examples/chat.py connect AA:BB:CC:DD:EE:FF
 
-Both ends print what the other types, and Ctrl-D or Ctrl-C hangs up; Ctrl-C
+Both ends print what the other types, and Ctrl-D or Ctrl-C hangs up. Ctrl-C
 again stops the server. The server talks to one peer at a time, turning away
 anyone else who connects meanwhile, and keeps serving through Bluetooth going
 off and on.
@@ -67,13 +67,13 @@ def explain(reason: UnavailableReason) -> str:
     # A match rather than a dict, so that a new reason is a type error here.
     match reason:
         case Availability.SWITCHED_OFF:
-            return "Bluetooth is switched off; turn it on"
+            return "Bluetooth is switched off. Turn it on"
         case Availability.NO_ADAPTER:
-            return "this computer has no Bluetooth adapter; plug one in"
+            return "this computer has no Bluetooth adapter. Plug one in"
         case Availability.NOT_ALLOWED:
-            return "this program may not use Bluetooth; allow it in settings"
+            return "this program may not use Bluetooth. Allow it in settings"
         case Availability.SERVICE_UNAVAILABLE:
-            return "the Bluetooth service is restarting; waiting for it"
+            return "the Bluetooth service is restarting. Waiting for it"
         case Availability.UNSUPPORTED:
             return "this system has no Bluetooth"
         case _:
@@ -88,7 +88,7 @@ async def wait_until_usable(bluetooth: aio_rfcomm.Bluetooth) -> bool:
         bluetooth: The open Bluetooth object.
 
     Returns:
-        True once Bluetooth is usable; False if it never will be, since
+        True once Bluetooth is usable. False if it never will be, since
         nobody can do anything about a system with no Bluetooth.
     """
     async for availability in bluetooth.watch_availability():
@@ -176,7 +176,7 @@ async def converse(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
     Talk until the user hangs up, or raise however the channel ended.
 
     Reading runs as a task beside the typing. Any ending is raised by its
-    receive(), which also cancels the typing; the user hanging up returns
+    receive(), which also cancels the typing. The user hanging up returns
     from the typing, which then stops the reading. The task group is only how
     this function does two things at once, so its callers see the ending
     itself, not a group.
@@ -246,7 +246,7 @@ async def serve(bluetooth: aio_rfcomm.Bluetooth, channel: int | None) -> int:
         channel: The RFCOMM channel to listen on, or ``None`` to be given one.
 
     Returns:
-        The exit status, once Bluetooth will never be usable here; until then
+        The exit status, once Bluetooth will never be usable here. Until then
         it serves.
     """
     while await wait_until_usable(bluetooth):
@@ -407,7 +407,7 @@ def parse() -> Arguments:
         "--channel",
         type=int,
         default=None,
-        help="RFCOMM channel to listen on (1-30); chosen for you if omitted",
+        help="RFCOMM channel to listen on (1-30). Chosen for you if omitted",
     )
 
     connecting = commands.add_parser("connect", help="connect to someone serving")

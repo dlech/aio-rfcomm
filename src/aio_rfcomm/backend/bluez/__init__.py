@@ -75,7 +75,7 @@ _PROFILE_MANAGER = "org.bluez.ProfileManager1"
 _OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 
 # Object paths are scoped to a bus connection, so this only has to be unique
-# within one process; two programs may export the same path without clashing.
+# within one process. Two programs may export the same path without clashing.
 _profile_paths = itertools.count()
 
 _Interface = TypeVar("_Interface", bound=ProxyInterface)
@@ -113,7 +113,7 @@ class _Profile(ServiceInterface):
     The object BlueZ calls back with a connected file descriptor.
 
     One of these is shared by every connection attempt for a service UUID,
-    because BlueZ allows only one registration per UUID; see :class:`_Profiles`.
+    because BlueZ allows only one registration per UUID. See :class:`_Profiles`.
     Callbacks are routed to whoever is waiting on that device.
     """
 
@@ -166,7 +166,7 @@ class _Profile(ServiceInterface):
             # answered, or a peer connected unprompted. Either way the
             # descriptor is ours to close, and dropping it silently would leak
             # it.
-            logger.debug("unexpected connection from %s; closing fd %d", device, fd)
+            logger.debug("unexpected connection from %s. Closing fd %d", device, fd)
             os.close(fd)
             return
         waiters.pop(0).set_result(fd)
@@ -297,7 +297,7 @@ class BlueZChannel(StreamChannel):
         try:
             await self._refresh()
         except Exception:
-            # The end still has to be explained; the reason is only less sure.
+            # The end still has to be explained. The reason is only less sure.
             logger.debug("could not read whether Bluetooth is usable", exc_info=True)
         return await super().explain_end()
 
@@ -501,7 +501,7 @@ class BlueZBluetooth(BackendBluetooth):
 
         self.refresh: Callable[[], Awaitable[None]] = _nothing
         """
-        Reads whether Bluetooth is usable and reports it; set once there is
+        Reads whether Bluetooth is usable and reports it. Set once there is
         somewhere to report it.
         """
 
@@ -530,7 +530,7 @@ class BlueZBluetooth(BackendBluetooth):
         wanted = _wanted(service)
         # REVISIT: GetManagedObjects walks every object BlueZ knows and is
         # expensive to call repeatedly. bleak keeps one manager running and
-        # follows change signals instead; worth doing here if listing turns
+        # follows change signals instead. Worth doing here if listing turns
         # out to be called often.
         manager = await self._interface("/", _OBJECT_MANAGER, _ObjectManagerProxy)
         objects = await manager.call_get_managed_objects()
@@ -594,7 +594,7 @@ class BlueZBluetooth(BackendBluetooth):
         profile holds, and so would report every channel free.
 
         Without a socket there is no probe and no safe guess, so the caller
-        has to name a channel; see :meth:`_unprobed_channel`.
+        has to name a channel. See :meth:`_unprobed_channel`.
 
         The socket is closed before the profile is registered, because BlueZ
         wants to listen on that channel itself and cannot while we hold it.
@@ -783,7 +783,7 @@ class BlueZBluetooth(BackendBluetooth):
 
         BlueZ offers no way to do this over D-Bus. ``ConnectProfile`` is its
         only route, and that looks the service UUID up in what the device
-        advertises before it considers anything else; pinning ``Channel`` on
+        advertises before it considers anything else. Pinning ``Channel`` on
         the profile registration does not change that, which was measured
         rather than assumed. So this needs a real socket, and a Python built
         without Bluetooth support cannot do it at all.
@@ -804,7 +804,7 @@ class BlueZBluetooth(BackendBluetooth):
             stack.callback(sock.close)
 
             # Which adapter a socket goes out of is chosen by binding to that
-            # adapter's own address; left unbound the kernel picks for itself,
+            # adapter's own address. Left unbound the kernel picks for itself,
             # which would quietly ignore the adapter in use.
             if self.address is not None:
                 try:
@@ -912,10 +912,10 @@ _NOBODY_THERE = (
 )
 
 
-# What can change whether Bluetooth is usable: an adapter's properties, which
-# include whether it is powered; adapters arriving and leaving; and BlueZ
+# What can change whether Bluetooth is usable: an adapter's properties (which
+# include whether it is powered), adapters arriving and leaving, and BlueZ
 # itself starting and stopping. The first was measured against a radio being
-# switched off and on (BlueZ 5.72); the others are only documented.
+# switched off and on (BlueZ 5.72). The others are only documented.
 _WATCHED = (
     (
         "type='signal',sender='org.bluez',"
@@ -1050,12 +1050,12 @@ def _powered(adapter: _Adapter) -> tuple[Availability, str | None]:
         case "off-blocked":
             return (
                 Availability.SWITCHED_OFF,
-                f"{name} is blocked, by rfkill or airplane mode; unblock it",
+                f"{name} is blocked, by rfkill or airplane mode. Unblock it",
             )
         case _:
             return (
                 Availability.SWITCHED_OFF,
-                f"{name} is switched off; turn Bluetooth on",
+                f"{name} is switched off. Turn Bluetooth on",
             )
 
 
@@ -1082,7 +1082,7 @@ async def _read(
         state.set(Availability.NO_ADAPTER)
         return
 
-    # The one in use is kept while it is there; otherwise the first.
+    # The one in use is kept while it is there. Otherwise the first.
     # REVISIT: a machine with several radios should be able to name one.
     chosen = next((a for a in adapters if a.path == bluetooth.path), adapters[0])
     bluetooth.path = chosen.path
@@ -1222,10 +1222,10 @@ def _translate_socket_connect(
     """
     match error.errno:
         case errno.ECONNREFUSED:
-            # Any refusal reads the same; nothing listening is the one measured
+            # Any refusal reads the same. Nothing listening is the one measured
             # (5.72).
             return ServiceNotFoundError(
-                f"{address} refused channel {channel}; usually nothing there is "
+                f"{address} refused channel {channel}. Usually nothing there is "
                 "listening on it"
             )
         case errno.EHOSTDOWN:

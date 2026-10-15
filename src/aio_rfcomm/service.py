@@ -40,22 +40,16 @@ class _Answer(enum.Enum):
     NONE = enum.auto()
     ACCEPTED = enum.auto()
     DECLINED = enum.auto()
-    # Hung up on because Bluetooth went; accepting it raises why.
+    # Hung up on because Bluetooth went. Accepting it raises why.
     ENDED = enum.auto()
 
 
 class RfcommConnectionRequest:
     """
-    A peer asking to connect.
+    A device that has connected to a service.
 
-    Accept it to talk, or decline it. One that is neither, dropped and then
-    garbage-collected, is a bug: it raises :class:`ResourceWarning` and is
-    hung up on then, the way an unclosed socket is. Leaving the
-    :meth:`~aio_rfcomm.Bluetooth.serve` block closes any that remain.
-
-    Declining is not a refusal. On BlueZ and Windows the peer's channel
-    appears to be open before the request arrives here, so the peer should see
-    its open succeed and the channel then end; not yet measured.
+    Accept it, or decline it. A request that is neither is hung up on when it is
+    garbage collected, with a :class:`ResourceWarning`.
     """
 
     def __init__(self, backend: BackendRequest, service: RfcommService) -> None:
@@ -74,25 +68,19 @@ class RfcommConnectionRequest:
     @property
     def info(self) -> RfcommDeviceInfo:
         """
-        Who is asking: what the platform knows without asking further, which
-        may not include a name.
+        The device that connected. Its name may be missing.
         """
         return self._backend.info
 
     def accept(self) -> AbstractAsyncContextManager[RfcommChannel]:
         """
-        Take the connection.
-
-        A peer that hung up before this still gets a channel, whose first
-        :meth:`~aio_rfcomm.RfcommChannel.receive` raises, so every ending
-        arrives the same way.
+        Accept the connection.
 
         Returns:
-            An async context manager yielding the channel, closed on exit.
-            The channel belongs to that block, not to the service's, and
-            carries on if the service is withdrawn first. Entering it raises
-            :class:`~aio_rfcomm.errors.BluetoothUnavailableError` if Bluetooth
-            is unusable or went away since the request arrived.
+            An async context manager that gives the channel, and closes it when the
+            block ends. The channel carries on even if the service stops first.
+            Entering it raises :class:`~aio_rfcomm.errors.BluetoothUnavailableError`
+            if Bluetooth stopped being usable since the request arrived.
 
         Raises:
             RuntimeError: The request was already accepted or declined.
@@ -116,18 +104,17 @@ class RfcommConnectionRequest:
             async with self._service._bluetooth._open(self._backend.open) as channel:
                 yield channel
         finally:
-            # Does nothing once a channel has the connection; otherwise an
+            # Does nothing once a channel has the connection. Otherwise an
             # accept that failed would leave the peer connected.
             self._backend.close()
 
     async def decline(self) -> None:
         """
-        Turn the peer away, hanging up at once.
+        Turn the device away by hanging up.
 
-        Always takes effect, even if cancelled: the request is closed before
-        anything is awaited. Waits only on this side, never on the peer, and
-        raises nothing if hanging up fails, since nothing could be done about
-        it. Declining twice does nothing.
+        The device's connection is already open, so it sees the connection open and
+        then close. This always takes effect, even if it is cancelled. It does not
+        raise if hanging up fails. Declining twice does nothing.
 
         Raises:
             RuntimeError: The request was already accepted.
@@ -178,11 +165,11 @@ class RfcommConnectionRequest:
 
 class ConnectionRequests:
     """
-    The peers asking to connect to a service, one request each.
+    The devices connecting to a service, one request each.
 
-    An iterator object rather than an async generator, so that leaving a loop
-    over it early leaves nothing suspended to be cleaned up later. Each
-    request goes to exactly one reader.
+    Made by :meth:`RfcommService.connection_requests`. When Bluetooth stops being
+    usable, the ``async for`` loop raises
+    :class:`~aio_rfcomm.errors.BluetoothUnavailableError`.
     """
 
     def __init__(self, service: RfcommService) -> None:
@@ -206,7 +193,7 @@ class ConnectionRequests:
 
         Raises:
             BluetoothUnavailableError: Bluetooth went away, which ends the
-                service; every later call raises the same.
+                service. Every later call raises the same.
             ScopeClosedError: The service's block has ended.
         """
         return await self._service._next_request()
@@ -214,7 +201,7 @@ class ConnectionRequests:
 
 class RfcommService:
     """
-    A service published on this machine, listening for peers.
+    A service published on this computer, listening for devices.
     """
 
     def __init__(
@@ -248,37 +235,35 @@ class RfcommService:
     @property
     def service(self) -> UUID:
         """
-        The service UUID being published.
+        The service's UUID.
         """
         return self._service
 
     @property
     def name(self) -> str:
         """
-        The human-readable name being published with it.
+        The service's name.
         """
         return self._name
 
     @property
     def channel(self) -> int:
         """
-        The RFCOMM channel peers reach this service on.
+        The RFCOMM channel the service is on.
 
-        Worth printing: a peer that cannot do service discovery needs this
-        number, and it may have been chosen by the library rather than by the
-        caller.
+        A device that cannot look up the service by its UUID needs this number.
         """
         return self._backend.channel
 
     def connection_requests(self) -> ConnectionRequests:
         """
-        The peers asking to connect, as they arrive.
+        Get each device that connects, as it arrives.
 
         ::
 
             async with asyncio.TaskGroup() as group:
                 async for request in service.connection_requests():
-                    group.create_task(answer(request))
+                    group.create_task(talk(request))
 
         Returns:
             An async iterator of requests. It never ends by itself.

@@ -4,17 +4,12 @@
 """
 Errors raised by aio-rfcomm.
 
-Every failure that Bluetooth or the peer causes surfaces as an
-:class:`RfcommError`, which is what a program catches. Backends wrap the
-platform exception rather than letting it through, so error handling is the
-same on every platform; the original is kept as ``__cause__`` for diagnosis.
+Errors that Bluetooth or the other device cause derive from
+:class:`RfcommError`, and are the same on every platform. The platform's own
+error, if there is one, is kept as ``__cause__``.
 
-Mistakes in the calling code are not :class:`RfcommError`: they are
-:class:`RuntimeError` subclasses, grouped at the end, so that catching
-:class:`RfcommError` never hides a bug.
-
-Grouped below by what raises them first. The grouping is a reading aid rather
-than a promise.
+Errors caused by mistakes in your own code derive from :class:`RuntimeError`
+instead, so catching :class:`RfcommError` never hides a bug.
 """
 
 import enum
@@ -43,7 +38,7 @@ __all__ = [
 
 class RfcommError(Exception):
     """
-    Base class for every error raised by this library.
+    The base class of every error that Bluetooth or the other device causes.
     """
 
 
@@ -63,10 +58,7 @@ _DESCRIPTIONS: dict[UnavailableReason, str] = {
 
 class BluetoothUnavailableError(RfcommError):
     """
-    Bluetooth cannot be used.
-
-    Raised by anything attempted while Bluetooth is unusable. :attr:`reason`
-    says why.
+    Bluetooth cannot be used. :attr:`reason` says why.
     """
 
     def __init__(self, reason: UnavailableReason, detail: str | None = None) -> None:
@@ -79,7 +71,7 @@ class BluetoothUnavailableError(RfcommError):
         super().__init__(detail or _DESCRIPTIONS[reason])
         self.reason: UnavailableReason = reason
         """
-        Why Bluetooth cannot be used.
+        Why Bluetooth cannot be used. See :class:`~aio_rfcomm.Availability`.
         """
 
     @override
@@ -96,26 +88,21 @@ class BluetoothUnavailableError(RfcommError):
 
 class DeviceNotFoundError(RfcommError):
     """
-    The device is not known to the OS and could not be reached.
+    The device did not answer. It may be turned off or out of range.
     """
 
 
 class ServiceNotFoundError(RfcommError):
     """
-    The device does not offer the requested service, or, opening by channel
-    number on macOS or Linux, refused the channel -- usually because nothing
-    there is listening on it.
+    The device does not offer that service, or refused that channel number.
 
-    The service record may simply not be cached. Refreshing it is not
-    something this library can do on every platform; see the design notes.
+    The system's stored copy of the device's services may also be out of date.
     """
 
 
 class ConnectionFailedError(RfcommError):
     """
-    The channel could not be opened.
-
-    Raised after any retries have been exhausted.
+    The channel could not be opened, or the service could not be published.
     """
 
 
@@ -126,33 +113,29 @@ class ConnectionFailedError(RfcommError):
 
 class CloseReason(enum.Enum):
     """
-    Why a channel is no longer usable.
-
-    There is no member for "this side closed it". Closing happens by leaving
-    the ``async with`` block, and by then there is nobody left inside it to be
-    told.
+    How a connection ended.
     """
 
-    PEER_CLOSED = "the peer closed the channel"
+    PEER_CLOSED = "the other device hung up"
     """
-    The far end hung up in an orderly way. The stream simply ended.
+    The other device hung up.
     """
 
-    LINK_LOST = "the link was lost"
+    LINK_LOST = "the connection was lost"
     """
-    The baseband connection went away -- the device moved out of range, lost
-    power, or dropped the link.
+    The connection to the device was lost. It may have moved out of range or
+    been turned off.
     """
 
 
 class ChannelClosedError(RfcommError):
     """
-    The channel is over.
+    The connection has ended. :attr:`reason` says how.
 
-    Every ending is raised, the peer hanging up included: by
-    :meth:`~aio_rfcomm.RfcommChannel.send`, and by
-    :meth:`~aio_rfcomm.RfcommChannel.receive` once whatever arrived before the
-    end has been taken, with the same :attr:`reason` every time.
+    Once a connection has ended, and any bytes that arrived before the end
+    have been received, every call to :meth:`~aio_rfcomm.RfcommChannel.receive`
+    and :meth:`~aio_rfcomm.RfcommChannel.send` raises this, with the same
+    reason.
     """
 
     def __init__(self, reason: CloseReason) -> None:
@@ -163,7 +146,7 @@ class ChannelClosedError(RfcommError):
         super().__init__(reason.value)
         self.reason = reason
         """
-        Why the channel is gone.
+        How the connection ended.
         """
 
     @override
@@ -174,12 +157,11 @@ class ChannelClosedError(RfcommError):
 
 class DelimiterNotFoundError(RfcommError):
     """
-    :meth:`~aio_rfcomm.RfcommChannel.receive_until` looked through as many
-    bytes as it was allowed without finding its delimiter.
+    :meth:`~aio_rfcomm.RfcommChannel.receive_until` found no delimiter within
+    ``max_bytes``.
 
-    The peer sent something the program did not expect -- a line longer than
-    any it should send, say. Nothing was taken, so what arrived can still be
-    read with :meth:`~aio_rfcomm.RfcommChannel.receive`.
+    No bytes were read, so :meth:`~aio_rfcomm.RfcommChannel.receive` can still
+    read them.
     """
 
 
@@ -190,23 +172,15 @@ class DelimiterNotFoundError(RfcommError):
 
 class ChannelInUseError(RfcommError):
     """
-    The RFCOMM channel a service asked to listen on is already taken.
+    The RFCOMM channel you asked to serve on is already in use.
 
-    Either by another program on this machine or by another service in this
-    one. Pick a different channel, or let the library choose by leaving the
-    channel unset.
+    Pick another channel, or leave it out to let the library choose.
     """
 
 
 class UnsupportedOperationError(RfcommError):
     """
-    This platform cannot do that, even though it has a backend.
-
-    Not every platform can do everything. Connecting to a bare RFCOMM channel
-    number on Linux, for instance, needs a Bluetooth socket, and the Python
-    builds that ship without Bluetooth support cannot open one -- while BlueZ
-    offers no way to do it over D-Bus. The message says what would make it
-    work.
+    This platform cannot do that. The message says what to do instead.
     """
 
 
@@ -217,30 +191,21 @@ class UnsupportedOperationError(RfcommError):
 
 class BluetoothAlreadyOpenError(RuntimeError):
     """
-    Bluetooth was opened while it was already open in this process.
+    Bluetooth was opened while it was already open.
 
-    There is one Bluetooth object per process. Code that needs Bluetooth takes
-    that object as an argument rather than opening its own.
+    Open it once, and pass the object to the functions that need it.
     """
 
 
 class ChannelBusyError(RuntimeError):
     """
-    Two tasks used one direction of a channel at the same time.
+    Two tasks received on one channel at the same time, or two tasks sent.
 
-    One task sends and one task receives; the two directions are independent
-    and do not block each other. Sharing a single direction interleaves the
-    two callers' data unpredictably, so it is reported as the caller's bug
-    rather than tolerated as a race.
+    One task can send while another receives.
     """
 
 
 class ScopeClosedError(RuntimeError):
     """
-    A handle was used after the block that produced it ended.
-
-    The Bluetooth object, channels and services are only meaningful inside
-    their ``async with``. Keeping one past the end of the block is a bug in the
-    caller, so it is reported at once rather than left to fail somewhere less
-    obvious.
+    Something was used after its ``async with`` block ended.
     """

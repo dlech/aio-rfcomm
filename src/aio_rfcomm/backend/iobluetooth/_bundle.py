@@ -100,7 +100,7 @@ def _assemble(app: Path, interpreter: Path, name: str, reason: str) -> None:
     # An interpreter that loads libpython from @executable_path/../lib -- as
     # the python-build-standalone builds do -- looks for it relative to the
     # copy, which is now somewhere else entirely. Putting the original
-    # directories back in the same relative places is enough; the dynamic
+    # directories back in the same relative places is enough. The dynamic
     # linker follows symbolic links.
     beside = interpreter.parent.parent
     for directory in ("lib", "Frameworks"):

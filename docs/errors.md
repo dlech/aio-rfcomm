@@ -1,8 +1,8 @@
 # Errors
 
-Every error that Bluetooth or the peer causes derives from
-[`RfcommError`][aio_rfcomm.errors.RfcommError], so one `except` catches the lot
-if that is all you need:
+Errors caused by Bluetooth or by the other device all derive from
+[`RfcommError`][aio_rfcomm.errors.RfcommError], so one `except` catches them
+all:
 
 ```python
 try:
@@ -11,44 +11,30 @@ except aio_rfcomm.errors.RfcommError as error:
     print(f"{type(error).__name__}: {error}")
 ```
 
-Mistakes in your own code are not `RfcommError`: they are `RuntimeError`
-subclasses (see the last group), so catching `RfcommError` never hides a bug.
+Errors caused by mistakes in your own code are `RuntimeError` or `ValueError`
+instead, so catching `RfcommError` never hides a bug. The library's own errors
+are all in `aio_rfcomm.errors`.
 
-They come from `aio_rfcomm.errors`, and divide into five groups.
-
-## Bluetooth itself
+## Bluetooth cannot be used
 
 [`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError]
-means Bluetooth cannot be used, and its
+means Bluetooth cannot be used right now. Its
 [`reason`][aio_rfcomm.errors.BluetoothUnavailableError.reason] says why, as an
-[`Availability`][aio_rfcomm.Availability]:
-
-| Reason | Means |
-| --- | --- |
-| `SWITCHED_OFF` | Bluetooth is switched off. |
-| `NO_ADAPTER` | The machine has no Bluetooth adapter. |
-| `NOT_ALLOWED` | This program may not use Bluetooth. On macOS, the user said no — or the program never declared why it wants Bluetooth. |
-| `SERVICE_UNAVAILABLE` | The system's Bluetooth service is not running. |
-| `UNSUPPORTED` | This system has no Bluetooth at all. |
-
-One error with a reason, rather than one class per reason, so that a `match`
-over the reasons ending in `assert_never` is checked as exhaustive.
-`SWITCHED_OFF` and `NOT_ALLOWED` are deliberately distinct: "turn Bluetooth
-on" and "allow this program to use Bluetooth" are different things to tell a
-user, and a program that cannot tell them apart tells them the wrong one.
+[`Availability`][aio_rfcomm.Availability]. See [Bluetooth](bluetooth.md) for
+what each reason means and what the user can do about it.
 
 ## Connecting
 
 | Error | Means |
 | --- | --- |
-| [`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError] | The device did not answer. Switched off, out of range, or never there. |
-| [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] | The device does not offer that service — or its record is not cached. See [Platforms](platforms.md). From [`open_channel`][aio_rfcomm.Bluetooth.open_channel] on macOS and Linux: the device refused the channel, usually because nothing there is listening on it. |
-| [`ConnectionFailedError`][aio_rfcomm.errors.ConnectionFailedError] | The channel could not be opened, after any retries. |
+| [`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError] | The device did not answer. It may be turned off or out of range. |
+| [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] | The device does not offer that service, or refused that channel number. See also [Platforms](platforms.md). |
+| [`ConnectionFailedError`][aio_rfcomm.errors.ConnectionFailedError] | The channel could not be opened, or the service could not be published. |
 
-## Using a channel
+## While connected
 
-[`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError] carries a
-[`reason`][aio_rfcomm.errors.CloseReason]: `PEER_CLOSED` or `LINK_LOST`.
+[`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError] means the
+connection has ended. Its [`reason`][aio_rfcomm.errors.CloseReason] says how:
 
 ```python
 except ChannelClosedError as error:
@@ -61,36 +47,33 @@ except ChannelClosedError as error:
             assert_never(error.reason)
 ```
 
-Every ending is raised, the peer hanging up included. Once a channel is over,
-[`receive`][aio_rfcomm.RfcommChannel.receive] — after handing over whatever
-arrived before the end — and [`send`][aio_rfcomm.RfcommChannel.send] raise it,
-with the same reason every time, so a reader and a writer that both notice
-agree on what happened.
-
-A channel that Bluetooth going away ended raises
-[`BluetoothUnavailableError`][aio_rfcomm.errors.BluetoothUnavailableError]
-instead, in the same way: the connection did not fail, Bluetooth did.
+Once a connection has ended, and any bytes that arrived before the end have
+been received, every call to [`receive`][aio_rfcomm.RfcommChannel.receive]
+and [`send`][aio_rfcomm.RfcommChannel.send] raises the same error. If the
+connection ended because Bluetooth stopped being usable, they raise
+`BluetoothUnavailableError` instead.
 
 [`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError] means
 [`receive_until`][aio_rfcomm.RfcommChannel.receive_until] found no delimiter
-within its limit: the peer sent something your program did not expect.
+within `max_bytes`.
 
 ## Limits
 
 | Error | Means |
 | --- | --- |
-| [`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError] | The RFCOMM channel you asked to serve on is already taken. |
-| [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] | This platform cannot do that particular thing. The message says what would make it work. |
+| [`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError] | The channel you asked to serve on is already in use. |
+| [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] | This platform cannot do that, or not right now. The message says what to do instead. |
 
-## Mistakes in the calling code
+## Mistakes in your code
 
 These are `RuntimeError`, not `RfcommError`.
 
 | Error | Means |
 | --- | --- |
-| [`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError] | Two tasks used the same direction of one channel at once, which is reported as your bug rather than tolerated as a race. |
-| [`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError] | A handle was used after the block that produced it ended. |
-| [`BluetoothAlreadyOpenError`][aio_rfcomm.errors.BluetoothAlreadyOpenError] | Bluetooth was opened while it was already open in this process. |
+| `RuntimeError` | A connection request was accepted or declined twice. |
+| [`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError] | Two tasks received at the same time on one channel, or two tasks sent. |
+| [`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError] | Something was used after its `async with` block ended. |
+| [`BluetoothAlreadyOpenError`][aio_rfcomm.errors.BluetoothAlreadyOpenError] | Bluetooth was opened while it was already open. |
 
 A channel number outside 1 to 30, or a string that is not a Bluetooth address,
-raises `ValueError` where it is passed in.
+raises `ValueError`.

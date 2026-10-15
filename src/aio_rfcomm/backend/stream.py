@@ -232,7 +232,7 @@ class StreamChannel(BackendChannel):
         Close the channel, letting what was sent go first.
 
         Waits for as long as the peer takes to accept what is still queued,
-        with no limit of its own; cancelled, it drops the rest and closes at
+        with no limit of its own. Cancelled, it drops the rest and closes at
         once.
         """
         self._transport.close()
