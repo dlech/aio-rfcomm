@@ -2,13 +2,11 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-The framing in the chat example.
+How the chat example shows what arrives.
 
-Everything else in that example is wiring, but splitting a byte stream into
-lines is the part a reader is most likely to copy and the part most likely to
-be subtly wrong: RFCOMM keeps no message boundaries, so a line can arrive in
-pieces and several can arrive at once. Getting it wrong looks fine against a
-peer that happens to send one tidy line per write.
+Splitting the stream into lines is the library's ``receive_until``, tested
+with the channel; what is left here is turning a line into something fit to
+print, whatever the peer sent.
 """
 
 import importlib.util
@@ -17,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from aio_rfcomm.channel import RfcommChannel
+from aio_rfcomm.errors import ChannelClosedError
+from tests.fake import FakeChannel
 
 pytest.importorskip("prompt_toolkit", reason="the chat example needs prompt_toolkit")
 
@@ -28,52 +30,49 @@ sys.modules["example_chat"] = chat
 _spec.loader.exec_module(chat)
 
 
-def test_a_whole_line_comes_out_whole() -> None:
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"hello\n")) == ["hello"]
-    assert buffer == b""
+async def _shown(
+    opened: tuple[RfcommChannel, FakeChannel],
+    capsys: pytest.CaptureFixture[str],
+    arrived: bytes,
+) -> list[str]:
+    channel, fake = opened
+    fake.deliver(arrived)
+    fake.go_away()
+    with pytest.raises(ChannelClosedError):
+        await chat.show(channel, "peer")
+    return capsys.readouterr().out.splitlines()
 
 
-def test_a_line_split_across_arrivals_is_rejoined() -> None:
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"hel")) == []
-    assert list(chat.split_lines(buffer, b"lo\n")) == ["hello"]
+async def test_each_line_is_shown_as_it_completes(
+    opened: tuple[RfcommChannel, FakeChannel], capsys: pytest.CaptureFixture[str]
+) -> None:
+    shown = await _shown(opened, capsys, b"one\ntwo\n\n")
+    assert shown == ["peer: one", "peer: two", "peer: "]
 
 
-def test_several_lines_in_one_arrival_all_come_out() -> None:
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"one\ntwo\nthree\n")) == [
-        "one",
-        "two",
-        "three",
-    ]
-
-
-def test_a_trailing_partial_line_is_kept_for_next_time() -> None:
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"done\nnot yet")) == ["done"]
-    assert buffer == b"not yet"
-    assert list(chat.split_lines(buffer, b" finished\n")) == ["not yet finished"]
-
-
-def test_carriage_returns_are_not_shown() -> None:
+async def test_carriage_returns_are_not_shown(
+    opened: tuple[RfcommChannel, FakeChannel], capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     A peer on a platform that ends lines with CRLF should not leave a stray
     carriage return in the middle of the display.
     """
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"windows\r\n")) == ["windows"]
+    assert await _shown(opened, capsys, b"windows\r\n") == ["peer: windows"]
 
 
-def test_an_empty_line_is_still_a_line() -> None:
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"\n")) == [""]
-
-
-def test_bytes_that_are_not_utf8_do_not_raise() -> None:
+async def test_bytes_that_are_not_utf8_do_not_raise(
+    opened: tuple[RfcommChannel, FakeChannel], capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     The peer is not obliged to send valid text, and a chat window falling over
     because of one bad byte would be worse than showing a replacement.
     """
-    buffer = bytearray()
-    assert list(chat.split_lines(buffer, b"caf\xff\n")) == ["caf�"]
+    assert await _shown(opened, capsys, b"caf\xff\n") == ["peer: caf\ufffd"]
+
+
+async def test_an_overlong_line_is_shown_in_pieces(
+    opened: tuple[RfcommChannel, FakeChannel], capsys: pytest.CaptureFixture[str]
+) -> None:
+    line = b"x" * (chat.MAX_LINE + 10)
+    shown = await _shown(opened, capsys, line + b"\n")
+    assert shown == ["peer: " + "x" * chat.MAX_LINE, "peer: " + "x" * 10]

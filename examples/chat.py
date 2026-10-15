@@ -21,7 +21,7 @@ import argparse
 import asyncio
 import contextlib
 import sys
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
 from typing import Literal, NoReturn, assert_never
 from uuid import UUID
 
@@ -35,6 +35,7 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelClosedError,
     CloseReason,
+    DelimiterNotFoundError,
     RfcommError,
 )
 
@@ -43,6 +44,9 @@ from aio_rfcomm.errors import (
 CHAT = UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
 
 SERVICE_NAME = "aio-rfcomm chat"
+
+# The longest line shown whole.
+MAX_LINE = 4096
 
 
 # --------------------------------------------------------------------------
@@ -105,41 +109,23 @@ async def wait_until_usable(bluetooth: aio_rfcomm.Bluetooth) -> bool:
 # --------------------------------------------------------------------------
 
 
-def split_lines(buffer: bytearray, arrived: bytes) -> Iterator[str]:
-    """
-    Take whole lines out of a growing buffer.
-
-    RFCOMM is a byte stream: a peer's single ``send`` may arrive split across
-    several ``receive`` calls, or share one with the next message.
-
-    Args:
-        buffer: Holds the bytes left over from last time. Modified in place.
-        arrived: What just came in.
-
-    Yields:
-        Each complete line, decoded, without its newline.
-    """
-    buffer += arrived
-
-    while (end := buffer.find(b"\n")) >= 0:
-        line = bytes(buffer[:end])
-        del buffer[: end + 1]
-        yield line.decode("utf-8", errors="replace").rstrip("\r")
-
-
 async def show(channel: aio_rfcomm.RfcommChannel, who: str) -> NoReturn:
     """
-    Print what the peer says, until the channel ends.
+    Print what the peer says, a line at a time, until the channel ends.
 
     Args:
         channel: The open channel.
         who: What to label the peer's lines with.
     """
-    buffer = bytearray()
-
     while True:
-        for line in split_lines(buffer, await channel.receive()):
-            print(f"{who}: {line}")
+        try:
+            line = await channel.receive_until(b"\n", max_bytes=MAX_LINE + 1)
+        except DelimiterNotFoundError:
+            # An overlong line is shown in pieces rather than dropped.
+            line = await channel.receive(MAX_LINE)
+
+        text = line.decode("utf-8", errors="replace").rstrip("\r")
+        print(f"{who}: {text}")
 
 
 async def send_typing(channel: aio_rfcomm.RfcommChannel) -> None:
