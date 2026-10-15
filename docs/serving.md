@@ -6,12 +6,6 @@ to. [`serve`][aio_rfcomm.Bluetooth.serve] publishes a service record and
 listens, the way a listening socket does: each peer that connects arrives as a
 request, which your program accepts or declines.
 
-!!! info "Linux and Windows only"
-
-    macOS accepts the connection but never delivers it to the program. See
-    [Platforms](platforms.md) for what was measured and why this is not
-    something the library can work around.
-
 ```python
 async def talk(request: aio_rfcomm.RfcommConnectionRequest) -> None:
     try:
@@ -51,9 +45,10 @@ about it.
   It hangs up before it awaits anything, so it takes effect even if cancelled,
   and it never raises for a hang-up that failed.
 
-Declining is not a refusal. On BlueZ and Windows the peer's channel appears to
-be open before the request reaches your program, so the peer should see its
-open succeed and the channel then end; this has not yet been measured.
+Declining is not a refusal. The peer's channel is already open by the time the
+request reaches your program, so the peer sees its open succeed and the channel
+then end. Measured on macOS with a BlueZ peer, which saw the channel closed by
+its peer; on BlueZ and Windows this has not yet been measured.
 
 A request that is neither accepted nor declined is a bug. When it is
 garbage-collected it raises `ResourceWarning`, shown under `python -X dev`, and

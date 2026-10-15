@@ -7,7 +7,7 @@ differences do not reach you. These are the places where they do.
 | --- | :---: | :---: |
 | **Linux** (BlueZ) | ✅ | ✅ |
 | **Windows** | ✅ | ✅ |
-| **macOS** | ✅ | ❌ |
+| **macOS** | ✅ | ✅ |
 
 ## macOS
 
@@ -61,19 +61,42 @@ Channels one after another are fine, and so are channels to different devices at
 the same time — it is only two at once to the *same* device that macOS cannot
 hold.
 
-### Serving does not work
+### Each service runs in a process of its own
 
-A service record cannot be published at all. IOBluetooth builds one from a
-dictionary of data elements, and the encoder that turns that dictionary into SDP
-corrupts every data element sequence: in place of the sequence's contents it
-writes out the dictionary's own key names, the literal strings
-`DataElementType` and `DataElementValue`. Every useful RFCOMM record needs a
-protocol descriptor list, which is a sequence, so the publish fails and the
-system logs a parse error.
+[`serve`][aio_rfcomm.Bluetooth.serve] starts a helper process for the service,
+which ends once the service has been withdrawn and the last channel it handed
+over has closed. Nothing about this is visible from the API, but the reason is
+worth knowing.
 
-[`serve`][aio_rfcomm.Bluetooth.serve] therefore raises
-[`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError] on
-macOS. Connecting from this machine is unaffected, within the limit above.
+macOS's Bluetooth daemon has a fixed number of slots for programs listening on
+RFCOMM channels, shared by every program on the Mac, and frees a program's
+slot only when that program's process ends. A process that registers to listen
+a second time loses the first registration's slot until Bluetooth is next
+switched off. So one process per service is the only way to serve repeatedly
+without using them up.
+
+If another program has used them up, every peer's connection to this Mac waits
+until it gives up, and nothing reports why. Switching Bluetooth off and on
+again frees them.
+
+**A channel is served once per Bluetooth session.** macOS refuses every
+request to withdraw a published service record, so leaving a `serve` block
+leaves its record advertised until Bluetooth is next switched off. And once a
+channel has had a connection, macOS's Bluetooth daemon keeps it, and a later
+attempt to serve on that channel accepts the old, dead connection instead of
+listening for new ones, with nothing to say so. So the library never serves on
+a channel that already has a record: left to choose, it picks the highest one
+without one (passing over 10 and 15, which the daemon treats specially), and a
+channel asked for that has one raises
+[`ChannelInUseError`][aio_rfcomm.errors.ChannelInUseError]. Switching
+Bluetooth off and on again clears both the records and the kept connections,
+except for services the system itself publishes.
+
+A long-running server is unaffected. It is a program that serves, exits and
+serves again that moves to a new channel each time. A client with a channel
+number written into it cannot follow. One that finds the service by UUID did,
+in every run measured against BlueZ, even with the earlier records still
+advertised; a client that caches records may not.
 
 ## Stale service records
 
@@ -94,7 +117,8 @@ the channel number, which does no lookup at all. That only helps when the
 channel is stable and known, though — it is no use against a peer that lets the
 library choose a free channel, since the number can differ every time the
 server starts. Pin the channel on the serving side if clients will need to
-hard-code it.
+hard-code it — though on macOS a pinned channel can be served only once
+until Bluetooth is switched off and on, as above.
 
 ## Linux
 

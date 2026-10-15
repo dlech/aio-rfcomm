@@ -25,17 +25,21 @@ import asyncio
 import ctypes
 import itertools
 import logging
+import os
+import stat
 import time
 from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, Protocol, cast
 from uuid import UUID
 
 from rubicon.objc import (
+    SEL,
     NSObject,
     ObjCClass,
     ObjCInstance,
     ObjCProtocol,
+    ns_from_py,
     objc_method,
 )
 from rubicon.objc.api import NSString
@@ -52,6 +56,7 @@ from aio_rfcomm.backend.iobluetooth._codes import (
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
+    ChannelInUseError,
     CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
@@ -63,6 +68,7 @@ from aio_rfcomm.errors import (
 __all__ = [
     "Channel",
     "MachError",
+    "Service",
     "hear_open_results",
     "list_known_devices",
     "open_channel",
@@ -70,6 +76,7 @@ __all__ = [
     "read_power_state",
     "record_open_result",
     "report_states",
+    "serve",
 ]
 
 # Loading the framework is what makes its classes findable by name. It does
@@ -115,6 +122,20 @@ class _Channel(Protocol):
     def getMTU(self) -> int: ...
     def closeChannel(self) -> int: ...
     def writeAsync(self, data: bytes, /, *, length: int, refcon: int) -> int: ...
+
+
+class _IncomingChannel(_Channel, Protocol):
+    # Handed over open, with no delegate yet.
+    def setDelegate(self, delegate: "_ChannelDelegate", /) -> int: ...
+    def getDevice(self) -> "_Device": ...
+
+
+class _Notification(Protocol):
+    def unregister(self) -> None: ...
+
+
+class _PublishedRecord(Protocol):
+    def removeServiceRecord(self) -> int: ...
 
 
 class _Device(Protocol):
@@ -182,14 +203,41 @@ class _ControllerClass(Protocol):
 
 
 class _ChannelClass(Protocol):
-    # Unlike the others, this class is reached by wrapping a pointer the
-    # framework filled in rather than by calling a method on it, so what
-    # there is to describe is the call itself.
+    # Mostly reached by wrapping a pointer the framework filled in rather than
+    # by calling a method on it, so what there is to describe is the call.
     def __call__(self, pointer: objc_id, /) -> _Channel: ...
+    def registerForChannelOpenNotifications(
+        self,
+        observer: NSObject,
+        /,
+        *,
+        selector: SEL,
+        withChannelID: int,
+        direction: int,
+    ) -> _Notification: ...
+
+
+class _LocalServices(Protocol):
+    def allValues(self) -> Iterable[_Record]: ...
+
+
+class _DeviceManager(Protocol):
+    def getLocalServices(self) -> _LocalServices | None: ...
+
+
+class _DeviceManagerClass(Protocol):
+    def sharedDeviceManager(self) -> _DeviceManager: ...
+
+
+class _RecordClass(Protocol):
+    def publishedServiceRecordWithDictionary(
+        self, record: ObjCInstance, /
+    ) -> _PublishedRecord | None: ...
 
 
 class _UUIDClass(Protocol):
     def uuidWithData(self, data: bytes, /) -> _UUID: ...
+    def uuid16(self, value: int, /) -> _UUID: ...
 
 
 def _class(name: str) -> Any:
@@ -213,11 +261,14 @@ IOBluetoothDevice = cast(_DeviceClass, _class("IOBluetoothDevice"))
 IOBluetoothHostController = cast(_ControllerClass, _class("IOBluetoothHostController"))
 IOBluetoothSDPUUID = cast(_UUIDClass, _class("IOBluetoothSDPUUID"))
 IOBluetoothRFCOMMChannel = cast(_ChannelClass, _class("IOBluetoothRFCOMMChannel"))
+IOBluetoothSDPServiceRecord = cast(_RecordClass, _class("IOBluetoothSDPServiceRecord"))
 IOBluetoothRFCOMMChannelDelegate = ObjCProtocol("IOBluetoothRFCOMMChannelDelegate")
 
-# Looked up where it is used rather than beside the others above: it is private,
-# and at module scope a class a future macOS lacks would take the backend down.
+# Looked up where they are used rather than beside the others above: they are
+# private, and at module scope a class a future macOS lacks would take the
+# backend down.
 _COORDINATOR = "IOBluetoothCoreBluetoothCoordinator"
+_DEVICE_MANAGER = "BluetoothDeviceManager"
 
 # The runtime calls the hook in hear_open_results needs, declared on a handle
 # of its own so as not to disturb rubicon's declarations of the same functions.
@@ -913,6 +964,16 @@ class Channel:
         """
         return self._delegate.arrived
 
+    def peer(self) -> RfcommDeviceInfo:
+        """
+        Returns:
+            The device at the other end.
+        """
+        name = self._device.name
+        return RfcommDeviceInfo(
+            _normalise(str(self._device.addressString)), str(name) if name else None
+        )
+
     async def wait_until_open(self) -> None:
         """
         Wait for the framework to finish opening the channel.
@@ -1153,6 +1214,162 @@ _HandleOpened = ctypes.CFUNCTYPE(
     None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
 )
 
+# The hook runs on a framework thread, where rubicon is not safe to use: it
+# loads a class's methods on first use, and two threads doing so at once raise
+# -- measured, as a helper that failed to make a channel's delegate while the
+# hook read an incoming channel's result. So the hook reads with plain message
+# sends, and its keys are made here, on the main thread.
+_send_with_object = ctypes.CFUNCTYPE(
+    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+)(("objc_msgSend", _objc))
+_send_for_object = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+    ("objc_msgSend", _objc)
+)
+_send_for_int = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(
+    ("objc_msgSend", _objc)
+)
+_send_for_text = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)(
+    ("objc_msgSend", _objc)
+)
+_send_is_kind = ctypes.CFUNCTYPE(
+    ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+)(("objc_msgSend", _objc))
+_objc.objc_getClass.restype = ctypes.c_void_p
+_objc.objc_getClass.argtypes = [ctypes.c_char_p]
+_IS_KIND_OF_CLASS = _objc.sel_registerName(b"isKindOfClass:")
+_NSNUMBER = _objc.objc_getClass(b"NSNumber")
+_NSSTRING = _objc.objc_getClass(b"NSString")
+_OBJECT_FOR_KEY = _objc.sel_registerName(b"objectForKey:")
+_INT_VALUE = _objc.sel_registerName(b"intValue")
+_ADDRESS_STRING = _objc.sel_registerName(b"addressString")
+_UTF8_STRING = _objc.sel_registerName(b"UTF8String")
+_RESULT_KEY = cast(ObjCInstance, ns_from_py("kCBMsgArgResult"))
+_CHANNEL_KEY = cast(ObjCInstance, ns_from_py("kCBMsgArgRFCOMMChannelID"))
+_SOCKET_KEY = cast(ObjCInstance, ns_from_py("kCBMsgArgSocket"))
+
+
+class _OpenResult(NamedTuple):
+    """
+    What bluetoothd said about one channel open.
+    """
+
+    address: str | None
+    channel: int | None
+    result: int | None
+    socket: int | None
+
+
+def _read_open_result(peer: int, info: int) -> _OpenResult:
+    """
+    Read bluetoothd's report of a channel open, on whatever thread.
+
+    Args:
+        peer: The ``CBClassicPeer`` the channel was opened to.
+        info: What bluetoothd sent.
+
+    Returns:
+        What it said, with ``None`` for anything it left out.
+    """
+
+    # Checked before anything is sent to them: an Objective-C exception on
+    # this thread is beyond any Python handler and would end the process.
+    def number(key: ObjCInstance) -> int | None:
+        found = _send_with_object(info, _OBJECT_FOR_KEY, key.ptr)
+        if found and _send_is_kind(found, _IS_KIND_OF_CLASS, _NSNUMBER):
+            return int(_send_for_int(found, _INT_VALUE))
+
+        return None
+
+    address = None
+    text = _send_for_object(peer, _ADDRESS_STRING)
+
+    if text and _send_is_kind(text, _IS_KIND_OF_CLASS, _NSSTRING):
+        utf8 = _send_for_text(text, _UTF8_STRING)
+        address = utf8.decode() if utf8 else None
+
+    return _OpenResult(
+        address, number(_CHANNEL_KEY), number(_RESULT_KEY), number(_SOCKET_KEY)
+    )
+
+
+def record_open_result(address: str, channel: int, result: int) -> None:
+    """
+    Record bluetoothd's result for one channel open.
+
+    Args:
+        address: The device's address, in any of the forms IOBluetooth writes.
+        channel: The RFCOMM channel number.
+        result: The daemon's ``kCBMsgArgResult``, 0 for success.
+    """
+    _open_results[(_normalise(address), channel)] = result
+
+
+def _note_open_result(opened: _OpenResult) -> None:
+    """
+    Note one channel open's result as bluetoothd reported it.
+
+    Args:
+        opened: What bluetoothd said.
+    """
+    if opened.address is None or opened.channel is None or opened.result is None:
+        return
+    record_open_result(opened.address, opened.channel, opened.result)
+
+
+def _describe_result(result: int) -> str:
+    """
+    Say what CoreBluetooth makes of one of bluetoothd's results.
+
+    Args:
+        result: A ``kCBMsgArgResult`` other than 0.
+
+    Returns:
+        CoreBluetooth's own description, which for most results is only
+        "Unknown error."
+    """
+    # A private category, so a macOS without it costs only the description.
+    try:
+        error = _class("NSError").errorWithInfo_(
+            ns_from_py({"kCBMsgArgResult": result})
+        )
+    except Exception:  # noqa: BLE001
+        return "no description"
+
+    if error is None:
+        return "no error"
+
+    return str(error.localizedDescription)
+
+
+def _is_null_device(descriptor: int) -> bool:
+    try:
+        opened = os.fstat(descriptor)
+    except OSError:
+        return False
+
+    return (
+        stat.S_ISCHR(opened.st_mode) and opened.st_rdev == os.stat(os.devnull).st_rdev
+    )
+
+
+def _close_unclaimed_socket(opened: _OpenResult) -> None:
+    """
+    Close the descriptor a failed channel open leaves behind.
+
+    Args:
+        opened: What bluetoothd said, once CoreBluetooth has handled it.
+    """
+    if not opened.result or opened.socket is None:
+        return
+
+    # CoreBluetooth duplicates each descriptor bluetoothd sends, and only the
+    # channel object made for a success closes it. A failure carries
+    # bluetoothd's descriptor 0, /dev/null: measured, one leaked per refused
+    # open. Only /dev/null is closed, so a real socket never is.
+    if _is_null_device(opened.socket):
+        os.close(opened.socket)
+
+
 # The hook and what it replaced, kept for the life of the process: the
 # framework calls through them on threads of its own.
 _hooked: list[object] = []
@@ -1185,46 +1402,26 @@ def hear_open_results() -> None:
     original = _HandleOpened(_objc.method_getImplementation(method))
 
     def opened(peer: int, selector: int, info: int) -> None:
+        said = None
+
         try:
-            _note_open_result(ObjCInstance(objc_id(peer)), ObjCInstance(objc_id(info)))
+            said = _read_open_result(peer, info)
+            _note_open_result(said)
         except Exception:
             # Losing the note costs a clearer error, never the open itself.
             logger.debug("could not read a channel open's result", exc_info=True)
+
         original(peer, selector, info)
+
+        if said is not None:
+            try:
+                _close_unclaimed_socket(said)
+            except Exception:
+                logger.debug("could not check a failed open's socket", exc_info=True)
 
     replacement = _HandleOpened(opened)
     _hooked.extend([original, replacement])
     _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
-
-
-def _note_open_result(peer: ObjCInstance, info: ObjCInstance) -> None:
-    """
-    Note one channel open's result as bluetoothd reported it.
-
-    Args:
-        peer: The ``CBClassicPeer`` the channel was opened to.
-        info: What bluetoothd sent: ``kCBMsgArgResult`` and
-            ``kCBMsgArgRFCOMMChannelID`` among it.
-    """
-    result = info.objectForKey_("kCBMsgArgResult")
-    channel = info.objectForKey_("kCBMsgArgRFCOMMChannelID")
-    if result is None or channel is None:
-        return
-    record_open_result(
-        str(peer.addressString), int(channel.intValue), int(result.intValue)
-    )
-
-
-def record_open_result(address: str, channel: int, result: int) -> None:
-    """
-    Record bluetoothd's result for one channel open.
-
-    Args:
-        address: The device's address, in any of the forms IOBluetooth writes.
-        channel: The RFCOMM channel number.
-        result: The daemon's ``kCBMsgArgResult``, 0 for success.
-    """
-    _open_results[(_normalise(address), channel)] = result
 
 
 async def _open_reported(device: _Device, number: int, address: str) -> Channel:
@@ -1252,6 +1449,7 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
             framework never reported one open.
     """
     key = (_normalise(address), number)
+    result = None
     for _attempt in range(_OPEN_REPORT_ATTEMPTS):
         _open_results.pop(key, None)
         opening = await _request(device, number, address)
@@ -1265,16 +1463,19 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
             ) from error
         except TimeoutError:
             opening.release()
-            if _open_results.get(key) == _RESULT_REFUSED:
+            result = _open_results.get(key)
+            if result == _RESULT_REFUSED:
                 # Asking again would be refused again.
                 raise ServiceNotFoundError(
                     f"{address} refused channel {number}; usually nothing there "
                     "is listening on it"
                 ) from None
             logger.debug(
-                "channel %d to %s was never reported open; asking again",
+                "channel %d to %s was never reported open (bluetoothd: %s); "
+                "asking again",
                 number,
                 address,
+                result,
             )
             continue
         except BaseException:
@@ -1282,10 +1483,13 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
             raise
         return opening
 
-    raise ConnectionFailedError(
+    message = (
         f"the framework never reported channel {number} on {address} open, "
         f"after {_OPEN_REPORT_ATTEMPTS} attempts"
     )
+    if result:
+        message += f"; bluetoothd last said {result}: {_describe_result(result)}"
+    raise ConnectionFailedError(message)
 
 
 async def _request(device: _Device, number: int, address: str) -> Channel:
@@ -1309,15 +1513,12 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
     reports around thirteen milliseconds after ``closeChannel`` and well
     before the framework stops handing that channel back.
 
-    ``registerForChannelCloseNotification`` was tried, and does not fire at
-    all. That was measured rather than assumed: registered on the channel
-    with the two-argument selector its documentation asks for, on an observer
-    that ``respondsToSelector:`` confirms, with a non-nil notification
-    returned -- and nothing arrives, for a close this program asks for or for
-    one the peer causes by going away, where the delegate callback fires
-    normally. The notification it hands back calls itself "L2CAP Destroyed",
-    which may be why: closing one RFCOMM channel does not destroy the L2CAP
-    channel that RFCOMM multiplexes over.
+    ``registerForChannelCloseNotification`` never fires, for a close this
+    program asks for or one the peer causes, where the delegate callback
+    does: measured with a real ``SEL``. The disassembly says why. A
+    ``CBClassicPeer`` has one disconnect callback; the coordinator that would
+    pass a close on to notifications sets it, and every
+    ``IOBluetoothRFCOMMChannel`` set up on that peer replaces it with its own.
 
     Args:
         device: The connected ``IOBluetoothDevice``.
@@ -1451,6 +1652,264 @@ def _translate(error: MachError, address: str) -> RfcommError:
             f"{address} did not answer; it may be switched off or out of range"
         )
     return ConnectionFailedError(f"could not reach {address}: {error}")
+
+
+# --------------------------------------------------------------------------
+# Serving
+# --------------------------------------------------------------------------
+
+# kIOBluetoothUserNotificationChannelDirectionIncoming. Measured: IOBluetooth
+# never passes on a registration for kIOBluetoothUserNotificationChannelDirectionAny.
+_INCOMING = 1
+
+# bluetoothd never registers these two with its RFCOMM stack (disassembly), so
+# a service on one is not like a service anywhere else; they are left alone.
+_NOT_CHOSEN = (10, 15)
+
+# The protocol UUIDs a record names to say it is reached over RFCOMM.
+_L2CAP = 0x0100
+_RFCOMM = 0x0003
+
+
+def _record(service: UUID, name: str, number: int) -> ObjCInstance:
+    """
+    Build the service record to publish.
+
+    Args:
+        service: The service class.
+        name: The service name.
+        number: The RFCOMM channel number.
+
+    Returns:
+        The record, in the dictionary form IOBluetooth publishes.
+    """
+    # Sequences as plain arrays. Written as data element dictionaries, which
+    # is what the framework's own documentation shows, the encoder writes out
+    # the dictionaries' key names in place of their contents (follow-ups
+    # §10.1); arrays it encodes correctly, measured.
+    record: dict[str, Any] = {
+        "0001": [_sdp_uuid(service)],
+        "0004": [
+            [IOBluetoothSDPUUID.uuid16(_L2CAP)],
+            [
+                IOBluetoothSDPUUID.uuid16(_RFCOMM),
+                {
+                    "DataElementType": 1,
+                    "DataElementSize": 1,
+                    "DataElementValue": number,
+                },
+            ],
+        ],
+        "0100": name,
+    }
+    return cast(ObjCInstance, ns_from_py(cast(Any, record)))
+
+
+def _channels_in_use() -> set[int]:
+    """
+    Read which RFCOMM channels services published on this Mac name, by any
+    process.
+
+    Returns:
+        The channel numbers, empty if the private path to them has gone.
+    """
+    try:
+        manager = cast(_DeviceManagerClass, ObjCClass(_DEVICE_MANAGER))
+        services = manager.sharedDeviceManager().getLocalServices()
+        records = list(services.allValues()) if services is not None else []
+    except Exception:
+        logger.debug("could not read the local services", exc_info=True)
+        return set()
+
+    used = set()
+
+    for record in records:
+        number = ctypes.c_char()
+        if not record.getRFCOMMChannelID(ctypes.byref(number)):
+            used.add(number.value[0])
+
+    return used
+
+
+def _choose_channel(channel: int | None, avoiding: Collection[int]) -> int:
+    """
+    Settle which channel to serve on: one with no service record.
+
+    Args:
+        channel: The one asked for, or ``None`` to choose.
+        avoiding: Channels this program is already serving on, from other
+            processes.
+
+    Returns:
+        The channel number.
+
+    Raises:
+        ChannelInUseError: The one asked for has a record, or every one does.
+    """
+    # A channel that has had a record since Bluetooth was last switched on is
+    # never served on again, because it may not work and nothing would say
+    # so. Measured, with the disassembly of bluetoothd: a record can never be
+    # withdrawn (each removal is answered OI_STATUS_INVALID_HANDLE, for the
+    # handle it gave out), and every connection to a channel, accepted ones
+    # included, is kept in a list never cleared. The next registration on the
+    # channel, in a later process, takes one off the list and accepts it
+    # instead of listening; the accept fails, the peer being long gone, and
+    # the service never hears a peer at all.
+    used = _channels_in_use() | set(avoiding)
+    if channel is not None:
+        if channel in used:
+            raise ChannelInUseError(
+                f"RFCOMM channel {channel} already has a service published on "
+                "this Mac, by this program or another. macOS keeps a channel "
+                "it has served on, and may not deliver connections on it "
+                "again, until Bluetooth has been switched off and on; do that, "
+                "or let the library choose a channel."
+            )
+        return channel
+
+    # From the top, which this Mac's own services leave alone.
+    for number in range(30, 0, -1):
+        if number not in used and number not in _NOT_CHOSEN:
+            return number
+    raise ChannelInUseError(
+        "every RFCOMM channel already has a service published on this Mac. "
+        "macOS frees them only when Bluetooth is switched off and on."
+    )
+
+
+class _OpenListener(NSObject):
+    """
+    Hears each channel a peer opens to a published service.
+    """
+
+    arrived: asyncio.Queue[ObjCInstance]
+
+    @objc_method
+    def init(self):
+        self.arrived = asyncio.Queue()
+        return self
+
+    # Called on the main queue, so on the loop's own thread.
+    @objc_method
+    def channelOpened_channel_(
+        self, _notification: ObjCInstance, channel: ObjCInstance
+    ) -> None:
+        self.arrived.put_nowait(channel)
+
+
+class Service:
+    """
+    A published service, handing over the channels peers open to it.
+    """
+
+    def __init__(self, number: int, listener: _OpenListener) -> None:
+        """
+        Args:
+            number: The RFCOMM channel it is on.
+            listener: Hears each channel opened to it.
+        """
+        self.channel = number
+        self._listener = listener
+
+    async def accept(self) -> Channel:
+        """
+        Wait for a peer to open a channel.
+
+        Returns:
+            The channel, already open.
+
+        Raises:
+            Exception: The channel could not be taken over. It is closed, and
+                the next one is unaffected.
+        """
+        opened = cast(_IncomingChannel, await self._listener.arrived.get())
+
+        try:
+            delegate = _ChannelDelegate.alloc().init()
+            opened.setDelegate(delegate)
+            if not opened.isOpen():
+                # Closed while it waited, before it had a delegate to say so.
+                delegate.ended.set()
+
+            return Channel(opened, delegate, opened.getDevice())
+        except Exception:
+            with autoreleasepool():
+                opened.closeChannel()
+                del opened
+            raise
+
+
+@asynccontextmanager
+async def serve(
+    service: UUID,
+    *,
+    name: str,
+    channel: int | None = None,
+    avoiding: Collection[int] = (),
+) -> AsyncGenerator[Service, None]:
+    """
+    Publish a service and hear the channels peers open to it. Call once per
+    process.
+
+    Args:
+        service: The service class.
+        name: The service name.
+        channel: The RFCOMM channel, or ``None`` to choose one.
+        avoiding: Channels this program is already serving on, from other
+            processes.
+
+    Yields:
+        The service, withdrawn on exit. Channels already handed over carry on.
+
+    Raises:
+        BluetoothUnavailableError: Bluetooth cannot be used.
+        ChannelInUseError: The channel is taken.
+        ConnectionFailedError: The service record could not be published.
+    """
+    # Once per process: bluetoothd keeps one registration per process, each
+    # replacing the last, and frees only the last when the process ends.
+    # Every one before it holds a slot in its RFCOMM stack until Bluetooth is
+    # next switched off, and once the slots run out nothing on this Mac can
+    # serve -- measured, each registration reported as OI_STATUS_NO_RESOURCES
+    # and every peer's connection left waiting. Unregistering never reaches
+    # bluetoothd.
+    #
+    # Made before this, IOBluetooth drops the registration unsent.
+    await _wait_until_ready()
+    number = _choose_channel(channel, avoiding)
+
+    listener = _OpenListener.alloc().init()
+    # A selector, not a string: given one, rubicon stores a selector made of
+    # its first letter, the listener does not respond to it, and IOBluetooth
+    # silently lets every channel go -- measured.
+    notification = IOBluetoothRFCOMMChannel.registerForChannelOpenNotifications(
+        listener,
+        selector=SEL("channelOpened:channel:"),
+        withChannelID=number,
+        direction=_INCOMING,
+    )
+
+    try:
+        record = IOBluetoothSDPServiceRecord.publishedServiceRecordWithDictionary(
+            _record(service, name, number)
+        )
+        if record is None:
+            raise ConnectionFailedError(
+                f"could not publish {service} on RFCOMM channel {number}"
+            )
+
+        try:
+            yield Service(number, listener)
+        finally:
+            # Refused by this macOS (see _choose_channel), but asked, in case
+            # another is not.
+            record.removeServiceRecord()
+    finally:
+        notification.unregister()
+        # Channels nobody took are let go of, which closes them.
+        with autoreleasepool():
+            while not listener.arrived.empty():
+                cast(_Channel, listener.arrived.get_nowait()).closeChannel()
 
 
 # --------------------------------------------------------------------------

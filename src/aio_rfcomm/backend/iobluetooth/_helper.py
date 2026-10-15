@@ -28,12 +28,13 @@ import socket
 import sys
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, NamedTuple
 
 from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth._bundle import build_helper
 from aio_rfcomm.backend.iobluetooth._protocol import Link
+from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     CloseReason,
@@ -41,7 +42,7 @@ from aio_rfcomm.errors import (
     RfcommError,
 )
 
-__all__ = ["Ending", "Helper", "prompt_under_name", "run_helper"]
+__all__ = ["Ending", "Helper", "Request", "prompt_under_name", "run_helper"]
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,32 @@ class Ending:
         return self._reason
 
 
+class Request(NamedTuple):
+    """
+    A channel a peer opened to the service a helper serves.
+    """
+
+    handle: int
+    """
+    What the helper knows the channel by.
+    """
+
+    info: RfcommDeviceInfo
+    """
+    The peer.
+    """
+
+    fd: int
+    """
+    This end of the socket carrying the channel.
+    """
+
+    ending: Ending
+    """
+    Where the helper's report of the channel's end arrives.
+    """
+
+
 class Helper:
     """
     A running helper process, and the requests in flight to it.
@@ -158,6 +185,9 @@ class Helper:
         self._finished: dict[int, asyncio.Future[None]] = {}
         # None marks the helper's end, so a reader waiting here hears of it.
         self._states: asyncio.Queue[tuple[int, int] | None] = asyncio.Queue()
+        self._requests: asyncio.Queue[Request | None] = asyncio.Queue()
+        # Set once the service has gone: withdrawn, or the helper stopped.
+        self._unserved: RfcommError | None = None
         self._stopped: RfcommError | None = None
 
         self.on_stop: Callable[[], None] | None = None
@@ -269,6 +299,37 @@ class Helper:
             raise self._stopped
         return reported
 
+    async def next_request(self) -> Request:
+        """
+        Wait for a peer to open a channel to the service this helper serves.
+
+        Returns:
+            The request, whose end and finish are already expected. The
+            caller owns its descriptor.
+
+        Raises:
+            RfcommError: The helper has stopped, or the service has ended.
+        """
+        if self._stopped is not None:
+            raise self._stopped
+
+        request = await self._requests.get()
+        if request is None:
+            self._requests.put_nowait(None)
+            error = self._stopped or self._unserved
+            assert error is not None
+            raise error
+
+        return request
+
+    def stop_requests(self) -> None:
+        """
+        Hang up on every peer still waiting, and on any that arrives later.
+        """
+        # The helper goes on carrying the channels already accepted, and a
+        # peer queued behind them would stay connected, unread, while they last.
+        self._end_requests(ConnectionFailedError("the service was withdrawn"))
+
     @property
     def stopped(self) -> bool:
         """
@@ -300,7 +361,7 @@ class Helper:
 
             message, fds = frame
             if "event" in message:
-                self._event(message)
+                self._event(message, fds)
                 continue
 
             answer = self._waiting.get(message.get("id", -1))
@@ -320,23 +381,56 @@ class Helper:
             else:
                 answer.set_result((message.get("ok"), fds))
 
-    def _event(self, message: dict[str, Any]) -> None:
+    def _event(self, message: dict[str, Any], fds: list[int]) -> None:
         """
         Act on something the helper reported without being asked.
 
         Args:
             message: The event.
+            fds: Any descriptors that came with it, which are ours.
         """
-        if message["event"] == "gone":
-            ending = self._channels.get(message["handle"])
-            if ending is not None:
-                ending.say(message["reason"])
-        elif message["event"] == "finished":
-            finished = self._finished.get(message["handle"])
-            if finished is not None and not finished.done():
-                finished.set_result(None)
-        elif message["event"] == "state":
-            self._states.put_nowait((message["state"], message["authorization"]))
+        match message["event"]:
+            case "request" if len(fds) == 1 and self._unserved is None:
+                handle = message["handle"]
+                # Expected now rather than when accepted: the peer may be gone
+                # before anyone has looked at the request.
+                ending = self.expect(handle)
+                info = RfcommDeviceInfo(message["address"], message.get("name"))
+                self._requests.put_nowait(Request(handle, info, fds.pop(), ending))
+            case "gone":
+                ending = self._channels.get(message["handle"])
+                if ending is not None:
+                    ending.say(message["reason"])
+            case "finished":
+                finished = self._finished.get(message["handle"])
+                if finished is not None and not finished.done():
+                    finished.set_result(None)
+            case "state":
+                self._states.put_nowait((message["state"], message["authorization"]))
+            case _:
+                pass
+
+        # Whatever came with an event not taken, a request after withdrawal
+        # among them; closing it is what hangs up on that peer.
+        for fd in fds:
+            os.close(fd)
+
+    def _end_requests(self, error: RfcommError) -> None:
+        """
+        Hang up on every peer waiting, and say why to whoever waits for one.
+
+        Args:
+            error: What the next wait raises.
+        """
+        if self._unserved is None:
+            self._unserved = error
+
+        while not self._requests.empty():
+            waiting = self._requests.get_nowait()
+            if waiting is not None:
+                os.close(waiting.fd)
+                self.forget(waiting.handle)
+        self._requests.put_nowait(None)
 
     def _stop(self, error: RfcommError) -> None:
         """
@@ -351,7 +445,9 @@ class Helper:
         self._stopped = error
         if self.on_stop is not None:
             self.on_stop()
+
         self._states.put_nowait(None)
+        self._end_requests(error)
         for answer in list(self._waiting.values()):
             if not answer.done():
                 answer.set_exception(error)

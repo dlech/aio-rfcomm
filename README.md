@@ -30,7 +30,7 @@ $ uv add aio-rfcomm
 
 ## Serving, too
 
-Publish a service and let devices connect to you (Linux and Windows):
+Publish a service and let devices connect to you:
 
 ```python
 async with bluetooth.serve(MY_SERVICE, name="my thing") as service:

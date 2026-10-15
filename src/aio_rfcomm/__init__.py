@@ -5,9 +5,7 @@
 Cross-platform asyncio RFCOMM.
 
 Open Bluetooth with :func:`open_bluetooth`, then either reach out to a
-device's service or publish one of your own and wait for peers. Serving is
-implemented on Linux and Windows so far; see the design notes linked from
-README.md.
+device's service or publish one of your own and wait for peers.
 """
 
 from aio_rfcomm.availability import Availability, UnavailableReason

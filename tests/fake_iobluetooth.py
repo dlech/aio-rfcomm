@@ -20,19 +20,23 @@ import ctypes
 import threading
 from collections.abc import Generator
 from ctypes import c_int, c_void_p
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from rubicon.objc import (
+    SEL,
     NSObject,
     NSUInteger,
     ObjCInstance,
     objc_id,
     objc_method,
     objc_property,
+    py_from_ns,
+    send_message,
     send_super,
 )
 from rubicon.objc.runtime import load_library, set_ivar
+from typing_extensions import override
 
 load_library("AppKit")
 
@@ -321,6 +325,283 @@ def wrap_channel(_handle: object) -> FakeChannel:
     return opened[-1]
 
 
+# --------------------------------------------------------------------------
+# Serving
+# --------------------------------------------------------------------------
+
+
+class FakeDeviceObject(NSObject):
+    """
+    An ``IOBluetoothDevice`` as the framework hands one over with an incoming
+    channel: a real object, reached through Objective-C.
+    """
+
+    addressString = objc_property()
+    name = objc_property()
+    connected: bool
+
+    @objc_method
+    def isConnected(self) -> bool:
+        return bool(self.connected)
+
+
+class FakeIncomingChannel(NSObject):
+    """
+    An ``IOBluetoothRFCOMMChannel`` a peer opened, handed over open and with
+    no delegate.
+
+    A real object, since the framework passes it through Objective-C. Measured:
+    the open is reported complete once a delegate is set.
+    """
+
+    inner: FakeChannel
+    device: ObjCInstance
+
+    @objc_method
+    def setDelegate_(self, delegate: ObjCInstance) -> int:
+        inner = self.inner
+        inner.delegate = delegate
+        asyncio.get_running_loop().call_soon(inner.complete_open)
+        return 0
+
+    @objc_method
+    def getDevice(self) -> ObjCInstance:
+        return self.device
+
+    @objc_method
+    def isOpen(self) -> bool:
+        return self.inner.open
+
+    @objc_method
+    def getMTU(self) -> int:
+        return self.inner.getMTU()
+
+    @objc_method
+    def closeChannel(self) -> int:
+        return self.inner.closeChannel()
+
+    @objc_method
+    def writeAsync_length_refcon_(
+        self, data: c_void_p, length: int, refcon: c_void_p
+    ) -> int:
+        # The ctypes annotations are for rubicon's signature; what arrives are
+        # plain integers.
+        piece = ctypes.string_at(data, length)
+        return self.inner.writeAsync(piece, length=length, refcon=cast(int, refcon))
+
+
+class FakeNotification:
+    """
+    What registering for open notifications hands back.
+
+    Measured from the disassembly: unregistering only stops this process
+    listening, and never reaches bluetoothd.
+    """
+
+    def __init__(self, observer: ObjCInstance, selector: SEL, number: int) -> None:
+        self.observer = observer
+        self.selector = selector
+        self.number = number
+        self.registered = True
+
+    def unregister(self) -> None:
+        self.registered = False
+
+    @override
+    def __str__(self) -> str:
+        return f"Notification L2CAP Published In, CID: {self.number}"
+
+
+class FakeChannelClass:
+    """
+    ``IOBluetoothRFCOMMChannel`` itself: wrapping pointers the framework
+    filled in, and registering for channels peers open.
+    """
+
+    def __init__(self, manager: FakeManager) -> None:
+        self.manager = manager
+        #: Every registration that reached bluetoothd, in order.
+        self.registrations: list[FakeNotification] = []
+
+    def __call__(self, handle: object) -> FakeChannel:
+        return wrap_channel(handle)
+
+    def registerForChannelOpenNotifications(
+        self,
+        observer: ObjCInstance,
+        /,
+        *,
+        selector: object,
+        withChannelID: int,
+        direction: int,
+    ) -> FakeNotification:
+        # Measured: a string is stored as a selector of its first letter.
+        chosen = selector if isinstance(selector, SEL) else SEL(str(selector)[0])
+        notification = FakeNotification(observer, chosen, withChannelID)
+        # Measured: registered for any direction, or before the manager is
+        # ready, it never reaches bluetoothd at all.
+        if direction == 1 and self.manager.state == CBManagerState.POWERED_ON:
+            self.registrations.append(notification)
+        return notification
+
+    # -- what peers do ----------------------------------------------------
+
+    def connect_in(self, address: str, number: int) -> FakeChannel:
+        """
+        A peer opens a channel to this Mac.
+
+        bluetoothd holds one registration per process, the latest, and the
+        framework hands the channel over on the main queue -- or, with nobody
+        there to take it, lets it go, which closes it.
+
+        Returns:
+            The channel, as the framework sees it.
+        """
+        device = FakeDeviceObject.alloc().init()
+        # As IOBluetooth writes a device's address.
+        cast(Any, device).addressString = address.replace(":", "-").lower()
+        cast(Any, device).name = "fake peer"
+        device.connected = True
+        inner = FakeChannel(cast("FakeDevice", None), number, None)
+        inner.open = True
+        incoming = FakeIncomingChannel.alloc().init()
+        incoming.inner = inner
+        incoming.device = device
+
+        latest = self.registrations[-1] if self.registrations else None
+        taken = (
+            latest is not None
+            and latest.registered
+            and latest.number == number
+            and latest.observer.respondsToSelector_(latest.selector)
+        )
+        if taken:
+            assert latest is not None
+            asyncio.get_running_loop().call_soon(
+                # The notification itself is not passed: nothing reads it.
+                lambda: send_message(
+                    latest.observer,
+                    latest.selector,
+                    None,
+                    incoming,
+                    restype=None,
+                    argtypes=[objc_id, objc_id],
+                )
+            )
+        else:
+            inner.open = False
+        return inner
+
+
+class FakePublished:
+    """
+    A service record that has been published.
+    """
+
+    def __init__(self, record: dict[str, object]) -> None:
+        self.record = record
+        self.withdrawn = False
+
+    def removeServiceRecord(self) -> int:
+        # Asked, and refused: measured, bluetoothd answers every removal
+        # OI_STATUS_INVALID_HANDLE and goes on advertising the record.
+        self.withdrawn = True
+        return 0
+
+
+class FakeLocalRecord:
+    """
+    A service published on this Mac.
+    """
+
+    def __init__(self, number: int | None) -> None:
+        self.number = number
+
+    def getRFCOMMChannelID(self, out: object, /) -> int:
+        if self.number is None:
+            # What a record that is not an RFCOMM service returned, measured.
+            return -536870160
+        out._obj.value = bytes([self.number])  # type: ignore[attr-defined]
+        return 0
+
+
+class FakeDeviceManager:
+    """
+    ``BluetoothDeviceManager``'s shared instance, asked only for this Mac's
+    own services.
+    """
+
+    def __init__(self, in_use: list[int]) -> None:
+        # Measured on this Mac: ten local records, two on RFCOMM channels.
+        self.records = [FakeLocalRecord(n) for n in in_use] + [
+            FakeLocalRecord(None)
+        ] * 8
+
+    def getLocalServices(self) -> "FakeLocalServices":
+        return FakeLocalServices(self.records)
+
+
+class FakeLocalServices:
+    def __init__(self, records: list[FakeLocalRecord]) -> None:
+        self._records = records
+
+    def allValues(self) -> list[FakeLocalRecord]:
+        return self._records
+
+
+class FakeDeviceManagerClass:
+    def __init__(self, in_use: list[int]) -> None:
+        self.shared = FakeDeviceManager(in_use)
+
+    def sharedDeviceManager(self) -> FakeDeviceManager:
+        return self.shared
+
+
+class FakeRecordClass:
+    """
+    ``IOBluetoothSDPServiceRecord``, publishing to this Mac's own services.
+    """
+
+    def __init__(self, devices: FakeDeviceManagerClass) -> None:
+        self.published: list[FakePublished] = []
+        self._devices = devices
+
+    def publishedServiceRecordWithDictionary(
+        self, record: ObjCInstance, /
+    ) -> FakePublished:
+        published = FakePublished(py_from_ns(cast(Any, record)))
+        self.published.append(published)
+        attributes = cast(Any, published.record)
+        self._devices.shared.records.append(
+            FakeLocalRecord(attributes["0004"][1][1]["DataElementValue"])
+        )
+        return published
+
+
+class Framework:
+    """
+    The fake framework's pieces a test may want to reach.
+    """
+
+    def __init__(self, manager: FakeManager) -> None:
+        self.manager = manager
+        self.channels = FakeChannelClass(manager)
+        self.devices = FakeDeviceManagerClass([1, 8])
+        self.records = FakeRecordClass(self.devices)
+
+    def find_class(self, name: str) -> object:
+        """
+        Stand in for ``ObjCClass``, for the private classes looked up by name.
+        """
+        match name:
+            case _native._COORDINATOR:
+                return FakeCoordinatorClass(self.manager)
+            case _native._DEVICE_MANAGER:
+                return self.devices
+            case _:
+                raise NameError(f"ObjC Class {name} couldn't be found.")
+
+
 def fake_framework(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -345,15 +626,37 @@ def fake_framework(
     Returns:
         The fake manager, so a test can move it on afterwards.
     """
+    return fake_framework_parts(
+        monkeypatch,
+        state=state,
+        authorization=authorization,
+        answers=answers,
+        connected=connected,
+    ).manager
+
+
+def fake_framework_parts(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    state: int = CBManagerState.POWERED_ON,
+    authorization: int = CBManagerAuthorization.ALLOWED_ALWAYS,
+    answers: bool = True,
+    connected: bool = True,
+) -> Framework:
+    """
+    :func:`fake_framework`, handing back every part rather than the manager.
+    """
     fake = FakeManager.alloc().init()
     fake.state = int(state)
-    monkeypatch.setattr(_native, "ObjCClass", lambda _name: FakeCoordinatorClass(fake))
+    framework = Framework(fake)
+    monkeypatch.setattr(_native, "ObjCClass", framework.find_class)
     monkeypatch.setattr(_native, "CBManager", FakeAuthorization(authorization))
     monkeypatch.setattr(_native, "IOBluetoothDevice", FakeDeviceClass)
-    monkeypatch.setattr(_native, "IOBluetoothRFCOMMChannel", wrap_channel)
+    monkeypatch.setattr(_native, "IOBluetoothRFCOMMChannel", framework.channels)
+    monkeypatch.setattr(_native, "IOBluetoothSDPServiceRecord", framework.records)
     monkeypatch.setattr(FakeDeviceClass, "answers", answers)
     monkeypatch.setattr(FakeDeviceClass, "connected", connected)
-    return fake
+    return framework
 
 
 @pytest.fixture(autouse=True)

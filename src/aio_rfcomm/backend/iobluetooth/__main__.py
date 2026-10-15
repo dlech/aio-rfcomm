@@ -21,6 +21,7 @@ import logging
 import os
 import socket
 import sys
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 from uuid import UUID
@@ -53,6 +54,23 @@ class _ParentGone(Exception):
     """
 
 
+class _Session:
+    """
+    What one helper's requests share.
+    """
+
+    def __init__(self, link: Link, group: asyncio.TaskGroup) -> None:
+        """
+        Args:
+            link: The control socket.
+            group: Where work that outlives its request runs: a channel a
+                service handed over carries on after the service is withdrawn.
+        """
+        self.link = link
+        self.group = group
+        self.serving: asyncio.Task[None] | None = None
+
+
 async def _serve(sock: socket.socket) -> None:
     """
     Answer requests until the parent goes away.
@@ -65,6 +83,7 @@ async def _serve(sock: socket.socket) -> None:
     try:
         try:
             async with asyncio.TaskGroup() as group:
+                session = _Session(link, group)
                 group.create_task(_report_states(link))
                 while True:
                     frame = await link.receive()
@@ -86,7 +105,7 @@ async def _serve(sock: socket.socket) -> None:
                         continue
 
                     number = message["id"]
-                    working[number] = group.create_task(_answer(link, message))
+                    working[number] = group.create_task(_answer(session, message))
                     working[number].add_done_callback(partial(_forget, working, number))
         except* _ParentGone:
             pass
@@ -138,14 +157,15 @@ def _forget(
     working.pop(number, None)
 
 
-async def _answer(link: Link, message: dict[str, Any]) -> None:
+async def _answer(session: _Session, message: dict[str, Any]) -> None:
     """
     Carry out one request and reply to it.
 
     Args:
-        link: The control socket.
+        session: What this helper's requests share.
         message: The request.
     """
+    link = session.link
     number = message["id"]
     try:
         match message["op"]:
@@ -172,6 +192,20 @@ async def _answer(link: Link, message: dict[str, Any]) -> None:
 
             case "open":
                 await _open(link, number, message)
+
+            case "serve":
+                if session.serving is not None:
+                    # A second registration would replace the first in
+                    # bluetoothd and leak its slot: see _native.serve.
+                    raise RfcommError("this helper is already serving")
+                session.serving = asyncio.current_task()
+                await _publish(session, number, message)
+
+            case "withdraw":
+                if session.serving is not None:
+                    session.serving.cancel()
+                    await asyncio.gather(session.serving, return_exceptions=True)
+                link.send({"id": number, "ok": None})
 
             case unknown:
                 raise RfcommError(f"the helper does not understand {unknown!r}")
@@ -231,24 +265,117 @@ async def _carry_channel(
         service=UUID(service) if service else None,
         channel=message.get("channel"),
     ) as channel:
-        ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        with theirs:
-            link.send({"id": number, "ok": handle}, [theirs.fileno()])
+        await _hand_over(
+            link, handle, channel, partial(_reply_opened, link, number, handle)
+        )
 
-        reader, writer = await asyncio.open_connection(sock=ours)
+
+def _reply_opened(link: Link, number: int, handle: int, fd: int) -> None:
+    link.send({"id": number, "ok": handle}, [fd])
+
+
+async def _hand_over(
+    link: Link,
+    handle: int,
+    channel: _native.Channel,
+    announce: Callable[[int], None],
+) -> None:
+    """
+    Give the parent one end of a fresh socket pair and carry the channel's
+    bytes over the other until it ends.
+
+    Args:
+        link: The control socket.
+        handle: The handle this channel is known by.
+        channel: The open channel.
+        announce: Sends the parent the descriptor it is to have.
+    """
+    ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+
+    try:
+        with theirs:
+            announce(theirs.fileno())
+    except BaseException:
+        ours.close()
+        raise
+
+    reader, writer = await asyncio.open_connection(sock=ours)
+    try:
+        reason = await _carry(channel, reader, writer)
+        if reason is not None:
+            # Sent before the socket closes, so that the parent has the reason
+            # in hand by the time it reads end of file and comes looking.
+            link.send({"event": "gone", "handle": handle, "reason": reason.name})
+    finally:
+        writer.close()
         try:
-            reason = await _carry(channel, reader, writer)
-            if reason is not None:
-                # Sent before the socket closes, so that the parent has the
-                # reason in hand by the time it reads end of file and comes
-                # looking for one.
-                link.send({"event": "gone", "handle": handle, "reason": reason.name})
-        finally:
-            writer.close()
+            await writer.wait_closed()
+        except OSError:
+            pass
+
+
+async def _publish(session: _Session, number: int, message: dict[str, Any]) -> None:
+    """
+    Publish a service and hand the parent each channel opened to it, until
+    withdrawn.
+
+    Args:
+        session: What this helper's requests share.
+        number: The request's number, for the reply.
+        message: The request.
+    """
+    async with _native.serve(
+        UUID(message["service"]),
+        name=message["name"],
+        channel=message.get("channel"),
+        avoiding=message.get("avoiding") or (),
+    ) as service:
+        session.link.send({"id": number, "ok": service.channel})
+
+        while True:
             try:
-                await writer.wait_closed()
-            except OSError:
-                pass
+                channel = await service.accept()
+            except Exception:
+                # That channel is closed; the service carries on.
+                logger.exception("could not take a channel a peer opened")
+                continue
+
+            session.group.create_task(_take(session.link, channel))
+
+
+async def _take(link: Link, channel: _native.Channel) -> None:
+    """
+    Offer the parent a channel a peer opened, and carry it until it ends.
+
+    Args:
+        link: The control socket.
+        channel: The channel, already open.
+    """
+    handle = next(_handles)
+
+    def announce(fd: int) -> None:
+        peer = channel.peer()
+        link.send(
+            {
+                "event": "request",
+                "handle": handle,
+                "address": peer.address,
+                "name": peer.name,
+            },
+            [fd],
+        )
+
+    # Caught here, since this runs beside every other channel the helper
+    # carries, and failing would end them all.
+    try:
+        try:
+            await _hand_over(link, handle, channel, announce)
+        finally:
+            await channel.close()
+    except Exception:
+        logger.exception("could not carry a channel a peer opened")
+    finally:
+        link.send({"event": "finished", "handle": handle})
 
 
 async def _carry(

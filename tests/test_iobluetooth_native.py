@@ -11,10 +11,14 @@ key-value observable property, which is all the real one is from here.
 """
 
 import asyncio
+import os
+import socket
 import sys
+import threading
 import time
 from ctypes import c_int
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from typing_extensions import override
@@ -22,7 +26,7 @@ from typing_extensions import override
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
-from rubicon.objc import ObjCInstance, ns_from_py
+from rubicon.objc import NSObject, ObjCInstance, ns_from_py, objc_property
 from rubicon.objc.runtime import set_ivar
 
 from aio_rfcomm.availability import Availability
@@ -31,6 +35,7 @@ from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBMana
 from aio_rfcomm.backend.iobluetooth._native import _Device
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
+    ChannelInUseError,
     ConnectionFailedError,
     DeviceNotFoundError,
     ServiceNotFoundError,
@@ -40,10 +45,12 @@ from tests.fake_iobluetooth import (
     FakeAuthorization,
     FakeCoordinatorClass,
     FakeDeviceClass,
+    FakeLocalRecord,
     FakeManager,
     SettlingManager,
     change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    fake_framework_parts,
     is_observed,
     until_observed,
     wrap_channel,
@@ -650,14 +657,19 @@ async def test_an_open_never_reported_at_all_gives_up_and_says_so(
 
 class RefusingDevice(FlakyDevice):
     """
-    A device with nothing listening on the channel asked for.
+    A device whose every open bluetoothd fails, without telling the delegate.
 
-    Measured against BlueZ: bluetoothd reports result 913 for each attempt,
-    within a second of it, and neither delegate method is ever called.
+    Measured against BlueZ, for a channel nothing listens on: bluetoothd
+    reports result 913 for each attempt, within a second of it, and neither
+    delegate method is ever called.
+
+    Args:
+        result: What bluetoothd reports.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, result: int = 913) -> None:
         super().__init__(report_on=99)
+        self.result = result
 
     @override
     def openRFCOMMChannelAsync(
@@ -665,7 +677,7 @@ class RefusingDevice(FlakyDevice):
     ) -> int:
         self.attempts += 1
         asyncio.get_running_loop().call_soon(
-            _native.record_open_result, ADDRESS, withChannelID, 913
+            _native.record_open_result, ADDRESS, withChannelID, self.result
         )
         return 0
 
@@ -677,26 +689,118 @@ async def test_a_refused_channel_is_not_asked_for_again(quick: None) -> None:
     assert device.attempts == 1
 
 
-class _Peer:
+class _Peer(NSObject):
+    """
+    A ``CBClassicPeer``, which the hook only asks for its address.
+    """
+
+    addressString = objc_property()
+
+
+def _peer() -> NSObject:
+    peer = _Peer.alloc().init()
     # As measured: CBClassicPeer writes the address upper case with colons.
-    addressString = "00:1A:7D:DA:71:0C"
+    cast(Any, peer).addressString = "00:1A:7D:DA:71:0C"
+    return peer
+
+
+def _pointer(thing: object) -> int:
+    return cast(int, cast(Any, thing).ptr.value)
+
+
+def _read(info: dict[str, int]) -> _native._OpenResult:
+    ns = ns_from_py(cast(Any, info))
+    return _native._read_open_result(_pointer(_peer()), _pointer(ns))
 
 
 async def test_the_result_the_daemon_sent_is_noted_by_address_and_channel(
     quick: None,
 ) -> None:
-    info = cast(
-        ObjCInstance,
-        ns_from_py({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12}),
+    _native._note_open_result(
+        _read({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12})
     )
-    _native._note_open_result(cast(Any, _Peer()), info)
     assert _native._open_results == {(ADDRESS, 12): 913}
 
 
 async def test_a_result_without_a_channel_is_ignored(quick: None) -> None:
-    info = cast(ObjCInstance, ns_from_py({"kCBMsgArgResult": 913}))
-    _native._note_open_result(cast(Any, _Peer()), info)
+    _native._note_open_result(_read({"kCBMsgArgResult": 913}))
     assert _native._open_results == {}
+
+
+async def test_a_value_of_another_type_is_left_unread(quick: None) -> None:
+    """
+    Sending it intValue would raise an Objective-C exception on the
+    framework's thread, which nothing could catch.
+    """
+    said = _read({"kCBMsgArgResult": 913, "kCBMsgArgSocket": cast(Any, "eight")})
+    assert said.result == 913
+    assert said.socket is None
+
+
+def test_the_daemon_s_report_is_read_off_the_main_thread() -> None:
+    """
+    Measured: the framework calls the hook on a thread of its own, where
+    rubicon racing the main thread to load a class's methods ended a helper.
+    """
+    peer = _peer()
+    info = cast(
+        ObjCInstance,
+        ns_from_py({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12}),
+    )
+    read: list[_native._OpenResult] = []
+    framework = threading.Thread(
+        target=lambda: read.append(
+            _native._read_open_result(_pointer(peer), _pointer(info))
+        )
+    )
+    framework.start()
+    framework.join()
+    assert read == [_native._OpenResult(ADDRESS, 12, 913, None)]
+
+
+async def test_giving_up_says_what_bluetoothd_last_reported(quick: None) -> None:
+    device = RefusingDevice(result=1)
+    with pytest.raises(ConnectionFailedError, match="bluetoothd last said 1: "):
+        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == _native._OPEN_REPORT_ATTEMPTS
+
+
+def _failed_open(result: int, descriptor: int) -> _native._OpenResult:
+    return _native._OpenResult(ADDRESS, 4, result, descriptor)
+
+
+def _is_open(descriptor: int) -> bool:
+    try:
+        os.fstat(descriptor)
+    except OSError:
+        return False
+
+    return True
+
+
+def test_the_null_device_a_failed_open_leaves_is_closed() -> None:
+    """
+    Measured: one /dev/null descriptor left open per refused channel.
+    """
+    descriptor = os.open(os.devnull, os.O_RDONLY)
+    _native._close_unclaimed_socket(_failed_open(913, descriptor))
+    assert not _is_open(descriptor)
+
+
+def test_a_real_socket_is_never_closed_whatever_the_result() -> None:
+    ours, theirs = socket.socketpair()
+    with ours, theirs:
+        _native._close_unclaimed_socket(_failed_open(913, ours.fileno()))
+        assert _is_open(ours.fileno())
+
+
+def test_nothing_is_closed_after_a_success() -> None:
+    descriptor = os.open(os.devnull, os.O_RDONLY)
+    try:
+        _native._close_unclaimed_socket(_failed_open(0, descriptor))
+        assert _is_open(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 async def test_a_refusal_of_another_channel_is_not_taken_for_this_one(
@@ -767,3 +871,142 @@ async def test_a_radio_switched_off_does_not_strand_the_device_claim(
             pass
     assert raised.value.reason is Availability.SWITCHED_OFF
     assert _native._in_use == set()
+
+
+# --------------------------------------------------------------------------
+# Serving
+# --------------------------------------------------------------------------
+
+SERVICE = UUID("00eeffc0-1dea-4b1d-9f00-a100c0ffee03")
+
+
+async def test_a_service_is_published_on_the_channel_it_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    framework = fake_framework_parts(monkeypatch)
+    async with _native.serve(SERVICE, name="chat", channel=None) as service:
+        [published] = framework.records.published
+        record = cast(Any, published.record)
+        assert record["0100"] == "chat"
+        rfcomm = record["0004"][1]
+        assert rfcomm[1]["DataElementValue"] == service.channel
+    assert published.withdrawn
+
+
+async def test_one_registration_is_made_and_it_reaches_the_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured: given a string, the selector stored is its first letter, and
+    every channel is silently let go -- so the registration has to be one the
+    listener really answers.
+    """
+    framework = fake_framework_parts(monkeypatch)
+    async with _native.serve(SERVICE, name="chat", channel=None) as service:
+        fake = framework.channels.connect_in(ADDRESS, service.channel)
+        async with asyncio.timeout(1):
+            channel = await service.accept()
+        try:
+            assert channel.peer().address == ADDRESS
+            fake.arrive(b"hello")
+            async with asyncio.timeout(1):
+                assert await channel.arrived.get() == b"hello"
+            await channel.send(b"echo")
+            assert bytes(fake.written) == b"echo"
+        finally:
+            await channel.close()
+    assert len(framework.channels.registrations) == 1
+    assert not fake.open
+
+
+async def test_registering_waits_until_the_manager_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured: made before the manager is ready, a registration is never sent.
+    """
+    framework = fake_framework_parts(monkeypatch, state=CBManagerState.UNKNOWN)
+    serving = asyncio.ensure_future(_native.serve(SERVICE, name="chat").__aenter__())
+    await until_observed(framework.manager)
+    assert not serving.done()
+    change_state(framework.manager, CBManagerState.POWERED_ON)
+    async with asyncio.timeout(1):
+        await serving
+    assert len(framework.channels.registrations) == 1
+
+
+@pytest.mark.parametrize(
+    ("in_use", "chosen"),
+    [
+        ([1, 8], 30),
+        ([1, 8, 30], 29),
+        # Never 15 or 10, which bluetoothd does not register with its stack.
+        ([*range(16, 31), 11, 12, 13, 14], 9),
+    ],
+)
+async def test_a_channel_is_chosen_away_from_this_mac_s_own(
+    monkeypatch: pytest.MonkeyPatch, in_use: list[int], chosen: int
+) -> None:
+    framework = fake_framework_parts(monkeypatch)
+    framework.devices.shared.records = [FakeLocalRecord(n) for n in in_use]
+    async with _native.serve(SERVICE, name="chat") as service:
+        assert service.channel == chosen
+
+
+async def test_a_channel_this_mac_already_serves_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework_parts(monkeypatch)
+    with pytest.raises(ChannelInUseError, match="8"):
+        async with _native.serve(SERVICE, name="chat", channel=8):
+            pass
+
+
+async def test_a_withdrawn_service_lets_new_channels_go(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Unregistering only stops this process listening; bluetoothd still takes
+    the channel, and the framework, with nobody to give it to, closes it.
+    """
+    framework = fake_framework_parts(monkeypatch)
+    async with _native.serve(SERVICE, name="chat") as service:
+        number = service.channel
+    late = framework.channels.connect_in(ADDRESS, number)
+    assert not late.open
+
+
+async def test_channels_nobody_took_are_closed_on_withdrawal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    framework = fake_framework_parts(monkeypatch)
+    async with _native.serve(SERVICE, name="chat") as service:
+        waiting = framework.channels.connect_in(ADDRESS, service.channel)
+        await asyncio.sleep(0)
+    assert not waiting.open
+
+
+async def test_a_channel_served_before_is_never_chosen_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Its record cannot be withdrawn, and a later registration on it may take a
+    connection bluetoothd kept from before instead of listening -- measured.
+    """
+    framework = fake_framework_parts(monkeypatch)
+    async with _native.serve(SERVICE, name="chat") as first:
+        number = first.channel
+    async with _native.serve(SERVICE, name="chat") as again:
+        assert again.channel != number
+    with pytest.raises(ChannelInUseError, match="switched off and on"):
+        async with _native.serve(SERVICE, name="chat", channel=number):
+            pass
+    assert len(framework.records.published) == 2
+
+
+async def test_channels_another_service_here_holds_are_avoided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework_parts(monkeypatch)
+    async with _native.serve(SERVICE, name="chat", avoiding=(30, 29)) as service:
+        assert service.channel == 28

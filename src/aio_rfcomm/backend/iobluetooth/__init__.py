@@ -34,6 +34,7 @@ from aio_rfcomm.backend.iobluetooth._helper import (
     Ending,
     Helper,
     HelperFailedError,
+    Request,
     run_helper,
 )
 from aio_rfcomm.backend.provider import (
@@ -41,6 +42,7 @@ from aio_rfcomm.backend.provider import (
     BackendBluetooth,
     BackendChannel,
     BackendProvider,
+    BackendRequest,
     BackendService,
 )
 from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
@@ -49,6 +51,7 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     CloseReason,
     ConnectionFailedError,
+    RfcommError,
     UnsupportedOperationError,
 )
 
@@ -101,16 +104,223 @@ class IOBluetoothChannel(StreamChannel):
         super().abort()
 
 
+@asynccontextmanager
+async def _carried(
+    helper: Helper, handle: int, fd: int, ending: Ending
+) -> AsyncGenerator[BackendChannel, None]:
+    """
+    Wrap the socket the helper handed back for a channel.
+
+    Args:
+        helper: The helper carrying the channel.
+        handle: What the helper knows the channel by.
+        fd: This end of the socket.
+        ending: Where the helper's report of the channel's end arrives.
+
+    Yields:
+        The channel, closed on exit.
+    """
+    async with AsyncExitStack() as stack:
+        stack.callback(helper.forget, handle)
+        # Pushed before the socket, so that it runs after it: closing this end
+        # is what tells the helper to let the channel go, and until it has, a
+        # device is held that another channel may want.
+        stack.push_async_callback(helper.wait_until_finished, handle)
+
+        transport, protocol = await open_stream(socket.socket(fileno=fd))
+        opened = IOBluetoothChannel(transport, protocol, ending)
+        stack.push_async_callback(opened.close)
+
+        yield opened
+
+
+class _Served:
+    """
+    The helper a service runs in, which ends when the service has been
+    withdrawn and every channel it handed over has closed.
+    """
+
+    # A helper per service because bluetoothd frees a registration only when
+    # the process that made it ends, and a second from one process leaks the
+    # first's slot in its RFCOMM stack until Bluetooth is next switched off
+    # (see _native.serve).
+
+    def __init__(self) -> None:
+        self.helper: Helper | None = None
+        self.task: asyncio.Task[None] | None = None
+        """
+        The task running the helper.
+        """
+        self._failure: BaseException | None = None
+        self._started = asyncio.Event()
+        self._holding = 0
+        self._withdrawn = False
+        self._done = asyncio.Event()
+
+    async def run(
+        self, start: Callable[[], AbstractAsyncContextManager[Helper]]
+    ) -> None:
+        """
+        Run the helper until it is no longer needed.
+
+        Args:
+            start: Starts a helper.
+        """
+        try:
+            async with start() as helper:
+                self.helper = helper
+                self._started.set()
+                await self._done.wait()
+        except Exception as error:
+            # Belongs to the block that asked for the service, not to the
+            # backend that happens to run this, but that block may be over.
+            logger.debug("a service's helper failed", exc_info=True)
+            self._failure = error
+        finally:
+            self._started.set()
+
+    async def wait_started(self) -> Helper:
+        """
+        Returns:
+            The running helper.
+
+        Raises:
+            Exception: Whatever starting it raised.
+        """
+        await self._started.wait()
+
+        if self.helper is None:
+            raise self._failure or HelperFailedError(
+                "the macOS Bluetooth helper stopped"
+            )
+        return self.helper
+
+    def hold(self) -> None:
+        self._holding += 1
+
+    def release(self) -> None:
+        self._holding -= 1
+        self._settle()
+
+    async def withdraw(self) -> None:
+        """
+        Stop serving. The helper goes once the last channel has closed.
+        """
+        helper = self.helper
+
+        try:
+            if helper is None:
+                # Still starting, and it may wait on a permission dialog.
+                if self.task is not None:
+                    self.task.cancel()
+            elif not helper.stopped:
+                await helper.ask("withdraw")
+        except RfcommError:
+            logger.debug("could not withdraw a service", exc_info=True)
+        finally:
+            if helper is not None:
+                helper.stop_requests()
+            self._withdrawn = True
+            self._settle()
+
+    def _settle(self) -> None:
+        if self._withdrawn and not self._holding:
+            self._done.set()
+
+
+class IOBluetoothRequest(BackendRequest):
+    """
+    A channel a peer opened, which the helper is already carrying.
+    """
+
+    def __init__(self, helper: Helper, request: Request, served: _Served) -> None:
+        self._helper = helper
+        self._request = request
+        self._served = served
+        self._fd: int | None = request.fd
+
+    @property
+    @override
+    def info(self) -> RfcommDeviceInfo:
+        return self._request.info
+
+    @override
+    def open(self) -> AbstractAsyncContextManager[BackendChannel]:
+        return self._open()
+
+    @asynccontextmanager
+    async def _open(self) -> AsyncGenerator[BackendChannel, None]:
+        fd, self._fd = self._fd, None
+        assert fd is not None, "a request is opened once"
+
+        self._served.hold()
+        try:
+            async with _carried(
+                self._helper, self._request.handle, fd, self._request.ending
+            ) as opened:
+                yield opened
+        finally:
+            self._served.release()
+
+    @override
+    def close(self) -> None:
+        # Closing this end is what tells the helper to close the channel.
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            os.close(fd)
+            self._helper.forget(self._request.handle)
+
+    @override
+    async def decline(self) -> None:
+        self.close()
+
+
+class IOBluetoothService(BackendService):
+    """
+    A service published by a helper of its own.
+    """
+
+    def __init__(self, helper: Helper, number: int, served: _Served) -> None:
+        self._helper = helper
+        self._number = number
+        self._served = served
+
+    @property
+    @override
+    def channel(self) -> int:
+        return self._number
+
+    @override
+    async def accept(self) -> BackendRequest:
+        request = await self._helper.next_request()
+        return IOBluetoothRequest(self._helper, request, self._served)
+
+
 class IOBluetoothBluetooth(BackendBluetooth):
     """
     Bluetooth on this Mac, worked through whichever helper is running.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, serve_in: Callable[[_Served], asyncio.Task[None]] | None = None
+    ) -> None:
+        """
+        Args:
+            serve_in: Runs a service's helper somewhere that outlives the
+                service, since its channels do. Without one, nothing is
+                served.
+        """
         self.helper: Helper | None = None
         """
         The running helper, or ``None`` between one and the next.
         """
+        self._serve_in = serve_in
+        # Every channel this program has served on, kept for good, since its
+        # record outlives the service (see _native._choose_channel). A helper
+        # reads the others' records for itself, but not one being published
+        # at the same moment, nor any if that private path has gone.
+        self._served_on: set[int] = set()
+        self._choosing = asyncio.Lock()
 
     def _current(self) -> Helper:
         """
@@ -148,18 +358,34 @@ class IOBluetoothBluetooth(BackendBluetooth):
     def serve(
         self, service: UUID, *, name: str, channel: int | None = None
     ) -> AbstractAsyncContextManager[BackendService]:
-        # Measured, not assumed: a service record publishes correctly and a
-        # peer's connection to it is accepted, but IOBluetooth never delivers
-        # the opened channel -- registerForChannelOpenNotifications does not
-        # fire, filtered or not, exactly as registerForChannelCloseNotification
-        # does not. So the connection is taken and then dropped, and there is
-        # nothing here to hand a caller.
-        raise UnsupportedOperationError(
-            "serving is not implemented on macOS. A service record can be "
-            "published and a peer can reach it, but IOBluetooth never hands "
-            "over the opened channel, so nothing can answer. Connecting to "
-            "another machine's service from here works."
-        )
+        return self._serve(service, name, channel)
+
+    @asynccontextmanager
+    async def _serve(
+        self, service: UUID, name: str, channel: int | None
+    ) -> AsyncGenerator[BackendService, None]:
+        if self._serve_in is None:
+            raise UnsupportedOperationError("this Bluetooth object cannot serve")
+
+        served = _Served()
+        served.task = self._serve_in(served)
+
+        try:
+            helper = await served.wait_started()
+            # One at a time, so that two services starting together cannot
+            # both choose the channel neither has published on yet.
+            async with self._choosing:
+                number, _fds = await helper.ask(
+                    "serve",
+                    service=str(service),
+                    name=name,
+                    channel=channel,
+                    avoiding=sorted(self._served_on),
+                )
+                self._served_on.add(number)
+            yield IOBluetoothService(helper, number, served)
+        finally:
+            await served.withdraw()
 
     @asynccontextmanager
     async def _connect(
@@ -194,19 +420,7 @@ class IOBluetoothBluetooth(BackendBluetooth):
                 "hand back a socket for it"
             )
 
-        async with AsyncExitStack() as stack:
-            ending = helper.expect(handle)
-            stack.callback(helper.forget, handle)
-            # Pushed before the socket, so that it runs after it: closing this
-            # end is what tells the helper to let the device go, and until it
-            # has, another channel to that device is refused.
-            stack.push_async_callback(helper.wait_until_finished, handle)
-
-            sock = socket.socket(fileno=fds[0])
-            transport, protocol = await open_stream(sock)
-            opened = IOBluetoothChannel(transport, protocol, ending)
-            stack.push_async_callback(opened.close)
-
+        async with _carried(helper, handle, fds[0], helper.expect(handle)) as opened:
             yield opened
 
 
@@ -250,9 +464,19 @@ class IOBluetoothBackend(BackendProvider):
         Yields:
             Bluetooth, worked through whichever helper is running.
         """
-        bluetooth = IOBluetoothBluetooth()
         with unwrap_lone_error():
             async with asyncio.TaskGroup() as group:
+                services: set[asyncio.Task[None]] = set()
+
+                def serve_in(served: _Served) -> asyncio.Task[None]:
+                    task = group.create_task(
+                        served.run(self._start), name="aio-rfcomm service"
+                    )
+                    services.add(task)
+                    task.add_done_callback(services.discard)
+                    return task
+
+                bluetooth = IOBluetoothBluetooth(serve_in)
                 supervising = group.create_task(
                     self._supervise(bluetooth, state), name="aio-rfcomm helper"
                 )
@@ -260,6 +484,9 @@ class IOBluetoothBackend(BackendProvider):
                     yield bluetooth
                 finally:
                     supervising.cancel()
+                    # Anything still served goes with Bluetooth.
+                    for task in services:
+                        task.cancel()
 
     async def _supervise(
         self, bluetooth: IOBluetoothBluetooth, state: AvailabilityState

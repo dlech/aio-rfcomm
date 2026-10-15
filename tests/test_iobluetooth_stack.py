@@ -16,7 +16,8 @@ import asyncio
 import socket
 import sys
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from uuid import UUID
 
 import pytest
 
@@ -34,15 +35,18 @@ from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelClosedError,
+    ChannelInUseError,
     CloseReason,
     DeviceNotFoundError,
 )
+from aio_rfcomm.service import RfcommConnectionRequest, RfcommService
 from tests.fake_iobluetooth import (
     FakeDeviceClass,
     FakeManager,
     change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
     fake_framework,
+    fake_framework_parts,
     opened,
     until_observed,
 )
@@ -380,3 +384,191 @@ async def test_a_replacement_that_will_not_start_is_not_retried(
 
         await asyncio.sleep(0.05)
     assert attempts == 2
+
+
+# --------------------------------------------------------------------------
+# Serving
+# --------------------------------------------------------------------------
+
+CHAT = UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
+
+
+async def _next_request(service: RfcommService) -> RfcommConnectionRequest:
+    async with asyncio.timeout(1):
+        return await anext(aiter(service.connection_requests()))
+
+
+async def test_a_peer_that_connects_is_talked_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    framework = fake_framework_parts(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.serve(CHAT, name="chat") as service:
+        fake = framework.channels.connect_in(ADDRESS, service.channel)
+        request = await _next_request(service)
+        assert request.info.address == ADDRESS
+
+        async with request.accept() as channel:
+            fake.arrive(b"hello\n")
+            async with asyncio.timeout(1):
+                assert await channel.receive() == b"hello\n"
+            await channel.send(b"echo\n")
+            await asyncio.sleep(0.01)
+            assert bytes(fake.written) == b"echo\n"
+
+            fake.hang_up()
+            with pytest.raises(ChannelClosedError) as caught:
+                async with asyncio.timeout(1):
+                    await channel.receive()
+            assert caught.value.reason is CloseReason.PEER_CLOSED
+
+
+async def test_a_declined_peer_is_hung_up_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    framework = fake_framework_parts(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.serve(CHAT, name="chat") as service:
+        fake = framework.channels.connect_in(ADDRESS, service.channel)
+        request = await _next_request(service)
+        await request.decline()
+        async with asyncio.timeout(1):
+            while fake.open:
+                await asyncio.sleep(0.01)
+
+
+async def test_each_service_has_a_helper_of_its_own_and_registers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    bluetoothd frees a registration only when the process that made it ends,
+    and a second from one process leaks the first's slot -- measured.
+    """
+    framework = fake_framework_parts(monkeypatch)
+    helpers = _Helpers()
+    async with _stack(helpers) as bluetooth:
+        for _ in range(2):
+            async with bluetooth.serve(CHAT, name="chat"):
+                pass
+        assert len(helpers.started) == 3
+        assert len(framework.channels.registrations) == 2
+        # Withdrawn with nothing open, each service's helper has gone.
+        async with asyncio.timeout(1):
+            while not all(h.stopped for h, _far in helpers.started[1:]):
+                await asyncio.sleep(0.01)
+    assert all(p.withdrawn for p in framework.records.published)
+
+
+async def test_an_accepted_channel_outlives_the_service_and_its_helper_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    framework = fake_framework_parts(monkeypatch)
+    helpers = _Helpers()
+    async with _stack(helpers) as bluetooth, AsyncExitStack() as stack:
+        async with bluetooth.serve(CHAT, name="chat") as service:
+            fake = framework.channels.connect_in(ADDRESS, service.channel)
+            request = await _next_request(service)
+            channel = await stack.enter_async_context(request.accept())
+
+        serving, _far = helpers.started[-1]
+        assert framework.records.published[-1].withdrawn
+        await asyncio.sleep(0.05)
+        assert not serving.stopped
+
+        fake.arrive(b"still here")
+        async with asyncio.timeout(1):
+            assert await channel.receive() == b"still here"
+
+        await stack.aclose()
+        async with asyncio.timeout(1):
+            while not serving.stopped:
+                await asyncio.sleep(0.01)
+        assert not fake.open
+
+
+async def test_a_channel_already_served_here_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework_parts(monkeypatch)
+    async with _stack() as bluetooth:
+        with pytest.raises(ChannelInUseError):
+            async with bluetooth.serve(CHAT, name="chat", channel=8):
+                pass
+
+
+async def test_a_peer_still_waiting_at_withdrawal_is_hung_up_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The helper lives on for the channel already accepted, so a peer queued
+    behind it would otherwise stay connected, unread, for as long as it lasts.
+    """
+    framework = fake_framework_parts(monkeypatch)
+    async with _stack() as bluetooth, AsyncExitStack() as stack:
+        async with bluetooth.serve(CHAT, name="chat") as service:
+            framework.channels.connect_in(ADDRESS, service.channel)
+            request = await _next_request(service)
+            await stack.enter_async_context(request.accept())
+            waiting = framework.channels.connect_in(ADDRESS, service.channel)
+            await asyncio.sleep(0.05)
+
+        async with asyncio.timeout(1):
+            while waiting.open:
+                await asyncio.sleep(0.01)
+
+
+async def test_a_service_given_up_on_while_its_helper_starts_stops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Starting can wait on a permission dialog for as long as the user leaves it.
+    """
+    fake_framework(monkeypatch)
+    helpers = _Helpers()
+    starting = asyncio.Event()
+    abandoned = asyncio.Event()
+
+    @asynccontextmanager
+    async def slow_after_first() -> AsyncGenerator[Helper, None]:
+        if helpers.started:
+            starting.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                abandoned.set()
+                raise
+        async with helpers.start() as helper:
+            yield helper
+
+    async with _open_bluetooth(IOBluetoothBackend(slow_after_first)) as bluetooth:
+        serving = asyncio.ensure_future(bluetooth.serve(CHAT, name="chat").__aenter__())
+        async with asyncio.timeout(1):
+            await starting.wait()
+        serving.cancel()
+        await asyncio.gather(serving, return_exceptions=True)
+        async with asyncio.timeout(1):
+            await abandoned.wait()
+
+
+async def test_two_services_at_once_are_on_channels_of_their_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework_parts(monkeypatch)
+    async with (
+        _stack() as bluetooth,
+        bluetooth.serve(CHAT, name="chat") as one,
+        bluetooth.serve(CHAT, name="chat") as other,
+    ):
+        assert one.channel != other.channel
+
+
+async def test_two_services_started_together_choose_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Each chooses in a process of its own, where the other's record may not
+    be published yet.
+    """
+    fake_framework_parts(monkeypatch)
+    async with _stack() as bluetooth, AsyncExitStack() as stack:
+        one, other = await asyncio.gather(
+            stack.enter_async_context(bluetooth.serve(CHAT, name="chat")),
+            stack.enter_async_context(bluetooth.serve(CHAT, name="chat")),
+        )
+        assert one.channel != other.channel
