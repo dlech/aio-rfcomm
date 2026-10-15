@@ -65,7 +65,7 @@ async def _serve(sock: socket.socket) -> None:
     try:
         try:
             async with asyncio.TaskGroup() as group:
-                group.create_task(_report_state(link))
+                group.create_task(_report_states(link))
                 while True:
                     frame = await link.receive()
                     if frame is None:
@@ -94,9 +94,9 @@ async def _serve(sock: socket.socket) -> None:
         link.close()
 
 
-async def _report_state(link: Link) -> None:
+async def _report_states(link: Link) -> None:
     """
-    Tell the library the manager's state, once it has settled.
+    Tell the library the manager's state, now and on every change.
 
     Sent as numbers and read on the other side, which decides what each one
     means for whether Bluetooth is usable.
@@ -104,20 +104,24 @@ async def _report_state(link: Link) -> None:
     Args:
         link: The control socket.
     """
+
+    def report(state: int, authorization: int) -> None:
+        link.send({"event": "state", "state": state, "authorization": authorization})
+
     try:
-        state, authorization = await _native.read_state()
+        await _native.report_states(report)
     except Exception:
-        # The library waits for a reading, so the power state stands in.
-        logger.exception("could not read the manager's state")
+        # Losing the watch costs the reports, not the helper and its channels,
+        # but the library waits for a first one: the power state stands in.
+        logger.exception("could not watch the manager's state")
         try:
             powered = _native.read_power_state()
-            state = CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF
-            authorization = _native.read_authorization()
+            report(
+                CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF,
+                _native.read_authorization(),
+            )
         except Exception:
             logger.exception("could not read the power state either")
-            return
-
-    link.send({"event": "state", "state": state, "authorization": authorization})
 
 
 def _forget(

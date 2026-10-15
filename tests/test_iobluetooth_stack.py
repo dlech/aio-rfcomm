@@ -198,6 +198,39 @@ async def test_the_first_reading_is_the_manager_s_state(
                 pass
 
 
+async def test_a_radio_switched_off_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = fake_framework(monkeypatch)
+    async with _stack() as bluetooth:
+        await until_observed(manager)
+        change_state(manager, CBManagerState.POWERED_OFF)
+        await _next_availability(bluetooth, Availability.SWITCHED_OFF)
+
+        change_state(manager, CBManagerState.POWERED_ON)
+        await _next_availability(bluetooth, Availability.USABLE)
+
+
+async def test_a_radio_switched_off_with_a_channel_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on a clean toggle: the manager says powered off, and a
+    millisecond later the channel hears its link drop. The radio is why.
+    """
+    manager = fake_framework(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        fake = opened[-1]
+        await until_observed(manager)
+        change_state(manager, CBManagerState.POWERED_OFF)
+        fake.device.connected = False
+        fake.hang_up()
+        async with asyncio.timeout(1):
+            with pytest.raises(BluetoothUnavailableError) as caught:
+                await channel.receive()
+        assert caught.value.reason is Availability.SWITCHED_OFF
+
+
 async def test_an_open_the_helper_refuses_says_why(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -228,6 +261,59 @@ async def _restart(manager: FakeManager) -> None:
     change_state(manager, CBManagerState.RESETTING, CBManagerState.POWERED_ON)
 
 
+async def test_a_restart_brings_a_new_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    After bluetoothd restarts, every device object in the old helper stays
+    bound to the old daemon, so only a new helper recovers.
+    """
+    manager = fake_framework(monkeypatch)
+    helpers = _Helpers()
+    async with _stack(helpers) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.USABLE
+
+        await _restart(manager)
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is Availability.SERVICE_UNAVAILABLE
+            assert await anext(watcher) is Availability.USABLE
+        assert len(helpers.started) == 2
+
+        async with bluetooth.open_channel(DEVICE, 5) as channel:
+            await channel.send(b"through the new helper")
+
+
+async def test_a_restart_ends_the_channels_it_killed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured: after a restart a channel is never told, and writes to it fail
+    quietly. It has to be ended from here.
+    """
+    manager = fake_framework(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        await _restart(manager)
+        async with asyncio.timeout(1):
+            with pytest.raises(BluetoothUnavailableError) as caught:
+                await channel.receive()
+        assert caught.value.reason is Availability.SERVICE_UNAVAILABLE
+
+
+async def test_a_helper_that_stops_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework(monkeypatch)
+    helpers = _Helpers()
+    async with _stack(helpers) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.USABLE
+
+        helpers.kill()
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is Availability.SERVICE_UNAVAILABLE
+            assert await anext(watcher) is Availability.USABLE
+        assert len(helpers.started) == 2
+
+
 async def test_a_first_helper_that_will_not_start_is_an_error() -> None:
     @asynccontextmanager
     async def broken() -> AsyncGenerator[Helper, None]:
@@ -256,3 +342,41 @@ async def test_a_helper_refused_bluetooth_is_not_allowed() -> None:
         assert await anext(bluetooth.watch_availability()) is Availability.NOT_ALLOWED
         with pytest.raises(BluetoothUnavailableError, match="prompt_under_name"):
             await bluetooth.list_known_devices()
+
+
+async def test_a_replacement_that_will_not_start_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Retrying at once would only fail again, as fast as it could.
+    """
+    fake_framework(monkeypatch)
+    helpers = _Helpers()
+    attempts = 0
+
+    @asynccontextmanager
+    async def first_only() -> AsyncGenerator[Helper, None]:
+        nonlocal attempts
+        attempts += 1
+        if helpers.started:
+            raise HelperFailedError("could not start the macOS Bluetooth helper")
+        async with helpers.start() as helper:
+            yield helper
+
+    async with _open_bluetooth(IOBluetoothBackend(first_only)) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.USABLE
+
+        helpers.kill()
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is Availability.SERVICE_UNAVAILABLE
+            # Said once the replacement has failed, a moment later.
+            while True:
+                with pytest.raises(BluetoothUnavailableError) as caught:
+                    await bluetooth.list_known_devices()
+                if "could not be restarted" in str(caught.value):
+                    break
+                await asyncio.sleep(0.01)
+
+        await asyncio.sleep(0.05)
+    assert attempts == 2

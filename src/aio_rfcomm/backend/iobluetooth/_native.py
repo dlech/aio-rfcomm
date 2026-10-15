@@ -28,7 +28,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator, Callable, Collection, Iterable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 from uuid import UUID
 
 from rubicon.objc import (
@@ -67,7 +67,7 @@ __all__ = [
     "open_channel",
     "read_authorization",
     "read_power_state",
-    "read_state",
+    "report_states",
 ]
 
 # Loading the framework is what makes its classes findable by name. It does
@@ -257,6 +257,10 @@ _SETTLE_SECONDS = 0.1
 _OPEN_REPORT_SECONDS = 1.0
 _OPEN_REPORT_ATTEMPTS = 4
 
+# How often to look again while the manager's state is unknown; see
+# report_states.
+_UNKNOWN_POLL_SECONDS = 0.05
+
 # The two the documentation calls temporary, promising another value after.
 # Everything else is an answer, which is not the same as a usable one.
 _UNSETTLED = (CBManagerState.UNKNOWN, CBManagerState.RESETTING)
@@ -338,6 +342,35 @@ class _StateObserver(NSObject):
             self.loop.call_soon_threadsafe(self.reached.set)
 
 
+class _StateReporter(NSObject):
+    """
+    Passes on every state a ``CBManager`` reaches.
+    """
+
+    loop: asyncio.AbstractEventLoop
+    report: Callable[[int, int], None]
+
+    @objc_method
+    def init(self):
+        self.loop = asyncio.get_running_loop()
+        return self
+
+    # Annotated as what rubicon assumes anyway, so the selector is unchanged.
+    @objc_method
+    def observeValueForKeyPath_ofObject_change_context_(
+        self,
+        _path: ObjCInstance,
+        watched: ObjCInstance,
+        _change: ObjCInstance,
+        _context: ObjCInstance,
+    ) -> None:
+        # Read here, on the framework thread, so each change is reported as
+        # it was rather than as it is by the time the loop gets to it.
+        self.loop.call_soon_threadsafe(
+            self.report, cast(_Manager, watched).state, read_authorization()
+        )
+
+
 async def _wait_until_ready() -> None:
     """
     Wait for CoreBluetooth to settle, and object if it settled unusably.
@@ -402,26 +435,69 @@ async def _wait_until_settled(manager: _Manager) -> None:
     await _wait_for_state(manager, lambda state: state not in _UNSETTLED)
 
 
-async def read_state() -> tuple[int, int]:
+async def report_states(report: Callable[[int, int], None]) -> NoReturn:
     """
-    Read the manager's state, once it has settled.
+    Report the manager's state now, and again on every change.
 
-    If the manager cannot be reached, the controller's power state stands in,
-    since a macOS without it is one this can say nothing more about.
+    IOBluetooth was not seen to report the radio any other way: a channel
+    open at the time hears its link drop, and that was all. Measured across a
+    real toggle: the manager goes from powered on to powered off, on a
+    framework thread, about a millisecond before the channel is told.
 
-    Returns:
-        The ``CBManagerState`` and the ``CBManagerAuthorization`` with it.
+    Every value is reported, the temporary ones included; what they mean is
+    for the caller to decide.
+
+    If the manager cannot be reached, the controller's power state is
+    reported once instead, since a macOS without it is one this can say
+    nothing more about.
+
+    Args:
+        report: Called with each ``CBManagerState`` and the
+            ``CBManagerAuthorization`` at the time, on this loop's thread.
     """
     manager = _classic_manager()
     if manager is None:
         powered = read_power_state()
-        return (
+        report(
             CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF,
             read_authorization(),
         )
+        await asyncio.Event().wait()
+        raise AssertionError("an event nobody sets was set")
 
-    await _wait_until_settled(manager)
-    return manager.state, read_authorization()
+    last: tuple[int, int] | None = None
+
+    def once(state: int, authorization: int) -> None:
+        nonlocal last
+        if (state, authorization) != last:
+            last = (state, authorization)
+            report(state, authorization)
+
+    # KVO offers no way to say which thread to answer on -- see the reporter.
+    reporter = _StateReporter.alloc().init()
+    reporter.report = once
+    manager.addObserver(
+        reporter, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
+    )
+    try:
+        # Measured in a fresh process: the state settles while the observer is
+        # being added, after the initial notification has read it and before
+        # the observer hears of changes, so nothing reports it. Read again now
+        # that the observer is in place, queued behind that notification.
+        asyncio.get_running_loop().call_soon(once, manager.state, read_authorization())
+
+        # Unknown is documented as temporary with an update to follow, but in
+        # a fresh process the update was measured going unreported. So while
+        # it is unknown, look again.
+        await asyncio.sleep(0)
+        while last is not None and last[0] == CBManagerState.UNKNOWN:
+            await asyncio.sleep(_UNKNOWN_POLL_SECONDS)
+            once(manager.state, read_authorization())
+
+        await asyncio.Event().wait()
+        raise AssertionError("an event nobody sets was set")
+    finally:
+        manager.removeObserver(reporter, forKeyPath="state", context=None)
 
 
 async def _wait_for_state(manager: _Manager, wanted: Callable[[int], bool]) -> None:

@@ -13,6 +13,7 @@ key-value observable property, which is all the real one is from here.
 import asyncio
 import sys
 import time
+from ctypes import c_int
 from typing import cast
 
 import pytest
@@ -20,6 +21,7 @@ import pytest
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
+from rubicon.objc.runtime import set_ivar
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import _native
@@ -36,8 +38,10 @@ from tests.fake_iobluetooth import (
     FakeCoordinatorClass,
     FakeDeviceClass,
     FakeManager,
+    SettlingManager,
     change_state,
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    is_observed,
     until_observed,
     wrap_channel,
 )
@@ -259,21 +263,132 @@ async def test_a_power_on_from_a_framework_thread_is_heard(
 
 
 # --------------------------------------------------------------------------
-# Reading the radio's state
+# Noticing the radio switched off
 # --------------------------------------------------------------------------
 
 
-async def test_the_state_is_read_once_it_has_settled(manager: FakeManager) -> None:
-    reading = asyncio.ensure_future(_native.read_state())
-    await until_observed(manager)
-    assert not reading.done()
-
-    change_state(manager, CBManagerState.POWERED_OFF)
+async def _reported(
+    reports: list[tuple[int, int]], count: int
+) -> list[tuple[int, int]]:
     async with asyncio.timeout(1):
-        assert await reading == (
+        while len(reports) < count:
+            await asyncio.sleep(0)
+    return reports
+
+
+async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None:
+    """
+    Measured on a clean toggle: powered on, then powered off, on a framework
+    thread.
+    """
+    manager.state = CBManagerState.POWERED_ON
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        _native.report_states(lambda *each: reports.append(each))
+    )
+    try:
+        await until_observed(manager)
+        change_state(manager, CBManagerState.POWERED_OFF)
+        allowed = CBManagerAuthorization.ALLOWED_ALWAYS
+        assert await _reported(reports, 2) == [
+            (CBManagerState.POWERED_ON, allowed),
+            (CBManagerState.POWERED_OFF, allowed),
+        ]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_a_restart_is_reported_state_by_state(manager: FakeManager) -> None:
+    """
+    Measured when switching off restarted bluetoothd: resetting, a powered-on
+    from the restarted daemon, and only then powered off. What each means is
+    for the other side of the socket to decide, so all are passed on.
+    """
+    manager.state = CBManagerState.POWERED_ON
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        _native.report_states(lambda state, _auth: reports.append((state, 0)))
+    )
+    try:
+        await until_observed(manager)
+        change_state(
+            manager,
+            CBManagerState.RESETTING,
+            CBManagerState.POWERED_ON,
             CBManagerState.POWERED_OFF,
-            CBManagerAuthorization.ALLOWED_ALWAYS,
         )
+        states = [state for state, _ in await _reported(reports, 4)]
+        assert states == [
+            CBManagerState.POWERED_ON,
+            CBManagerState.RESETTING,
+            CBManagerState.POWERED_ON,
+            CBManagerState.POWERED_OFF,
+        ]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_a_state_that_settles_unheard_is_still_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured in fresh processes: the first report said unknown, the state was
+    powered on half a second later, and nothing ever said so.
+    """
+    settling = SettlingManager.alloc().init()
+    monkeypatch.setattr(
+        _native, "ObjCClass", lambda _name: FakeCoordinatorClass(settling)
+    )
+    monkeypatch.setattr(
+        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+    )
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        _native.report_states(lambda state, _auth: reports.append((state, 0)))
+    )
+    try:
+        states = [state for state, _ in await _reported(reports, 2)]
+        assert states == [CBManagerState.UNKNOWN, CBManagerState.POWERED_ON]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_a_state_still_unknown_after_observing_is_looked_at_again(
+    manager: FakeManager,
+) -> None:
+    """
+    The same unreported settling, landing after the observer is in place.
+    """
+    manager.state = CBManagerState.UNKNOWN
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        _native.report_states(lambda state, _auth: reports.append((state, 0)))
+    )
+    try:
+        await until_observed(manager)
+        await asyncio.sleep(SETTLE)
+        set_ivar(manager, "_state", c_int(int(CBManagerState.POWERED_ON)))
+        states = [state for state, _ in await _reported(reports, 2)]
+        assert states == [CBManagerState.UNKNOWN, CBManagerState.POWERED_ON]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> None:
+    """
+    An observer left registered would be called on a framework thread for the
+    rest of the process, into a loop that may have gone.
+    """
+    manager.state = CBManagerState.POWERED_ON
+    watching = asyncio.ensure_future(_native.report_states(lambda *_each: None))
+    await until_observed(manager)
+    watching.cancel()
+    await asyncio.gather(watching, return_exceptions=True)
+    assert not is_observed(manager)
 
 
 class _Controller:
@@ -288,7 +403,7 @@ class _Controller:
         return cls()
 
 
-async def test_a_manager_that_cannot_be_reached_reads_the_power_instead(
+async def test_a_manager_that_cannot_be_reached_reports_the_power_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def gone(_name: str) -> object:
@@ -299,10 +414,19 @@ async def test_a_manager_that_cannot_be_reached_reads_the_power_instead(
     monkeypatch.setattr(
         _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
     )
-    assert await _native.read_state() == (
-        CBManagerState.POWERED_ON,
-        CBManagerAuthorization.ALLOWED_ALWAYS,
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        _native.report_states(lambda *each: reports.append(each))
     )
+    try:
+        await asyncio.sleep(SETTLE)
+        assert reports == [
+            (CBManagerState.POWERED_ON, CBManagerAuthorization.ALLOWED_ALWAYS)
+        ]
+        assert not watching.done()
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
 
 
 # --------------------------------------------------------------------------

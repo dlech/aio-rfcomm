@@ -27,11 +27,13 @@ from uuid import UUID
 
 from typing_extensions import override
 
+from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth._helper import (
     Ending,
     Helper,
+    HelperFailedError,
     run_helper,
 )
 from aio_rfcomm.backend.provider import (
@@ -235,58 +237,123 @@ class IOBluetoothBackend(BackendProvider):
         self, state: AvailabilityState
     ) -> AsyncGenerator[BackendBluetooth, None]:
         """
-        Start a helper, read whether Bluetooth is usable, and keep the helper
-        running for as long as the block lasts.
+        Keep a helper running for as long as the block lasts.
 
-        REVISIT: availability is read only when Bluetooth is opened. Following
-        CoreBluetooth's state as it changes, and replacing a helper whose
-        bluetoothd has restarted, come next.
+        The helper lives in a task of this block's own, because it may have to
+        be replaced: after bluetoothd restarts, every device object in it
+        stays bound to the old daemon for the life of that process, and every
+        open is dropped. Only a new helper recovers.
 
         Args:
             state: Where to report availability.
 
         Yields:
-            Bluetooth, worked through the helper.
-
-        Raises:
-            HelperFailedError: The helper could not be started.
+            Bluetooth, worked through whichever helper is running.
         """
         bluetooth = IOBluetoothBluetooth()
+        with unwrap_lone_error():
+            async with asyncio.TaskGroup() as group:
+                supervising = group.create_task(
+                    self._supervise(bluetooth, state), name="aio-rfcomm helper"
+                )
+                try:
+                    yield bluetooth
+                finally:
+                    supervising.cancel()
 
-        async with AsyncExitStack() as stack:
-            helper = None
+    async def _supervise(
+        self, bluetooth: IOBluetoothBluetooth, state: AvailabilityState
+    ) -> None:
+        """
+        Run a helper, report what it says, and replace it when it is finished.
 
+        A helper is finished when the manager says it is resetting, which it
+        does only when its connection to bluetoothd has gone, or when the
+        helper itself stops. Either way the system's Bluetooth service is
+        unavailable until a new helper says otherwise.
+
+        Args:
+            bluetooth: Where the running helper is kept.
+            state: Where to report availability.
+
+        Raises:
+            HelperFailedError: The first helper could not be started. A later
+                one that cannot be is reported as unavailable instead, since
+                the caller has long since been told Bluetooth was there.
+        """
+        replacing = False
+
+        while True:
+            running = False
             try:
-                helper = await stack.enter_async_context(self._start())
+                async with self._start() as helper:
+                    running = True
+                    bluetooth.helper = helper
+
+                    # A helper that stops takes its channels with it, and they
+                    # have to hear that the service went, not that their link
+                    # dropped, so this is said before they are told anything.
+                    def stopped() -> None:
+                        state.set(
+                            Availability.SERVICE_UNAVAILABLE,
+                            "the macOS Bluetooth helper stopped",
+                        )
+
+                    helper.on_stop = stopped
+                    if helper.stopped:
+                        # It stopped before there was anyone to hear it.
+                        stopped()
+                    try:
+                        await _relay(helper, state)
+                    finally:
+                        helper.on_stop = None
+                        bluetooth.helper = None
             except BluetoothUnavailableError as refused:
-                # macOS refused Bluetooth to the helper and ended it.
+                # macOS refused Bluetooth to the helper and ended it, and would
+                # refuse a new one the same way.
                 state.set(refused.reason, str(refused))
+                return
+            except (HelperFailedError, OSError) as failed:
+                if not running and not replacing:
+                    raise
+                if not running:
+                    # A replacement that will not start would not start next
+                    # time either; trying again would only spin.
+                    state.set(
+                        Availability.SERVICE_UNAVAILABLE,
+                        f"the macOS Bluetooth helper could not be restarted: {failed}",
+                    )
+                    return
+                logger.info("the macOS Bluetooth helper stopped: %s", failed)
+            else:
+                logger.info("the Bluetooth service restarted; starting a new helper")
 
-            if helper is not None:
-                bluetooth.helper = helper
-                await _first_reading(helper, state)
-
-            yield bluetooth
+            replacing = True
 
 
-async def _first_reading(helper: Helper, state: AvailabilityState) -> None:
+async def _relay(helper: Helper, state: AvailabilityState) -> None:
     """
-    Report the first state the helper sends that answers whether Bluetooth is
-    usable.
+    Report each state the helper sends, until the service resets.
 
     Args:
         helper: The running helper.
         state: Where to report availability.
 
     Raises:
-        HelperFailedError: The helper stopped first.
+        HelperFailedError: The helper stopped.
     """
     while True:
         manager, authorization = await helper.next_state()
 
         match _availability(manager, authorization):
             case None:
-                continue
+                pass
+            case Availability.SERVICE_UNAVAILABLE:
+                # This helper's channels are dead and will never be told, and
+                # its device objects are bound to the old daemon. Said before
+                # the helper goes, so its channels end for this reason.
+                state.set(Availability.SERVICE_UNAVAILABLE)
+                return
             case Availability.SWITCHED_OFF:
                 state.set(
                     Availability.SWITCHED_OFF,
@@ -296,8 +363,6 @@ async def _first_reading(helper: Helper, state: AvailabilityState) -> None:
                 state.set(Availability.NOT_ALLOWED, _not_allowed(authorization))
             case available:
                 state.set(available)
-
-        return
 
 
 def _availability(manager: int, authorization: int) -> Availability | None:
