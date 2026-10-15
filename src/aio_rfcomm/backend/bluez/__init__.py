@@ -1190,7 +1190,9 @@ def _translate_registration(error: Exception, uuid: str) -> RfcommError:
     Returns:
         The error to raise instead.
     """
-    if "already registered" in str(error):
+    # RegisterProfile answers NotPermitted for this alone, in the source of
+    # BlueZ 5.85 (src/profile.c), with "UUID already registered".
+    if getattr(error, "type", None) == "org.bluez.Error.NotPermitted":
         return ConnectionFailedError(
             f"another program on this machine has already claimed {uuid}. "
             "BlueZ allows only one profile registration per service UUID."
@@ -1210,10 +1212,22 @@ def _translate_connect(error: Exception, address: str, uuid: str) -> RfcommError
     Returns:
         The error to raise instead.
     """
+    name = getattr(error, "type", None)
     text = str(error)
-    if "profile-unavailable" in text or "NotAvailable" in text:
+
+    # BlueZ names some failures, and gives others as a reason code in the text
+    # of the generic org.bluez.Error.Failed. Measured on BlueZ 5.85: a missing
+    # profile is named, with the text "No more profiles to connect to", and a
+    # device that is switched off is br-connection-page-timeout.
+    if (
+        name == "org.bluez.Error.BREDR.ProfileUnavailable"
+        or text == "br-connection-profile-unavailable"
+    ):
         return ServiceNotFoundError(f"{address} does not offer {uuid}")
-    if "page-timeout" in text or "NotReady" in text or "Host is down" in text:
+    # BlueZ 5.85 gives every other connection failure as one of these codes,
+    # an errno turned into a fixed string (src/error.c), never as the errno's
+    # own text. A device that does not answer is EHOSTDOWN.
+    if text == "br-connection-page-timeout":
         return DeviceNotFoundError(f"{address} did not answer")
     return ConnectionFailedError(f"could not open a channel to {address}: {text}")
 

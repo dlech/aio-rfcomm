@@ -20,6 +20,8 @@ import pytest
 
 pytest.importorskip("dbus_fast", reason="the Linux backend needs dbus-fast")
 
+from dbus_fast import DBusError
+
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.bluez import (
     BlueZBluetooth,
@@ -77,26 +79,51 @@ def test_several_services_are_all_accepted() -> None:
 
 def test_unavailable_profile_means_the_service_is_missing() -> None:
     error = _translate_connect(
-        Exception("br-connection-profile-unavailable"), "00:11", SERVICE
+        DBusError("org.bluez.Error.Failed", "br-connection-profile-unavailable"),
+        "00:11",
+        SERVICE,
+    )
+    assert isinstance(error, ServiceNotFoundError)
+
+
+def test_a_missing_profile_named_only_by_the_error_is_the_service_missing() -> None:
+    """
+    Measured on BlueZ 5.85: a service missing from the device's stored
+    services fails ``ConnectProfile`` with this name and this text.
+    """
+    error = _translate_connect(
+        DBusError(
+            "org.bluez.Error.BREDR.ProfileUnavailable", "No more profiles to connect to"
+        ),
+        "00:11",
+        SERVICE,
     )
     assert isinstance(error, ServiceNotFoundError)
 
 
 def test_page_timeout_means_the_device_did_not_answer() -> None:
     error = _translate_connect(
-        Exception("br-connection-page-timeout"), "00:11", SERVICE
+        # Measured on BlueZ 5.85, for a paired device that is switched off.
+        DBusError("org.bluez.Error.Failed", "br-connection-page-timeout"),
+        "00:11",
+        SERVICE,
     )
     assert isinstance(error, DeviceNotFoundError)
 
 
 def test_anything_else_is_a_connection_failure() -> None:
-    error = _translate_connect(Exception("br-connection-busy"), "00:11", SERVICE)
+    error = _translate_connect(
+        DBusError("org.bluez.Error.Failed", "br-connection-busy"), "00:11", SERVICE
+    )
     assert isinstance(error, ConnectionFailedError)
     assert "busy" in str(error)
 
 
 def test_a_uuid_held_elsewhere_says_so() -> None:
-    error = _translate_registration(Exception("UUID already registered"), SERVICE)
+    # Measured on BlueZ 5.85.
+    error = _translate_registration(
+        DBusError("org.bluez.Error.NotPermitted", "UUID already registered"), SERVICE
+    )
     assert isinstance(error, ConnectionFailedError)
     assert "another program" in str(error)
     assert SERVICE in str(error)
@@ -294,7 +321,9 @@ async def test_different_services_register_separately() -> None:
 
 async def test_a_failed_registration_leaves_nothing_exported() -> None:
     bus = _FakeBus()
-    manager = _FakeManager(fails=Exception("UUID already registered"))
+    manager = _FakeManager(
+        fails=DBusError("org.bluez.Error.NotPermitted", "UUID already registered")
+    )
     profiles = _Profiles(bus, _asking(manager))  # type: ignore[arg-type]
 
     with pytest.raises(ConnectionFailedError, match="another program"):
