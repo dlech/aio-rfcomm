@@ -306,9 +306,16 @@ def test_a_refused_channel_means_nothing_is_listening() -> None:
     assert isinstance(error, ServiceNotFoundError)
 
 
-def test_other_socket_failures_are_failed_connections() -> None:
+def test_a_device_that_is_not_there_is_not_found() -> None:
     error = _translate_socket_connect(
         OSError(errno.EHOSTDOWN, "Host is down"), "00:11:22:33:44:55", 12
+    )
+    assert isinstance(error, DeviceNotFoundError)
+
+
+def test_other_socket_failures_are_failed_connections() -> None:
+    error = _translate_socket_connect(
+        OSError(errno.EIO, "Input/output error"), "00:11:22:33:44:55", 12
     )
     assert isinstance(error, ConnectionFailedError)
 

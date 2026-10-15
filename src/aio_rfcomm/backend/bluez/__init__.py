@@ -1228,6 +1228,12 @@ def _translate_socket_connect(
                 f"{address} refused channel {channel}; usually nothing there is "
                 "listening on it"
             )
+        case errno.EHOSTDOWN:
+            # Measured (5.72): a device that is not there, after the page
+            # timeout.
+            return DeviceNotFoundError(
+                f"{address} did not answer. It may be switched off or out of range"
+            )
         case _:
             return ConnectionFailedError(
                 f"could not reach {address} on channel {channel}: {error}"
