@@ -259,6 +259,23 @@ async def test_a_full_buffer_stops_reading_until_it_is_taken() -> None:
     assert not transport.paused
 
 
+async def test_a_cancelled_send_still_sends_everything() -> None:
+    data = bytes(range(256)) * 16 * 1024
+    async with _channel() as (channel, theirs):
+        sending = asyncio.ensure_future(channel.send(data))
+        await asyncio.sleep(0)
+        assert not sending.done(), "the pair's buffers should have filled"
+        sending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+
+        received = bytearray()
+        loop = asyncio.get_running_loop()
+        while len(received) < len(data):
+            received += await loop.sock_recv(theirs, 65536)
+        assert received == data
+
+
 async def test_a_sender_waiting_for_room_hears_the_end() -> None:
     channel, protocol, transport = _driven()
     protocol.pause_writing()

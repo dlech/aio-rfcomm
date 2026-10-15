@@ -14,8 +14,8 @@ from aio_rfcomm.availability import Availability, UnavailableReason
 from aio_rfcomm.bluetooth import Bluetooth
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
+    BluetoothAlreadyOpenError,
     BluetoothUnavailableError,
-    ChannelBrokenError,
     ChannelBusyError,
     ChannelClosedError,
     CloseReason,
@@ -138,7 +138,7 @@ def test_the_platform_s_own_words_are_kept() -> None:
 
 
 @pytest.mark.parametrize(
-    "kind", [ChannelBrokenError, ChannelBusyError, ScopeClosedError]
+    "kind", [BluetoothAlreadyOpenError, ChannelBusyError, ScopeClosedError]
 )
 def test_a_mistake_in_the_calling_code_is_not_caught_as_bluetooth(
     kind: type[Exception],

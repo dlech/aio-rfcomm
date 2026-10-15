@@ -5,7 +5,6 @@
 The channel handle callers hold.
 """
 
-import asyncio
 import copy
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -14,7 +13,6 @@ from aio_rfcomm._scope import Scope
 from aio_rfcomm.backend.provider import BackendChannel
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
-    ChannelBrokenError,
     ChannelBusyError,
     ChannelClosedError,
     DelimiterNotFoundError,
@@ -55,7 +53,6 @@ class RfcommChannel:
         self._scope = scope
         self._sending = False
         self._receiving = False
-        self._send_cancelled = False
         self._ending: RfcommError | None = None
         # What was taken from the backend and not yet handed out, shared by
         # every way of receiving so that mixing them loses nothing.
@@ -68,11 +65,8 @@ class RfcommChannel:
         Returns once the data is on its way, which is not the same as the peer
         having it.
 
-        If this is cancelled, whether the peer receives the data is unknown,
-        so a protocol with any framing cannot trust what follows. Every later
-        send raises :class:`~aio_rfcomm.errors.ChannelBrokenError` rather than
-        let that go unnoticed; leave the channel's block and open a new one.
-        Receiving is unaffected.
+        Cancelling it stops only the waiting: everything is already queued, and
+        still goes unless the channel ends first.
 
         Args:
             data: The bytes to send.
@@ -80,26 +74,14 @@ class RfcommChannel:
         Raises:
             ChannelClosedError: The connection is over.
             BluetoothUnavailableError: Bluetooth went away, ending the channel.
-            ChannelBrokenError: An earlier send on this channel was cancelled.
         """
         self._scope.check()
         if self._sending:
             raise ChannelBusyError("another task is already sending on this channel")
 
-        # The ending, when there is one, matters more than the mistake.
-        if self._send_cancelled and not self._over():
-            raise ChannelBrokenError(
-                "an earlier send on this channel was cancelled, so whether the "
-                "peer received it is unknown; leave the channel's block and "
-                "open a new one"
-            )
-
         self._sending = True
         try:
             await self._backend.send(data)
-        except asyncio.CancelledError:
-            self._send_cancelled = True
-            raise
         except ChannelClosedError as closed:
             raise self._settle(closed) from closed
         finally:
@@ -242,9 +224,6 @@ class RfcommChannel:
         taken = bytes(self._unread[:count])
         del self._unread[:count]
         return taken
-
-    def _over(self) -> bool:
-        return self._ending is not None or self._backend.ended
 
     def _settle(self, closed: ChannelClosedError) -> RfcommError:
         """

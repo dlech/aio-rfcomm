@@ -2,8 +2,8 @@
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
 """
-What the channel handle adds over the backend's: arguments checked, and a
-cancelled send not allowed to pass unnoticed.
+What the channel handle adds over the backend's: arguments checked, endings
+settled once, and one buffer behind every way of receiving.
 """
 
 import asyncio
@@ -15,7 +15,6 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.channel import RfcommChannel
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
-    ChannelBrokenError,
     ChannelBusyError,
     ChannelClosedError,
     CloseReason,
@@ -44,65 +43,6 @@ async def test_the_end_is_raised_rather_than_returned(
     with pytest.raises(ChannelClosedError) as caught:
         await channel.receive()
     assert caught.value.reason is CloseReason.PEER_CLOSED
-
-
-async def _cancel_a_send(channel: RfcommChannel, fake: FakeChannel) -> None:
-    fake.send_blocks = True
-    sending = asyncio.ensure_future(channel.send(b"half a frame"))
-    await asyncio.sleep(0)
-    sending.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await sending
-    fake.send_blocks = False
-
-
-async def test_a_send_after_a_cancelled_one_is_refused(
-    opened: tuple[RfcommChannel, FakeChannel],
-) -> None:
-    """
-    The usual way to get here: a deadline around a send fires, and the send
-    is tried again. Whether the peer got the first is unknown, so the retry
-    is refused where it happens rather than corrupting the stream unseen.
-    """
-    channel, fake = opened
-    await _cancel_a_send(channel, fake)
-
-    with pytest.raises(ChannelBrokenError):
-        await channel.send(b"again")
-    assert not fake.sent
-
-
-async def test_receiving_is_unaffected_by_a_cancelled_send(
-    opened: tuple[RfcommChannel, FakeChannel],
-) -> None:
-    channel, fake = opened
-    await _cancel_a_send(channel, fake)
-
-    fake.deliver(b"still listening")
-    assert await channel.receive() == b"still listening"
-
-
-async def test_the_end_matters_more_than_a_cancelled_send(
-    opened: tuple[RfcommChannel, FakeChannel],
-) -> None:
-    channel, fake = opened
-    await _cancel_a_send(channel, fake)
-    fake.go_away(CloseReason.LINK_LOST)
-
-    with pytest.raises(ChannelClosedError) as caught:
-        await channel.send(b"again")
-    assert caught.value.reason is CloseReason.LINK_LOST
-
-
-async def test_bluetooth_going_matters_more_than_a_cancelled_send(
-    opened: tuple[RfcommChannel, FakeChannel], provider: FakeProvider
-) -> None:
-    channel, fake = opened
-    await _cancel_a_send(channel, fake)
-    provider.report(Availability.SWITCHED_OFF)
-
-    with pytest.raises(BluetoothUnavailableError):
-        await channel.send(b"again")
 
 
 # --------------------------------------------------------------------------
@@ -179,6 +119,20 @@ async def test_until_takes_one_message_of_several(
     assert await channel.receive_until(b"\n", max_bytes=10) == b"two"
     assert await channel.receive_until(b"\n", max_bytes=10) == b""
     assert await channel.receive() == b"three"
+
+
+async def test_an_end_before_the_delimiter_leaves_the_partial_line_for_receive(
+    opened: tuple[RfcommChannel, FakeChannel],
+) -> None:
+    channel, fake = opened
+    fake.deliver(b"no newline")
+    fake.go_away(CloseReason.PEER_CLOSED)
+
+    with pytest.raises(ChannelClosedError):
+        await channel.receive_until(b"\n", max_bytes=100)
+    assert await channel.receive() == b"no newline"
+    with pytest.raises(ChannelClosedError):
+        await channel.receive()
 
 
 async def test_until_gives_up_at_its_limit_and_takes_nothing(

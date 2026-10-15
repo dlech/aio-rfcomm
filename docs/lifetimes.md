@@ -107,15 +107,8 @@ it happens.
 
 ### Cancelling a send
 
-After a cancelled [`send`][aio_rfcomm.RfcommChannel.send], whether the peer
-received the data is unknown, so a protocol with any framing cannot trust what
-follows. Every later `send` on that channel raises
-[`ChannelBrokenError`][aio_rfcomm.errors.ChannelBrokenError]; leave the
-channel's block and open a new one. Receiving carries on unaffected, and if
-the channel has ended meanwhile, the ending is raised instead.
-
-The usual way to get here is a deadline around a send, and then a retry. The
-retry is refused where it happens rather than allowed to corrupt the stream at
-some point far from the cancellation that caused it. The rule is njs's, from
-[Trio issue #889](https://github.com/python-trio/trio/issues/889): once a send
-is cancelled, the stream is doomed.
+Cancelling a [`send`][aio_rfcomm.RfcommChannel.send] stops only the waiting.
+Everything passed to it is queued before it waits, so all of it still goes,
+in order, unless the channel ends first. A send is never cut short part way
+through, and a deadline around one followed by a retry sends the data twice
+rather than corrupting it.

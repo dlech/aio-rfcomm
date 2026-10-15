@@ -386,6 +386,10 @@ class BackendChannel(ABC):
         """
         Send all of ``data``.
 
+        Hands all of it to the platform before waiting for anything, so that
+        cancelling the wait never splits it: a cancelled send still sends
+        everything, unless the channel ends first.
+
         Args:
             data: The bytes to send. May be longer than the channel can carry
                 in one go; splitting it is the implementation's problem, not

@@ -27,7 +27,6 @@ from aio_rfcomm.availability import Availability, UnavailableReason
 __all__ = [
     "BluetoothAlreadyOpenError",
     "BluetoothUnavailableError",
-    "ChannelBrokenError",
     "ChannelBusyError",
     "ChannelClosedError",
     "ChannelInUseError",
@@ -222,16 +221,6 @@ class BluetoothAlreadyOpenError(RuntimeError):
 
     There is one Bluetooth object per process. Code that needs Bluetooth takes
     that object as an argument rather than opening its own.
-    """
-
-
-class ChannelBrokenError(RuntimeError):
-    """
-    A channel was sent on after an earlier send on it was cancelled.
-
-    Whether the peer received the cancelled send's data is unknown, so a
-    protocol with any framing cannot trust what follows. Leave the channel's
-    block and open a new one.
     """
 
 

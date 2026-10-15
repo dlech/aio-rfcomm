@@ -89,7 +89,6 @@ These are `RuntimeError`, not `RfcommError`.
 | Error | Means |
 | --- | --- |
 | [`ChannelBusyError`][aio_rfcomm.errors.ChannelBusyError] | Two tasks used the same direction of one channel at once, which is reported as your bug rather than tolerated as a race. |
-| [`ChannelBrokenError`][aio_rfcomm.errors.ChannelBrokenError] | A channel was sent on after an earlier send on it was cancelled; see [Lifetimes](lifetimes.md). |
 | [`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError] | A handle was used after the block that produced it ended. |
 | [`BluetoothAlreadyOpenError`][aio_rfcomm.errors.BluetoothAlreadyOpenError] | Bluetooth was opened while it was already open in this process. |
 
