@@ -4,17 +4,18 @@
 """
 The Linux backend, talking to BlueZ over D-Bus.
 
-No Bluetooth socket is created to reach a service, which is deliberate. CPython
-only compiles ``AF_BLUETOOTH`` support when BlueZ headers are present at build
-time, and because those are GPL the widely used ``python-build-standalone``
-builds -- the ones ``uv`` installs -- ship without it. BlueZ hands back an
-already-connected file descriptor instead, so connecting by service UUID works
-on a Python that has never heard of Bluetooth.
+Reaching a service does not use Python's own Bluetooth socket support
+(``socket.AF_BLUETOOTH``). CPython only compiles it when BlueZ's headers are
+present at build time, and because those are GPL the widely used
+``python-build-standalone`` builds -- the ones ``uv`` installs -- ship without
+it. BlueZ connects instead, and hands the connected socket over D-Bus as a
+file descriptor, so connecting by service UUID works on any Python.
 
-Two things are better with a socket, and both degrade rather than fail without
-one: connecting to a bare channel number, which cannot be done over D-Bus at
-all (``BlueZBluetooth.open_channel``), and choosing the channel a service
-listens on, which falls back to a guess (``BlueZBluetooth._reserve_channel``).
+Two things do need that support: connecting to a bare channel number, which
+D-Bus cannot do (``BlueZBluetooth.open_channel``), and choosing a free channel
+to serve on (``BlueZBluetooth._reserve_channel``). Without it, both raise
+``UnsupportedOperationError``. Serving on a channel the caller names still
+works, unchecked.
 """
 
 # Measurements cited in this module name the BlueZ they were made on, one of:
