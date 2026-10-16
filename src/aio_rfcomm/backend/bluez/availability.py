@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, NamedTuple
 
+from dbus_fast import Message, MessageType
 from dbus_fast.aio import MessageBus
 from dbus_fast.errors import DBusError
 
@@ -18,6 +19,7 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.bluez.dbus import (
     ADAPTER,
     OBJECT_MANAGER,
+    SERVICE,
     ObjectManagerProxy,
     get_interface,
     optional_string,
@@ -30,7 +32,12 @@ if TYPE_CHECKING:
     from aio_rfcomm.backend.bluez import BlueZBluetooth
 
 
-__all__ = ["WATCHED", "follow_availability", "read_availability"]
+__all__ = [
+    "WATCHED",
+    "follow_availability",
+    "may_change_availability",
+    "read_availability",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +66,46 @@ WATCHED = (
         "member='NameOwnerChanged',arg0='org.bluez'"
     ),
 )
+
+
+# The adapter properties that say whether it is powered.
+_POWER = frozenset({"Powered", "PowerState"})
+
+
+def may_change_availability(message: Message) -> bool:
+    """
+    Tell whether a signal could change whether Bluetooth is usable.
+
+    Args:
+        message: A message the bus delivered.
+
+    Returns:
+        Whether availability needs reading again.
+    """
+    # WATCHED delivers far more than this. Measured on BlueZ 5.85 during a 12 s
+    # scan: 10 signals, every one a device coming or going or the adapter's
+    # Discovering flag, and each would have read every object BlueZ has.
+    if message.message_type is not MessageType.SIGNAL:
+        return False
+
+    match (message.interface, message.member):
+        case ("org.freedesktop.DBus.Properties", "PropertiesChanged"):
+            # Any adapter's, not only the one in use: a new adapter can power
+            # up while the read that will choose it is still in progress.
+            interface, changed, invalidated = message.body
+            return interface == ADAPTER and not _POWER.isdisjoint(
+                [*changed, *invalidated]
+            )
+        case (
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesAdded" | "InterfacesRemoved",
+        ):
+            return ADAPTER in message.body[1]
+        case ("org.freedesktop.DBus", "NameOwnerChanged"):
+            # The handler sees every message on the bus, not only WATCHED's.
+            return message.body[0] == SERVICE
+        case _:
+            return False
 
 
 class _Adapter(NamedTuple):
@@ -180,7 +227,7 @@ async def follow_availability(
         bus: A connected system bus.
         bluetooth: Where the adapter in use is kept.
         state: Where to report availability.
-        changed: Set by every signal that may matter.
+        changed: Set by every signal that may change it.
     """
     while True:
         changed.clear()

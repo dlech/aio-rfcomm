@@ -15,16 +15,21 @@ import os
 import socket
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import pytest
 
 pytest.importorskip("dbus_fast", reason="the Linux backend needs dbus-fast")
 
-from dbus_fast import DBusError
+from dbus_fast import DBusError, Message, MessageType, Variant
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.bluez import BlueZBluetooth, _wanted
-from aio_rfcomm.backend.bluez.availability import _Adapter, _powered
+from aio_rfcomm.backend.bluez.availability import (
+    _Adapter,
+    _powered,
+    may_change_availability,
+)
 from aio_rfcomm.backend.bluez.connection import _Request, _take_connection
 from aio_rfcomm.backend.bluez.errors import (
     translate_connect,
@@ -473,3 +478,121 @@ def test_a_blocked_radio_says_how_to_unblock_it() -> None:
     _, detail = _powered(_adapter_with(False, "off-blocked"))
     assert detail is not None
     assert "rfkill" in detail
+
+
+# --------------------------------------------------------------------------
+# Which signals are worth reading availability again for
+#
+# The ones below are what BlueZ 5.85 sent during a scan, plus the ones that
+# do matter: the adapter's power changing, an adapter arriving, and BlueZ
+# itself starting or stopping.
+# --------------------------------------------------------------------------
+
+ADAPTER_PATH = "/org/bluez/hci0"
+
+
+def _signal(
+    path: str, interface: str, member: str, signature: str, body: list[Any]
+) -> Message:
+    return Message(
+        message_type=MessageType.SIGNAL,
+        path=path,
+        interface=interface,
+        member=member,
+        signature=signature,
+        body=body,
+    )
+
+
+def _properties_changed(
+    path: str, interface: str, changed: dict[str, Variant]
+) -> Message:
+    return _signal(
+        path,
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        "sa{sv}as",
+        [interface, changed, []],
+    )
+
+
+def _interfaces(member: str, interfaces: list[str]) -> Message:
+    path = ADAPTER_PATH + "/dev_00_11_22_33_44_55"
+    if member == "InterfacesAdded":
+        return _signal(
+            "/",
+            "org.freedesktop.DBus.ObjectManager",
+            member,
+            "oa{sa{sv}}",
+            [path, {name: {} for name in interfaces}],
+        )
+
+    return _signal(
+        "/", "org.freedesktop.DBus.ObjectManager", member, "oas", [path, interfaces]
+    )
+
+
+def test_the_power_of_the_adapter_in_use_matters() -> None:
+    message = _properties_changed(
+        ADAPTER_PATH, "org.bluez.Adapter1", {"Powered": Variant("b", False)}
+    )
+    assert may_change_availability(message)
+
+
+def test_its_power_state_matters_too() -> None:
+    message = _properties_changed(
+        ADAPTER_PATH, "org.bluez.Adapter1", {"PowerState": Variant("s", "off-enabling")}
+    )
+    assert may_change_availability(message)
+
+
+def test_the_adapter_discovering_does_not() -> None:
+    message = _properties_changed(
+        ADAPTER_PATH, "org.bluez.Adapter1", {"Discovering": Variant("b", True)}
+    )
+    assert not may_change_availability(message)
+
+
+def test_another_adapter_s_power_does_too() -> None:
+    """
+    A new adapter can power up while the read that will choose it is still in
+    progress.
+    """
+    message = _properties_changed(
+        "/org/bluez/hci1", "org.bluez.Adapter1", {"Powered": Variant("b", True)}
+    )
+    assert may_change_availability(message)
+
+
+@pytest.mark.parametrize("member", ["InterfacesAdded", "InterfacesRemoved"])
+def test_a_device_coming_or_going_does_not(member: str) -> None:
+    message = _interfaces(member, ["org.bluez.Device1", "org.bluez.LE1"])
+    assert not may_change_availability(message)
+
+
+@pytest.mark.parametrize("member", ["InterfacesAdded", "InterfacesRemoved"])
+def test_an_adapter_coming_or_going_does(member: str) -> None:
+    message = _interfaces(member, ["org.bluez.Adapter1"])
+    assert may_change_availability(message)
+
+
+def test_another_name_on_the_bus_coming_or_going_does_not() -> None:
+    message = _signal(
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameOwnerChanged",
+        "sss",
+        [":1.42", "", ":1.42"],
+    )
+    assert not may_change_availability(message)
+
+
+def test_bluez_starting_or_stopping_does() -> None:
+    message = _signal(
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameOwnerChanged",
+        "sss",
+        ["org.bluez", ":1.5", ""],
+    )
+    assert may_change_availability(message)

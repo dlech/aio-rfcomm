@@ -27,7 +27,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from typing import cast
 from uuid import UUID
 
-from dbus_fast import Message, MessageType, Variant
+from dbus_fast import Message, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.errors import DBusError
 from typing_extensions import override
@@ -37,6 +37,7 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.bluez.availability import (
     WATCHED,
     follow_availability,
+    may_change_availability,
     read_availability,
 )
 from aio_rfcomm.backend.bluez.connection import (
@@ -515,7 +516,7 @@ class BlueZBackend(BackendProvider):
             changed = asyncio.Event()
 
             def notice(message: Message) -> None:
-                if message.message_type is MessageType.SIGNAL:
+                if may_change_availability(message):
                     changed.set()
 
             bluetooth.refresh = lambda: read_availability(bus, bluetooth, state)
