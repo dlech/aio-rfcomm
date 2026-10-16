@@ -1,13 +1,22 @@
 # Lifetimes
 
 Everything you open comes from an `async with` block, and is closed when the
-block ends. Using it after the block has ended raises
-[`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError].
+block ends:
 
 ```python
 async with aio_rfcomm.open_bluetooth() as bluetooth:
     async with bluetooth.open_service(DEVICE, SERIAL_PORT) as channel:
         ...
+```
+
+Using it after its block has ended is a bug, and raises
+[`ScopeClosedError`][aio_rfcomm.errors.ScopeClosedError]:
+
+```python
+async with bluetooth.open_service(DEVICE, SERIAL_PORT) as channel:
+    ...
+
+await channel.send(b"hello\n")  # raises ScopeClosedError
 ```
 
 ## Noticing that a connection has ended
@@ -17,17 +26,15 @@ straight away when the connection ends, because `receive` raises. A task
 waiting for anything else, such as keyboard input, a queue or a timer, does
 not find out. It can wait forever for a device that has gone.
 
-So keep a task receiving in the same task group. When the connection ends,
-that task raises, and the task group cancels the other tasks:
+So keep a task receiving in the same task group, even if your program does not
+expect anything from the device. When the connection ends, that task raises,
+and the task group cancels the other tasks:
 
 ```python
 async with asyncio.TaskGroup() as group:
     group.create_task(print_received(channel))
     group.create_task(send_typed_lines(channel))
 ```
-
-A program that only sends should still keep a task receiving, to notice the
-end.
 
 A task group raises an `ExceptionGroup`, even when only one task failed. Catch
 the group in the function that made the task group, and raise the channel's
@@ -77,3 +84,5 @@ connection ends first. Sending them again after a timeout sends them twice.
 
     A timeout only stops you waiting. Leaving the `async with` block closes
     everything opened inside it.
+
+**Next:** [Errors](errors.md), for what each error means.

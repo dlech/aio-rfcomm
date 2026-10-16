@@ -64,36 +64,56 @@ channel. A device set up with a fixed channel number does not.
 If `serve` runs out of channels, or connections to every service on this Mac
 wait until they time out, turn Bluetooth off and on again.
 
-## When a device's services change
+### When a device's services change
 
-macOS and Linux both keep a stored copy of each device's services, and do not
-always refresh it. Most devices never change their services, so this rarely
-matters. It matters when a device's services change after pairing, for
-example when the device is running an aio-rfcomm server of its own. Then
+macOS keeps a stored copy of each device's services, and does not always
+refresh it. Most devices never change their services, so this rarely matters.
+It matters when a device's services change after pairing, for example when the
+device is running an aio-rfcomm server of its own. Then
 [`open_service`][aio_rfcomm.Bluetooth.open_service] can raise
 [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] even though
 the service is there.
 
-To get past it, connect with
-[`open_channel`][aio_rfcomm.Bluetooth.open_channel] and the channel number.
-This works only when the server always uses the same channel.
+To refresh it, remove the device in the system settings and pair it again.
 
 ## Linux
 
-The library talks to BlueZ over D-Bus, and needs no special permissions.
+### Permission
+
+The library talks to BlueZ over the system D-Bus, so the program needs
+permission to send messages to `org.bluez`. BlueZ's standard D-Bus policy
+gives that to every user. A sandboxed program, such as a Snap or a Flatpak,
+has to be granted it.
+
+### Bluetooth sockets
 
 Two things need a Python built with Bluetooth socket support: serving without
 naming a channel, and connecting by channel number. uv's own Python builds do
-not have it. Ubuntu 26.04's own Python does. To check yours, run
-`python -c "import socket; socket.AF_BLUETOOTH"`, which fails without it.
-Without it, these raise
+not have it. The Python packaged by most Linux distributions does. To check
+yours, run `python -c "import socket; socket.AF_BLUETOOTH"`, which fails
+without it. Without it, these raise
 [`UnsupportedOperationError`][aio_rfcomm.errors.UnsupportedOperationError].
 Connecting by service UUID works on every Python.
 
-When serving on a channel you name without that support, the library cannot
-check that the channel is free. If it is not, BlueZ publishes nothing and
-gives no error. Channel 9, for example, is often taken by Object Push.
+When you serve on a channel number of your choosing without that support,
+the library cannot check that the channel is free. If it is not, BlueZ
+publishes nothing and gives no error. Channel 9, for example, is often taken
+by Object Push.
 
-## Windows
+### When a device's services change
 
-Windows needs no setup.
+BlueZ keeps a stored copy of each device's services, and does not always
+refresh it. Most devices never change their services, so this rarely matters.
+It matters when a device's services change after pairing, for example when the
+device is running an aio-rfcomm server of its own. Then
+[`open_service`][aio_rfcomm.Bluetooth.open_service] can raise
+[`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] even though
+the service is there.
+
+To refresh it, connect the device, and then try again:
+
+```sh
+bluetoothctl connect 00:1A:7D:DA:71:0C
+```
+
+**Next:** [API reference](reference/index.md), for every public name.

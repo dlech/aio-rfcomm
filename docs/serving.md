@@ -101,3 +101,6 @@ socket support, which uv's own Python builds do not have. See
 A device can make only one connection to a given channel. Different devices
 can connect to the same service at the same time. For two connections from
 the same device, serve two channels.
+
+**Next:** [Channels](channels.md), to send and receive over an accepted
+connection.

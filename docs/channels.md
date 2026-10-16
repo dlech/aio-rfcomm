@@ -45,12 +45,23 @@ delimiter and returns the bytes before it:
 line = await channel.receive_until(b"\n", max_bytes=1024)
 ```
 
-The delimiter is read too, but not returned. `max_bytes` is the most it reads,
-delimiter included. It is required, so that a device that never sends a
-delimiter cannot make your program use more and more memory. If no delimiter
-arrives within `max_bytes`, `receive_until` raises
-[`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError] and leaves
-the bytes for the next call.
+The delimiter is read too, but not returned.
+
+`max_bytes` is the longest message you expect, delimiter included. It is
+required, so that a device that never sends a delimiter cannot make your
+program store more and more. As soon as `max_bytes` bytes have arrived with no
+delimiter among them, `receive_until` raises
+[`DelimiterNotFoundError`][aio_rfcomm.errors.DelimiterNotFoundError]. It reads
+none of those bytes, so calling it again raises again. Read them another way,
+for example with `receive`, or end the connection:
+
+```python
+try:
+    line = await channel.receive_until(b"\n", max_bytes=1024)
+except DelimiterNotFoundError:
+    # Too long to be a line. Take the first part as it is.
+    line = await channel.receive(1024)
+```
 
 For binary data, a common way is to send each message's length first.
 [`receive_exactly`][aio_rfcomm.RfcommChannel.receive_exactly] reads an exact
@@ -72,3 +83,5 @@ part that arrived.
 
     It returns at most `max_bytes`, as soon as anything has arrived. Use
     `receive_exactly` when you need an exact number of bytes.
+
+**Next:** [Lifetimes](lifetimes.md), to notice when a connection ends.

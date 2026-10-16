@@ -44,17 +44,9 @@ $ uv add aio-rfcomm
 
 ## Where to go next
 
-<div class="grid cards" markdown>
-
-- **[Bluetooth](bluetooth.md)**: open it, and check that it can be used.
-- **[Connecting](connecting.md)**: find a device and open a channel to it.
-- **[Channels](channels.md)**: send and receive bytes, and read messages.
+- **[Bluetooth](bluetooth.md)**: start here. Get the object everything else
+  goes through, and check that Bluetooth can be used.
+- **[Connecting](connecting.md)**: connect to a device.
 - **[Serving](serving.md)**: let devices connect to you.
-- **[Lifetimes](lifetimes.md)**: notice when a connection ends, and cancel
-  safely.
-- **[Errors](errors.md)**: what each error means.
-- **[Platforms](platforms.md)**: where Linux, macOS and Windows differ, and
-  the permission macOS asks for.
-- **[API reference](reference.md)**: every public name.
 
-</div>
+Everything else is in the menu.

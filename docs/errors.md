@@ -77,3 +77,5 @@ These are `RuntimeError`, not `RfcommError`.
 
 A channel number outside 1 to 30, or a string that is not a Bluetooth address,
 raises `ValueError`.
+
+**Next:** [Platforms](platforms.md), for where Linux, macOS and Windows differ.

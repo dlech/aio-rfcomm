@@ -1,8 +1,15 @@
 # Connecting
 
-## Naming a device
+To connect to a device, you first need an
+[`RfcommDeviceInfo`][aio_rfcomm.RfcommDeviceInfo] for it. There are two ways to
+get one. If you already know the device's Bluetooth address, make one from it
+yourself, as in [If you know the address](#if-you-know-the-address).
+Otherwise, look the device up among the ones the system already knows, as in
+[Looking up known devices](#looking-up-known-devices). Then open a channel to
+it.
 
-Every connection needs an [`RfcommDeviceInfo`][aio_rfcomm.RfcommDeviceInfo].
+## If you know the address
+
 Make one from the device's Bluetooth address:
 
 ```python
@@ -10,10 +17,9 @@ DEVICE = aio_rfcomm.RfcommDeviceInfo("00:16:53:11:C4:9A")
 ```
 
 The address is six pairs of hex digits, separated by colons or by dashes.
-Anything else raises `ValueError`. Making one does not contact the device. To
-tell whether two of them are the same device, compare their `address`.
+Anything else raises `ValueError`. Making one does not contact the device.
 
-## Finding a device
+## Looking up known devices
 
 Pair the device in the operating system's settings before using it. Then
 [`list_known_devices`][aio_rfcomm.Bluetooth.list_known_devices] lists the
@@ -31,11 +37,12 @@ Pass a service UUID to list only the devices that offer that service:
 serial_devices = await bluetooth.list_known_devices(service=SERIAL_PORT)
 ```
 
-!!! warning "Match on the address, not the name"
+!!! warning "To find a particular device, use its address"
 
-    The [`name`][aio_rfcomm.RfcommDeviceInfo.name] is whatever the system has
-    stored. It can be out of date, missing, or wrong. The address does not
-    change.
+    Look for a device by its `address`, not by its
+    [`name`][aio_rfcomm.RfcommDeviceInfo.name]. The name is whatever the
+    system has stored, and it can be out of date, missing, or wrong. The
+    address does not change.
 
 ## Opening a channel
 
@@ -63,8 +70,8 @@ Channel numbers go from 1 to 30. Any other number raises `ValueError`. If
 nothing on the device is listening on that channel, the device refuses, and
 [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] is raised.
 
-Connecting by number also helps when the system's stored copy of the device's
-services is out of date. See [Platforms](platforms.md), which also covers the
-Python builds on Linux that cannot connect by number.
+The system keeps a stored copy of each device's services, which can be out of
+date. [Platforms](platforms.md) says how to refresh it on each system, and
+which Python builds on Linux cannot connect by number.
 
-Once a channel is open, see [Channels](channels.md).
+**Next:** [Channels](channels.md), to send and receive once connected.
