@@ -701,11 +701,18 @@ async def test_a_device_hanging_up_as_the_channel_opens_is_not_asked_again(
     assert device.attempts == 1
 
 
+async def test_a_channel_open_elsewhere_is_not_asked_for_again(quick: None) -> None:
+    device = RefusingDevice(911)
+    with pytest.raises(ConnectionFailedError, match="already open or opening"):
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == 1
+
+
 async def test_any_other_answer_from_bluetoothd_is_not_asked_for_again(
     quick: None,
 ) -> None:
-    device = RefusingDevice(911)
-    with pytest.raises(ConnectionFailedError, match="bluetoothd said 911"):
+    device = RefusingDevice(1902)
+    with pytest.raises(ConnectionFailedError, match="bluetoothd said 1902"):
         await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 1
 

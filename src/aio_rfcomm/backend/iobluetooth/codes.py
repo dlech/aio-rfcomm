@@ -177,6 +177,14 @@ class OIStatus(enum.IntEnum):
     26.6.2 (25G83).
     """
 
+    RFCOMM_DLCI_EXISTS = 911
+    """
+    ``OI_RFCOMM_DLCI_EXISTS`` -- the channel is already open or opening on
+    this computer. Measured on macOS 26.6.2 against a Pybricks EV3 on firmware
+    4.1.0b6, while Chrome 155.0.8059.84 opened the same channel at the same
+    moment.
+    """
+
     RFCOMM_REMOTE_REJECT = 913
     """
     ``OI_RFCOMM_REMOTE_REJECT`` -- the device refused the channel. Measured on

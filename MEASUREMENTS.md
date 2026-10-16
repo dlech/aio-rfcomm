@@ -12,8 +12,8 @@ since claims in the code refer to it.
 
 - Build 25G83.
 - Controller: Broadcom BCM_4387, firmware 23.5.636.5345.
-- Peers: the Linux machine below, a Pybricks EV3 on firmware 4.1.0b5, and the
-  Windows machine below.
+- Peers: the Linux machine below, a Pybricks EV3 on firmware 4.1.0b5 and
+  later 4.1.0b6, and the Windows machine below.
 
 ## BlueZ 5.72
 

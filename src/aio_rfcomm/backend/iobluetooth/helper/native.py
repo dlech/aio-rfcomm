@@ -1658,6 +1658,11 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
                         result,
                     )
                     continue
+                case OIStatus.RFCOMM_DLCI_EXISTS:
+                    raise ConnectionFailedError(
+                        f"channel {number} on {address} is already open or "
+                        "opening, perhaps in another program on this computer"
+                    ) from None
                 case OIStatus.RFCOMM_REMOTE_REJECT:
                     raise ServiceNotFoundError(
                         f"{address} refused channel {number}. Usually nothing "
