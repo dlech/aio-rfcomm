@@ -707,9 +707,9 @@ async def test_a_helper_that_ran_the_program_does_not_start_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured with PyInstaller 6.22.3: without the run-time hook, the helper of
-    a frozen program runs the whole program again, which opens Bluetooth and
-    starts a helper of its own.
+    Measured with PyInstaller 6.22.3 on macOS 26.6.2: without the run-time
+    hook, the helper of a frozen program runs the whole program again, which
+    opens Bluetooth and starts a helper of its own.
     """
     monkeypatch.setenv("AIO_RFCOMM_CONTROL_FD", "9")
     with pytest.raises(HelperFailedError, match="ran the program instead"):

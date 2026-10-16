@@ -5,13 +5,6 @@
 Turning what BlueZ and the kernel report into our errors.
 """
 
-# Measurements cited in this module name the BlueZ they were made on, one of:
-# - BlueZ 5.72: Ubuntu 24.04, package 5.72-0ubuntu5.5, before 2026-10-05. The
-#   kernel was not recorded.
-# - BlueZ 5.85: Ubuntu 26.04.1, package 5.85-4ubuntu0.3 or later, on kernel
-#   7.0.0-38-generic.
-# The peer was a Mac on macOS 26.6.2 (25G83).
-
 import errno
 
 from aio_rfcomm.errors import (
@@ -92,7 +85,7 @@ def translate_socket_connect(error: OSError, address: str, channel: int) -> Rfco
     match error.errno:
         case errno.ECONNREFUSED:
             # Any refusal reads the same. Nothing listening is the one measured
-            # (BlueZ 5.85).
+            # (BlueZ 5.85, a macOS 26.6.2 peer).
             return ServiceNotFoundError(
                 f"{address} refused channel {channel}. Usually nothing there is "
                 "listening on it"

@@ -5,13 +5,6 @@
 Finding devices, and the channel a service is on, through WinRT.
 """
 
-# Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded, unless a claim says it was made on
-# 2026-10-15. Those were made on Windows 10.0.26200.9457 (25H2), with
-# bthport.sys, bthenum.sys and bthusb.sys 10.0.26100.9444, and rfcomm.sys and
-# bthserv.dll 10.0.26100.9278. With any new one, record the same: Windows
-# updates the Bluetooth stack through servicing, apart from its own version.
-
 from __future__ import annotations
 
 import logging
@@ -150,11 +143,12 @@ async def look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int:
     # want. Windows has a query that takes a service id, and on a device that
     # is not currently connected it answers nothing at all -- no error, no
     # connection attempt, an empty list that reads exactly like a device
-    # which does not offer the service. Measured on a disconnected peer: the
-    # filtered query returned nothing and left it disconnected, the
-    # unfiltered query returned eleven services including the one wanted and
-    # connected to do it, and the filtered query then worked. Asking for
-    # everything is the only form that reliably goes and looks.
+    # which does not offer the service. Measured on a disconnected peer, on
+    # an unrecorded Windows version: the filtered query returned nothing and
+    # left it disconnected, the unfiltered query returned eleven services
+    # including the one wanted and connected to do it, and the filtered query
+    # then worked. Asking for everything is the only form that reliably goes
+    # and looks.
     result = await found.get_rfcomm_services_with_cache_mode_async(
         BluetoothCacheMode.UNCACHED
     )
@@ -162,9 +156,10 @@ async def look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int:
         raise translate_bluetooth_error(result.error, address)
 
     # A device that does not answer is not an error to this query. Measured
-    # on 2026-10-15, for a paired device switched off and for an address
-    # Windows had never seen: SUCCESS with no services after about 5 s, the
-    # device still disconnected. One that answered is connected by then.
+    # on Windows 10.0.26200.9457, for a paired device switched off and for an
+    # address Windows had never seen: SUCCESS with no services after about
+    # 5 s, the device still disconnected. One that answered is connected by
+    # then.
     if (
         not result.services
         and found.connection_status == BluetoothConnectionStatus.DISCONNECTED

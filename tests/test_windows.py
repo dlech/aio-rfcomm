@@ -203,9 +203,9 @@ def test_no_free_channel_at_all_is_an_error() -> None:
 # --------------------------------------------------------------------------
 # Refusals
 #
-# Measured on 2026-10-15 on Windows 10.0.26200.9457 against a macOS 26.6.2
-# peer: a channel nothing listens on fails with WSAEHOSTDOWN, and a device
-# that is switched off, or an address never seen, with WSAETIMEDOUT.
+# Measured on Windows 10.0.26200.9457 against a macOS 26.6.2 peer: a channel
+# nothing listens on fails with WSAEHOSTDOWN, and a device that is switched
+# off, or an address never seen, with WSAETIMEDOUT.
 # --------------------------------------------------------------------------
 
 

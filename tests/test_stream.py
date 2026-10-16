@@ -23,8 +23,8 @@ from aio_rfcomm.errors import ChannelClosedError, CloseReason
 
 # On Windows the socket pair is two TCP sockets over loopback, which take a
 # write after the far end has closed and swallow 4 MiB at once. Measured on
-# 2026-10-15 on Windows 10.0.26200.9457. Neither is what RFCOMM does, so the
-# tests that rest on it say nothing there.
+# Windows 10.0.26200.9457. Neither is what RFCOMM does, so the tests that rest
+# on it say nothing there.
 _TCP_PAIR = pytest.mark.skipif(
     sys.platform == "win32", reason="Windows makes the socket pair from TCP"
 )

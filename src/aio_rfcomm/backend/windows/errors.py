@@ -5,13 +5,6 @@
 Turning what WinRT and Winsock report into our errors.
 """
 
-# Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded, unless a claim says it was made on
-# 2026-10-15. Those were made on Windows 10.0.26200.9457 (25H2), with
-# bthport.sys, bthenum.sys and bthusb.sys 10.0.26100.9444, and rfcomm.sys and
-# bthserv.dll 10.0.26100.9278. With any new one, record the same: Windows
-# updates the Bluetooth stack through servicing, apart from its own version.
-
 from __future__ import annotations
 
 from winrt.windows.devices.bluetooth import (
@@ -29,7 +22,8 @@ from aio_rfcomm.errors import (
 
 __all__ = ["translate_bluetooth_error", "translate_refusal"]
 
-# What a connect to a channel the device refuses fails with.
+# What a connect to a channel the device refuses fails with, on
+# Windows 10.0.26200.9457.
 _WSAEHOSTDOWN = 10064
 
 
@@ -65,12 +59,13 @@ def translate_refusal(error: OSError, address: str, channel: int) -> RfcommError
     Returns:
         The error to raise for a refusal, or ``None`` for anything else.
     """
-    # Measured on 2026-10-15 against a macOS 26.6.2 peer: a channel nothing
-    # listens on fails with WSAEHOSTDOWN as soon as the peer refuses it, while
-    # a device that is switched off, and an address never seen, time out with
-    # WSAETIMEDOUT. A link refused for authentication is not measured. Asking
-    # again is refused again, and Windows holds the next attempt on that
-    # device for about a minute, until its link to it has gone.
+    # Measured on Windows 10.0.26200.9457 against a macOS 26.6.2 peer: a
+    # channel nothing listens on fails with WSAEHOSTDOWN as soon as the peer
+    # refuses it, while a device that is switched off, and an address never
+    # seen, time out with WSAETIMEDOUT. A link refused for authentication is
+    # not measured. Asking again is refused again, and Windows holds the next
+    # attempt on that device for about a minute, until its link to it has
+    # gone.
     if getattr(error, "winerror", None) == _WSAEHOSTDOWN:
         return ServiceNotFoundError(
             f"{address} refused channel {channel}. Usually nothing there is "

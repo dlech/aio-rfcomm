@@ -18,13 +18,6 @@ to serve on (``BlueZBluetooth._reserve_channel``). Without it, both raise
 works, unchecked.
 """
 
-# Measurements cited in this module name the BlueZ they were made on, one of:
-# - BlueZ 5.72: Ubuntu 24.04, package 5.72-0ubuntu5.5, before 2026-10-05. The
-#   kernel was not recorded.
-# - BlueZ 5.85: Ubuntu 26.04.1, package 5.85-4ubuntu0.3 or later, on kernel
-#   7.0.0-38-generic.
-# The peer was a Mac on macOS 26.6.2 (25G83).
-
 import asyncio
 import errno
 import logging
@@ -221,14 +214,16 @@ class BlueZBluetooth(BackendBluetooth):
         Settle which channel to listen on before registering the profile.
 
         BlueZ neither picks a channel for a server nor complains when the one
-        it is given is already taken, so the choice has to be made and checked
-        here. An RFCOMM socket bound to the adapter's own address is refused
-        with ``EADDRINUSE`` when a profile already holds that channel, and
-        binding channel 0 has the kernel pick a free one -- so a socket, used
-        only as a probe and closed again at once, answers both questions.
+        it is given is already taken (BlueZ 5.72, and the second again on
+        5.85), so the choice has to be made and checked here. An RFCOMM socket
+        bound to the adapter's own address is refused with ``EADDRINUSE`` when
+        a profile already holds that channel, and binding channel 0 has the
+        kernel pick a free one (BlueZ 5.72 and 5.85) -- so a socket, used only
+        as a probe and closed again at once, answers both questions.
 
         Binding ``BDADDR_ANY`` instead would not: it succeeds on a channel a
-        profile holds, and so would report every channel free.
+        profile holds (BlueZ 5.72 and 5.85), and so would report every channel
+        free.
 
         Without a socket there is no probe and no safe guess, so the caller
         has to name a channel. See ``_unprobed_channel``.
@@ -261,8 +256,9 @@ class BlueZBluetooth(BackendBluetooth):
             try:
                 probe.bind((self.address, channel or 0))
                 # The kernel does not settle on a channel until the socket is
-                # listening, so binding channel 0 and reading the name back
-                # without this returns 0 rather than the channel it picked.
+                # listening (BlueZ 5.72 and 5.85), so binding channel 0 and
+                # reading the name back without this returns 0 rather than the
+                # channel it picked.
                 probe.listen(1)
             except OSError as error:
                 if error.errno == errno.EADDRINUSE:
@@ -286,9 +282,10 @@ class BlueZBluetooth(BackendBluetooth):
         have no ``AF_BLUETOOTH``, so on those nothing can be probed. A channel
         the caller named is taken at their word and used unchecked. Choosing
         one here is refused instead of guessed: BlueZ says nothing when a
-        registration lands on a channel another profile holds, so a wrong
-        guess would publish a service that simply never appears, which is
-        worse than saying up front that the choice cannot be made.
+        registration lands on a channel another profile holds (BlueZ 5.72,
+        and again on 5.85), so a wrong guess would publish a service that
+        simply never appears, which is worse than saying up front that the
+        choice cannot be made.
 
         Args:
             channel: The channel the caller asked for, or ``None`` for any.

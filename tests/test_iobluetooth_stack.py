@@ -12,12 +12,6 @@ the other, and the fake framework beneath that. Only spawning the helper is
 left out, since the child would not have the fake.
 """
 
-# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
-# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
-# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
-# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
-# peer name its version.
-
 import asyncio
 import socket
 import sys
@@ -135,8 +129,9 @@ async def test_a_peer_that_hangs_up_ends_the_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured against a peer that drops an idle connection: the channel is
-    reported closed while the link stays up, which is an orderly end.
+    Measured on macOS 26.6.2 against a peer that drops an idle connection: the
+    channel is reported closed while the link stays up, which is an orderly
+    end.
     """
     fake_framework(monkeypatch)
     async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
@@ -208,8 +203,9 @@ async def test_a_device_that_does_not_answer_is_reported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    The page is accepted and its timeout reported later, as a CoreBluetooth
-    error code. That has to arrive here as the device not answering.
+    On macOS 26.6.2, the page is accepted and its timeout reported later, as a
+    CoreBluetooth error code. That has to arrive here as the device not
+    answering.
     """
     fake_framework(monkeypatch, answers=False, connected=False)
     async with _stack() as bluetooth:
@@ -251,8 +247,8 @@ async def test_a_radio_switched_off_with_a_channel_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured on a clean toggle: the manager says powered off, and a
-    millisecond later the channel hears its link drop. The radio is why.
+    Measured on a clean toggle on macOS 26.6.2: the manager says powered off,
+    and a millisecond later the channel hears its link drop. The radio is why.
     """
     manager = fake_framework(monkeypatch)
     async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
@@ -292,15 +288,15 @@ async def test_an_open_the_helper_refuses_says_why(
 
 async def _restart(manager: FakeManager) -> None:
     await until_observed(manager)
-    # Measured when bluetoothd restarted on its way to powering off. Here it
-    # comes back on.
+    # Measured on macOS 26.6.2 when bluetoothd restarted on its way to
+    # powering off. Here it comes back on.
     change_state(manager, CBManagerState.RESETTING, CBManagerState.POWERED_ON)
 
 
 async def test_a_restart_brings_a_new_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    After bluetoothd restarts, every device object in the old helper stays
-    bound to the old daemon, so only a new helper recovers.
+    On macOS 26.6.2, after bluetoothd restarts, every device object in the old
+    helper stays bound to the old daemon, so only a new helper recovers.
     """
     manager = fake_framework(monkeypatch)
     helpers = _Helpers()
@@ -322,8 +318,8 @@ async def test_a_restart_ends_the_channels_it_killed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured: after a restart a channel is never told, and writes to it fail
-    quietly. It has to be ended from here.
+    Measured on macOS 26.6.2: after a restart a channel is never told, and
+    writes to it fail quietly. It has to be ended from here.
     """
     manager = fake_framework(monkeypatch)
     async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
@@ -363,8 +359,8 @@ async def test_a_first_helper_that_will_not_start_is_an_error() -> None:
 
 async def test_a_helper_refused_bluetooth_is_not_allowed() -> None:
     """
-    macOS ends a helper it will not let use Bluetooth, and would end a new one
-    the same way, so nothing is retried and the reason is reported.
+    macOS 26.6.2 ends a helper it will not let use Bluetooth, and would end a
+    new one the same way, so nothing is retried and the reason is reported.
     """
 
     @asynccontextmanager
@@ -470,7 +466,8 @@ async def test_each_service_has_a_helper_of_its_own_and_registers_once(
 ) -> None:
     """
     bluetoothd frees a registration only when the process that made it ends,
-    and a second from one process leaks the first's slot -- measured.
+    and a second from one process leaks the first's slot -- measured on macOS
+    26.6.2.
     """
     framework = fake_framework_parts(monkeypatch)
     helpers = _Helpers()

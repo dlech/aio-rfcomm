@@ -5,13 +5,6 @@
 Reading whether Bluetooth is usable, and following it as it changes.
 """
 
-# Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded, unless a claim says it was made on
-# 2026-10-15. Those were made on Windows 10.0.26200.9457 (25H2), with
-# bthport.sys, bthenum.sys and bthusb.sys 10.0.26100.9444, and rfcomm.sys and
-# bthserv.dll 10.0.26100.9278. With any new one, record the same: Windows
-# updates the Bluetooth stack through servicing, apart from its own version.
-
 from __future__ import annotations
 
 import asyncio
@@ -57,13 +50,13 @@ async def list_adapters() -> list[tuple[str, str | None, str | None]]:
         BluetoothAdapter.get_device_selector()
     ):
         # Opening each one is unavoidable, not laziness. Asking the listing
-        # for the address instead was tried and measured: on an adapter
-        # interface that property comes back empty, while other requested
-        # properties come back populated and the same property on a device
-        # interface gives the address -- so it is the adapter that does not
-        # carry it, not the request that is wrong. Whether the radio does
-        # Classic is only on the object either way. In practice there is one
-        # adapter, so this is one extra call.
+        # for the address instead was tried and measured on an unrecorded
+        # Windows version: on an adapter interface that property comes back
+        # empty, while other requested properties come back populated and the
+        # same property on a device interface gives the address -- so it is
+        # the adapter that does not carry it, not the request that is wrong.
+        # Whether the radio does Classic is only on the object either way. In
+        # practice there is one adapter, so this is one extra call.
         adapter = await BluetoothAdapter.from_id_async(info.id)
         if adapter is None or not adapter.is_classic_supported:
             continue

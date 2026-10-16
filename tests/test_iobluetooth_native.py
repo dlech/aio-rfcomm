@@ -10,12 +10,6 @@ A fake manager stands in for it: an ordinary Objective-C object with a
 key-value observable property, which is all the real one is from here.
 """
 
-# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
-# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
-# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
-# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
-# peer name its version.
-
 import asyncio
 import ctypes
 import os
@@ -188,7 +182,7 @@ async def test_a_refused_radio_does_not_look_switched_off(
     manager: FakeManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
-    macOS reports a radio this program may not use as switched off, and
+    macOS 26.6.2 reports a radio this program may not use as switched off, and
     telling someone to turn on Bluetooth that is already on helps nobody.
     """
     monkeypatch.setattr(
@@ -237,11 +231,11 @@ async def test_a_powered_on_in_the_middle_of_a_toggle_is_taken_at_face_value(
     manager: FakeManager,
 ) -> None:
     """
-    A radio switched off and on again was seen reporting resetting, then
-    powered on, then powered off, then powered on, all within four seconds.
-    Nothing here can tell that middle powered-on from a real one, and the
-    documented contract is that each value supersedes the last -- so it is
-    taken, and the one that matters is the state read by the next open.
+    On macOS 26.6.2, a radio switched off and on again was seen reporting
+    resetting, then powered on, then powered off, then powered on, all within
+    four seconds. Nothing here can tell that middle powered-on from a real one,
+    and the documented contract is that each value supersedes the last -- so it
+    is taken, and the one that matters is the state read by the next open.
     """
     manager.state = CBManagerState.RESETTING
     waiting = asyncio.ensure_future(native._wait_until_ready())
@@ -267,8 +261,9 @@ async def test_a_power_on_from_a_framework_thread_is_heard(
     manager: FakeManager,
 ) -> None:
     """
-    Measured at startup: the move to powered on arrived on a framework
-    thread, where nothing that belongs to the event loop may be touched.
+    Measured on macOS 26.6.2 at startup: the move to powered on arrived on a
+    framework thread, where nothing that belongs to the event loop may be
+    touched.
     """
     waiting = asyncio.ensure_future(native._wait_until_ready())
     await asyncio.sleep(SETTLE)
@@ -295,8 +290,8 @@ async def _reported(
 
 async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None:
     """
-    Measured on a clean toggle: powered on, then powered off, on a framework
-    thread.
+    Measured on a clean toggle on macOS 26.6.2: powered on, then powered off,
+    on a framework thread.
     """
     manager.state = CBManagerState.POWERED_ON
     reports: list[tuple[int, int]] = []
@@ -318,9 +313,10 @@ async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None
 
 async def test_a_restart_is_reported_state_by_state(manager: FakeManager) -> None:
     """
-    Measured when switching off restarted bluetoothd: resetting, a powered-on
-    from the restarted daemon, and only then powered off. What each means is
-    for the other side of the socket to decide, so all are passed on.
+    Measured on macOS 26.6.2 when switching off restarted bluetoothd:
+    resetting, a powered-on from the restarted daemon, and only then powered
+    off. What each means is for the other side of the socket to decide, so all
+    are passed on.
     """
     manager.state = CBManagerState.POWERED_ON
     reports: list[tuple[int, int]] = []
@@ -351,8 +347,8 @@ async def test_a_state_that_settles_unheard_is_still_reported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured in fresh processes: the first report said unknown, the state was
-    powered on half a second later, and nothing ever said so.
+    Measured on macOS 26.6.2 in fresh processes: the first report said unknown,
+    the state was powered on half a second later, and nothing ever said so.
     """
     settling = SettlingManager.alloc().init()
     monkeypatch.setattr(
@@ -526,8 +522,8 @@ async def test_an_address_that_is_not_one_is_refused(devices: None) -> None:
 
 async def test_a_second_channel_to_one_device_is_refused(devices: None) -> None:
     """
-    macOS closes channels in the order they were opened rather than the one
-    asked for, so holding two to a device loses both.
+    macOS 26.6.2 closes channels in the order they were opened rather than the
+    one asked for, so holding two to a device loses both.
     """
     native._in_use.add(ADDRESS.upper())
     with pytest.raises(UnsupportedOperationError, match="already has"):
@@ -666,9 +662,9 @@ class RefusingDevice(FlakyDevice):
     """
     A device whose every open bluetoothd fails, without telling the delegate.
 
-    Measured against BlueZ 5.85, for a channel nothing listens on: bluetoothd
-    reports result 913 for each attempt, within a second of it, and neither
-    delegate method is ever called.
+    Measured on macOS 26.6.2 against BlueZ 5.85, for a channel nothing listens
+    on: bluetoothd reports result 913 for each attempt, within a second of it,
+    and neither delegate method is ever called.
 
     Args:
         result: What bluetoothd reports.
@@ -736,7 +732,8 @@ class _Peer(NSObject):
 
 def _peer() -> NSObject:
     peer = _Peer.alloc().init()
-    # As measured: CBClassicPeer writes the address upper case with colons.
+    # As measured on macOS 26.6.2: CBClassicPeer writes the address upper case
+    # with colons.
     cast(Any, peer).addressString = "00:1A:7D:DA:71:0C"
     return peer
 
@@ -776,8 +773,9 @@ async def test_a_value_of_another_type_is_left_unread(quick: None) -> None:
 
 def test_the_daemon_s_report_is_read_off_the_main_thread() -> None:
     """
-    Measured: the framework calls the hook on a thread of its own, where
-    rubicon racing the main thread to load a class's methods ended a helper.
+    Measured on macOS 26.6.2: the framework calls the hook on a thread of its
+    own, where rubicon racing the main thread to load a class's methods ended a
+    helper.
     """
     peer = _peer()
     info = cast(
@@ -939,7 +937,8 @@ async def test_bytes_read_out_at_close_arrive_before_the_end() -> None:
 
 def test_the_null_device_a_failed_open_leaves_is_closed() -> None:
     """
-    Measured: one /dev/null descriptor left open per refused channel.
+    Measured on macOS 26.6.2: one /dev/null descriptor left open per refused
+    channel.
     """
     descriptor = os.open(os.devnull, os.O_RDONLY)
     native._close_unclaimed_socket(_failed_open(913, descriptor))
@@ -997,9 +996,9 @@ async def test_a_radio_switched_off_after_a_connection_is_reported(
     devices: None, quick: None, manager: FakeManager
 ) -> None:
     """
-    The radio can go while a program is holding an adapter, and on macOS
-    nothing reports that on its own -- so the state is read again at every
-    open rather than settled once and assumed.
+    The radio can go while a program is holding an adapter, and on macOS 26.6.2
+    nothing reports that on its own -- so the state is read again at every open
+    rather than settled once and assumed.
     """
     async with native.open_channel(ADDRESS, channel=4):
         pass
@@ -1056,9 +1055,9 @@ async def test_one_registration_is_made_and_it_reaches_the_listener(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured: given a string, the selector stored is its first letter, and
-    every channel is silently let go -- so the registration has to be one the
-    listener really answers.
+    Measured on macOS 26.6.2: given a string, the selector stored is its first
+    letter, and every channel is silently let go -- so the registration has to
+    be one the listener really answers.
     """
     framework = fake_framework_parts(monkeypatch)
     async with native.serve(SERVICE, name="chat", channel=None) as service:
@@ -1082,7 +1081,8 @@ async def test_registering_waits_until_the_manager_is_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Measured: made before the manager is ready, a registration is never sent.
+    Measured on macOS 26.6.2: made before the manager is ready, a registration
+    is never sent.
     """
     framework = fake_framework_parts(monkeypatch, state=CBManagerState.UNKNOWN)
     serving = asyncio.ensure_future(native.serve(SERVICE, name="chat").__aenter__())
@@ -1099,7 +1099,8 @@ async def test_registering_waits_until_the_manager_is_ready(
     [
         ([1, 8], 30),
         ([1, 8, 30], 29),
-        # Never 15 or 10, which bluetoothd does not register with its stack.
+        # Never 15 or 10, which bluetoothd on macOS 26.6.2 does not register
+        # with its stack.
         ([*range(16, 31), 11, 12, 13, 14], 9),
     ],
 )
@@ -1125,8 +1126,9 @@ async def test_a_withdrawn_service_lets_new_channels_go(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Unregistering only stops this process listening. bluetoothd still takes
-    the channel, and the framework, with nobody to give it to, closes it.
+    On macOS 26.6.2, unregistering only stops this process listening.
+    bluetoothd still takes the channel, and the framework, with nobody to give
+    it to, closes it.
     """
     framework = fake_framework_parts(monkeypatch)
     async with native.serve(SERVICE, name="chat") as service:
@@ -1150,7 +1152,8 @@ async def test_a_channel_served_before_is_never_chosen_again(
 ) -> None:
     """
     Its record cannot be withdrawn, and a later registration on it may take a
-    connection bluetoothd kept from before instead of listening -- measured.
+    connection bluetoothd kept from before instead of listening -- measured on
+    macOS 26.6.2.
     """
     framework = fake_framework_parts(monkeypatch)
     async with native.serve(SERVICE, name="chat") as first:

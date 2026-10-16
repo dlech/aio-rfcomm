@@ -16,15 +16,9 @@ default on Windows and its ``sock_connect`` goes through ``ConnectEx``, which
 only understands IP addresses -- so connecting happens on a worker thread and
 only the finished socket is handed to asyncio, whose overlapped I/O does not
 care what family it is. And connecting is flaky in a way that is not an error:
-it fails and then succeeds with nothing changed, so it is retried.
+on an unrecorded Windows version it fails and then succeeds with nothing
+changed, so it is retried.
 """
-
-# Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded, unless a claim says it was made on
-# 2026-10-15. Those were made on Windows 10.0.26200.9457 (25H2), with
-# bthport.sys, bthenum.sys and bthusb.sys 10.0.26100.9444, and rfcomm.sys and
-# bthserv.dll 10.0.26100.9278. With any new one, record the same: Windows
-# updates the Bluetooth stack through servicing, apart from its own version.
 
 from __future__ import annotations
 
@@ -120,7 +114,8 @@ def _deregister(service: UUID, name: str, channel: int) -> None:
     if failure:
         # Not raised: Windows drops the record when the process exits anyway,
         # and the delete is refused even for a query set that registered
-        # cleanly. Worth a line in the log and nothing more.
+        # cleanly, on an unrecorded Windows version. Worth a line in the log
+        # and nothing more.
         logger.debug("WSASetService would not withdraw %s: error %d", service, failure)
 
 
@@ -233,10 +228,10 @@ class WindowsBluetooth(BackendBluetooth):
         Listen on a channel and advertise it.
 
         Binding answers which channels are free, which is the part BlueZ
-        cannot do: a channel another program holds is refused with
-        ``WSAEADDRINUSE`` rather than quietly accepted. Binding channel zero
-        does not pick one, though -- the socket stays on zero -- so a free
-        channel is found by trying them.
+        cannot do: on an unrecorded Windows version, a channel another program
+        holds is refused with ``WSAEADDRINUSE`` rather than quietly accepted.
+        Binding channel zero does not pick one, though -- the socket stays on
+        zero -- so a free channel is found by trying them.
         """
         async with AsyncExitStack() as stack:
             sock = socket.socket(
@@ -333,9 +328,9 @@ class WindowsBackend(BackendProvider):
 
         bluetooth = WindowsBluetooth(None)
         # Adapters arriving and leaving, which is only documented. Switching
-        # the radio off is not one: measured on 2026-10-15, the adapter stays
-        # and the watcher says nothing, while the radio reports StateChanged
-        # within 50 ms.
+        # the radio off is not one: measured on Windows 10.0.26200.9457, the
+        # adapter stays and the watcher says nothing, while the radio reports
+        # StateChanged within 50 ms.
         watcher = DeviceInformation.create_watcher_aqs_filter(
             BluetoothAdapter.get_device_selector()
         )

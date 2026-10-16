@@ -9,13 +9,6 @@ both happen on threads of their own, and only the finished socket is handed
 to asyncio.
 """
 
-# Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded, unless a claim says it was made on
-# 2026-10-15. Those were made on Windows 10.0.26200.9457 (25H2), with
-# bthport.sys, bthenum.sys and bthusb.sys 10.0.26100.9444, and rfcomm.sys and
-# bthserv.dll 10.0.26100.9278. With any new one, record the same: Windows
-# updates the Bluetooth stack through servicing, apart from its own version.
-
 from __future__ import annotations
 
 import asyncio
@@ -53,10 +46,11 @@ logger = logging.getLogger(__name__)
 
 
 # Connecting is retried because it fails without anything being wrong: a run
-# that eventually succeeded took four attempts, the first three timing out.
-# These are not a limit on how long a caller may wait -- that is the caller's
-# to decide with a cancel scope -- but the point at which retrying stops
-# looking like flakiness and starts looking like a device that is not there.
+# on an unrecorded Windows version that eventually succeeded took four
+# attempts, the first three timing out. These are not a limit on how long a
+# caller may wait -- that is the caller's to decide with a cancel scope -- but
+# the point at which retrying stops looking like flakiness and starts looking
+# like a device that is not there.
 _ATTEMPTS = 4
 
 _BACKOFF_SECONDS = 0.5
@@ -330,11 +324,12 @@ class WindowsService(BackendService):
         ``ProactorEventLoop`` cannot accept an RFCOMM connection at all:
         asyncio builds the socket to accept onto with ``socket.socket(family)``
         and no protocol, which ``AF_BLUETOOTH`` rejects with
-        ``WSAEPROTONOSUPPORT``. ``asyncio.start_server`` fails the same way,
-        only later and into the loop's exception handler. So the blocking
-        accept runs on a daemon thread, the same shape the outgoing connect
-        uses and for the same reasons (see ``_reach``). The accepted
-        socket then works with overlapped I/O like any other.
+        ``WSAEPROTONOSUPPORT`` on an unrecorded Windows version.
+        ``asyncio.start_server`` fails the same way, only later and into the
+        loop's exception handler. So the blocking accept runs on a daemon
+        thread, the same shape the outgoing connect uses and for the same
+        reasons (see ``_reach``). The accepted socket then works with
+        overlapped I/O like any other.
         """
         loop = asyncio.get_running_loop()
         arrived: asyncio.Future[tuple[socket.socket, str]] = loop.create_future()

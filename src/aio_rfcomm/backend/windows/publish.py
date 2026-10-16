@@ -14,15 +14,10 @@ them is that ``SOCKADDR_BTH`` is **packed**. Windows declares it without
 padding, so it is thirty bytes and ``port`` sits at offset 26. Left to
 ctypes' natural alignment it becomes forty bytes with ``port`` at 32, Windows
 reads the four bytes at 26 -- the tail of ``serviceClassId`` -- and publishes
-a record advertising a channel nobody is listening on. Measured: a service on
-channel 25 was advertised as channel 161.
+a record advertising a channel nobody is listening on. Measured on an
+unrecorded Windows version: a service on channel 25 was advertised as
+channel 161.
 """
-
-# Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded. With any new one, record the Windows
-# version and build and the file versions of the Bluetooth stack: bthport.sys,
-# rfcomm.sys, bthenum.sys, bthusb.sys and bthserv.dll, which Windows updates
-# through servicing, apart from its own version.
 
 from __future__ import annotations
 
@@ -174,7 +169,8 @@ def delete(service: uuid.UUID, name: str, channel: int) -> int:
     Failure is reported rather than raised, because it does not matter much:
     Windows removes the record when the process exits regardless, and the
     delete is refused with ``WSAEINVAL`` even when the same query set
-    registered successfully -- measured, and the record still disappeared.
+    registered successfully -- measured on an unrecorded Windows version, and
+    the record still disappeared.
 
     Args:
         service: The service UUID.

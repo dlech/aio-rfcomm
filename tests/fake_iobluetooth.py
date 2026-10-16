@@ -15,12 +15,6 @@ macOS only: the manager is a real Objective-C object, so key-value observing
 it is the real thing too.
 """
 
-# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
-# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
-# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
-# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
-# peer name its version.
-
 import asyncio
 import ctypes
 import threading
@@ -75,10 +69,10 @@ class SettlingManager(FakeManager):
     A stand-in for ``CBClassicManager`` in a process that has only just
     reached it.
 
-    Measured in fresh processes: the state reads 0 when an observer is added,
-    settles on powered on as it is, and no notification ever reports the
-    change. Reproduced by settling once the registration is done, without
-    going through the setter that would notify.
+    Measured on macOS 26.6.2 in fresh processes: the state reads 0 when an
+    observer is added, settles on powered on as it is, and no notification ever
+    reports the change. Reproduced by settling once the registration is done,
+    without going through the setter that would notify.
     """
 
     @objc_method
@@ -107,10 +101,10 @@ def change_state(manager: FakeManager, *states: int) -> None:
     Move the manager through states the way the framework does: from a thread
     of its own.
 
-    Measured across real toggles: every transition was delivered to the
-    observer on a framework thread, never on the main one. Key-value observing
-    notifies on the thread that sets the property, so setting it from another
-    thread reproduces that.
+    Measured on macOS 26.6.2 across real toggles: every transition was
+    delivered to the observer on a framework thread, never on the main one.
+    Key-value observing notifies on the thread that sets the property, so
+    setting it from another thread reproduces that.
 
     The loop's own thread check is turned on as well. Here the loop's thread
     is only waiting for this one to finish and picks up a careless call on its
@@ -188,12 +182,14 @@ class FakeChannel:
     """
     An ``IOBluetoothRFCOMMChannel`` that opens, carries bytes and closes.
 
-    Measured: the open completes about 80 ms after it is asked for, a write
-    completes within a millisecond with every byte written, and a close is
-    reported 33 ms after ``closeChannel`` returns. All on the main thread.
+    Measured on macOS 26.6.2: the open completes about 80 ms after it is asked
+    for, a write completes within a millisecond with every byte written, and a
+    close is reported 33 ms after ``closeChannel`` returns. All on the main
+    thread.
     """
 
-    # What getMTU returned while the open was pending, and once it completed.
+    # What getMTU returned on macOS 26.6.2 while the open was pending, and once
+    # it completed.
     PENDING_MTU = 672
     OPEN_MTU = 667
 
@@ -259,8 +255,8 @@ class FakeDevice:
     """
     An ``IOBluetoothDevice``, one per address for the life of the process.
 
-    The framework keeps every device it makes in a table it never empties, so
-    asking for an address twice gives the same object back.
+    On macOS 26.6.2, the framework keeps every device it makes in a table it
+    never empties, so asking for an address twice gives the same object back.
     """
 
     def __init__(self, address: str, connected: bool, answers: bool) -> None:
@@ -273,10 +269,10 @@ class FakeDevice:
         return self.connected
 
     def openConnection(self, target: object, /) -> int:
-        # Success either way. An unanswered page is reported later, through
-        # the target, as a CoreBluetooth error code rather than an IOKit
-        # status: measured as "Inform delegate connectionComplete: 10" 15.4 s
-        # after the call returned. The controller said Page Timeout.
+        # Success either way. An unanswered page is reported later, through the
+        # target, as a CoreBluetooth error code rather than an IOKit status:
+        # measured on macOS 26.6.2 as "Inform delegate connectionComplete: 10"
+        # 15.4 s after the call returned. The controller said Page Timeout.
         status = 0 if self.answers else CBError.CONNECTION_FAILED
         if self.answers:
             self.connected = True
@@ -356,8 +352,8 @@ class FakeIncomingChannel(NSObject):
     An ``IOBluetoothRFCOMMChannel`` a peer opened, handed over open and with
     no delegate.
 
-    A real object, since the framework passes it through Objective-C. Measured:
-    the open is reported complete once a delegate is set.
+    A real object, since the framework passes it through Objective-C. Measured
+    on macOS 26.6.2: the open is reported complete once a delegate is set.
     """
 
     inner: FakeChannel
@@ -400,8 +396,8 @@ class FakeNotification:
     """
     What registering for open notifications hands back.
 
-    Measured from the disassembly: unregistering only stops this process
-    listening, and never reaches bluetoothd.
+    Measured from the disassembly of macOS 26.6.2: unregistering only stops
+    this process listening, and never reaches bluetoothd.
     """
 
     def __init__(self, observer: ObjCInstance, selector: SEL, number: int) -> None:
@@ -441,11 +437,12 @@ class FakeChannelClass:
         withChannelID: int,
         direction: int,
     ) -> FakeNotification:
-        # Measured: a string is stored as a selector of its first letter.
+        # Measured on macOS 26.6.2: a string is stored as a selector of its
+        # first letter.
         chosen = selector if isinstance(selector, SEL) else SEL(str(selector)[0])
         notification = FakeNotification(observer, chosen, withChannelID)
-        # Measured: registered for any direction, or before the manager is
-        # ready, it never reaches bluetoothd at all.
+        # Measured on macOS 26.6.2: registered for any direction, or before the
+        # manager is ready, it never reaches bluetoothd at all.
         if direction == 1 and self.manager.state == CBManagerState.POWERED_ON:
             self.registrations.append(notification)
         return notification
@@ -456,15 +453,15 @@ class FakeChannelClass:
         """
         A peer opens a channel to this Mac.
 
-        bluetoothd holds one registration per process, the latest, and the
-        framework hands the channel over on the main queue -- or, with nobody
-        there to take it, lets it go, which closes it.
+        On macOS 26.6.2, bluetoothd holds one registration per process, the
+        latest, and the framework hands the channel over on the main queue --
+        or, with nobody there to take it, lets it go, which closes it.
 
         Returns:
             The channel, as the framework sees it.
         """
         device = FakeDeviceObject.alloc().init()
-        # As IOBluetooth writes a device's address.
+        # As IOBluetooth on macOS 26.6.2 writes a device's address.
         cast(Any, device).addressString = address.replace(":", "-").lower()
         cast(Any, device).name = "fake peer"
         device.connected = True
@@ -509,8 +506,9 @@ class FakePublished:
         self.withdrawn = False
 
     def removeServiceRecord(self) -> int:
-        # Asked, and refused: measured, bluetoothd answers every removal
-        # OI_STATUS_INVALID_HANDLE and goes on advertising the record.
+        # Asked, and refused: measured on macOS 26.6.2, bluetoothd answers
+        # every removal OI_STATUS_INVALID_HANDLE and goes on advertising the
+        # record.
         self.withdrawn = True
         return 0
 
@@ -525,7 +523,8 @@ class FakeLocalRecord:
 
     def getRFCOMMChannelID(self, out: object, /) -> int:
         if self.number is None:
-            # What a record that is not an RFCOMM service returned, measured.
+            # What a record that is not an RFCOMM service returned, measured on
+            # macOS 26.6.2.
             return -536870160
         out._obj.value = bytes([self.number])  # type: ignore[attr-defined]
         return 0
@@ -538,7 +537,8 @@ class FakeDeviceManager:
     """
 
     def __init__(self, in_use: list[int]) -> None:
-        # Measured on this Mac: ten local records, two on RFCOMM channels.
+        # Measured on this Mac, on macOS 26.6.2: ten local records, two on
+        # RFCOMM channels.
         self.records = [FakeLocalRecord(n) for n in in_use] + [
             FakeLocalRecord(None)
         ] * 8

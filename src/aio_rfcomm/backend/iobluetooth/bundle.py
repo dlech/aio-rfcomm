@@ -19,23 +19,17 @@ because the bundle's identity comes from the main executable's own path. A
 process that execs its way out of the bundle loses the ``Info.plist`` along
 with it.
 
-The bundle is not code signed. That was measured rather than assumed: a
-disclaimed spawn from an unsigned bundle is granted Bluetooth exactly as a
-signed one is. Signing would mean depending on ``codesign``, which needs the
-Xcode command line tools, for no benefit.
+The bundle is not code signed. That was measured on macOS 26.6.2 rather than
+assumed: a disclaimed spawn from an unsigned bundle is granted Bluetooth
+exactly as a signed one is. Signing would mean depending on ``codesign``, which
+needs the Xcode command line tools, for no benefit.
 """
 
-# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
-# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
-# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
-# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
-# peer name its version.
-#
 # tccd forgives a missing usage description in an application linked against
-# an old SDK, and asks with generic wording instead. It did for PyInstaller
-# 6.22.3 (SDK 12.1) and py2app 0.28.10 (SDK 11.3) launchers, and aborted
-# Claude Code (SDK 26.5). Where the cutoff lies was not established, so the
-# key is treated as required.
+# an old SDK, and asks with generic wording instead. On macOS 26.6.2 it did
+# for PyInstaller 6.22.3 (SDK 12.1) and py2app 0.28.10 (SDK 11.3) launchers,
+# and aborted Claude Code (SDK 26.5). Where the cutoff lies was not
+# established, so the key is treated as required.
 
 from __future__ import annotations
 
@@ -122,8 +116,9 @@ def _assemble(app: Path, interpreter: Path, name: str, reason: str) -> None:
 
     # PyInstaller's launcher, run from inside a bundle, looks for its files in
     # Contents/Frameworks. A command line build keeps them in _internal beside
-    # it instead, and sys._MEIPASS says where they are either way. Measured
-    # with PyInstaller 6.22.3: the copied launcher could not load Python.
+    # it instead, and sys._MEIPASS says where they are either way. Measured on
+    # macOS 26.6.2 with PyInstaller 6.22.3: the copied launcher could not load
+    # Python.
     frozen = getattr(sys, "_MEIPASS", None)
     frameworks = app / "Contents" / "Frameworks"
 

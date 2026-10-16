@@ -5,9 +5,9 @@
 The IOBluetooth layer, as thin a wrapper as the framework allows.
 
 Everything here must run on the main thread of a process whose event loop is
-backed by a CFRunLoop. That is not a style preference: an asynchronous
-IOBluetooth call made from anywhere else returns success and then never
-completes, and ``openRFCOMMChannelSync`` is refused outright. The helper
+backed by a CFRunLoop. That is not a style preference: on macOS 26.6.2 an
+asynchronous IOBluetooth call made from anywhere else returns success and then
+never completes, and ``openRFCOMMChannelSync`` is refused outright. The helper
 process exists to provide such a thread. Nothing in this module arranges one.
 
 This module knows nothing about the helper or its control protocol, so the
@@ -20,12 +20,6 @@ thread.
 # each one's Objective-C type encoding, and under PEP 563 an annotation is
 # stored as its own source text rather than the object, so a callback would
 # be given the wrong signature and read rubbish off the stack.
-
-# Measurements cited in this module were made on macOS 26.6.2 (25G83), with a
-# BCM_4387 controller on firmware 23.5.636.5345, unless a claim says otherwise.
-# The peers were a Linux machine, on BlueZ 5.72 until 2026-10-05 and BlueZ 5.85
-# after, and a Pybricks EV3 on firmware 4.1.0b5. Claims that depend on the
-# peer name its version.
 
 import asyncio
 import ctypes
@@ -312,22 +306,23 @@ _POWER_ON = 1
 _CLOSE_TIMEOUT = 5.0
 
 # How many times to ask for a channel whose predecessor is still going away,
-# and how long to leave between asks. Measured: a reconnect straight after a
-# close needs exactly one wait, so this is twenty times what the framework
-# actually takes. It is not a guess at how long an operation should be
-# allowed -- that is the caller's to decide -- but the point at which a local
-# quirk stops looking like settling and starts looking like a framework that
-# is wedged, which is worth saying out loud rather than waiting on for ever.
+# and how long to leave between asks. Measured on macOS 26.6.2: a reconnect
+# straight after a close needs exactly one wait, so this is twenty times what
+# the framework actually takes. It is not a guess at how long an operation
+# should be allowed -- that is the caller's to decide -- but the point at
+# which a local quirk stops looking like settling and starts looking like a
+# framework that is wedged, which is worth saying out loud rather than waiting
+# on for ever.
 _OPEN_ATTEMPTS = 20
 _SETTLE_SECONDS = 0.1
 
 # How long to let a channel open go unreported before asking for it again, and
 # how many times to ask. macOS fails some opens internally -- a nil channel
 # with a zero status -- and then tells nobody, so silence is the only symptom
-# and no state distinguishes it from an open still in progress. Measured over
-# 64 successful opens: 58 to 498 ms, so this is twice the slowest. Asking
-# again costs nothing on the air: an open that did land leaves the channel
-# where the framework finds it and hands it straight back.
+# and no state distinguishes it from an open still in progress. Measured on
+# macOS 26.6.2 over 64 successful opens: 58 to 498 ms, so this is twice the
+# slowest. Asking again costs nothing on the air: an open that did land leaves
+# the channel where the framework finds it and hands it straight back.
 _OPEN_REPORT_SECONDS = 1.0
 _OPEN_REPORT_ATTEMPTS = 4
 
@@ -348,9 +343,9 @@ _OBSERVE_INITIAL = 1 | 4
 # last channel tears down the RFCOMM session, and the L2CAP link underneath it
 # goes about thirty milliseconds after the close is reported finished. An open
 # issued inside that window is handed the dying link and fails as a nil channel
-# with a zero status, reported to nobody. Measured swallowed at 25 ms and never
-# at 50, so twice that. A deadline rather than a delay: a caller that did
-# anything at all in between waits for none of it.
+# with a zero status, reported to nobody. Measured on macOS 26.6.2: swallowed
+# at 25 ms and never at 50, so twice that. A deadline rather than a delay: a
+# caller that did anything at all in between waits for none of it.
 _RELINK_SECONDS = 0.1
 
 # A write's refcon is the address of the object holding its future, and that
@@ -455,10 +450,11 @@ async def _wait_until_ready() -> None:
     Wait for CoreBluetooth to settle, and object if it settled unusably.
 
     CoreBluetooth discards every command until its manager reaches the
-    powered-on state, and IOBluetooth issues ours without waiting: for the
-    first tens of milliseconds of a process an open is dropped, logged only as
-    "API MISUSE", and never reported. Nothing bounds the wait, because a
-    manager that never settles is one no open would have worked on either.
+    powered-on state, and IOBluetooth issues ours without waiting: on macOS
+    26.6.2, for the first tens of milliseconds of a process an open is
+    dropped, logged only as "API MISUSE", and never reported. Nothing bounds
+    the wait, because a manager that never settles is one no open would have
+    worked on either.
 
     Returns without waiting if the manager cannot be reached at all, since a
     macOS that does not have it is one this can say nothing about.
@@ -506,7 +502,8 @@ async def _wait_until_settled(manager: _Manager) -> None:
     back to being provisional -- the radio being switched off and on again
     passes through resetting -- and because it costs nothing when it has not:
     an observer registered with the initial option is told the current value
-    before ``addObserver`` returns, measured at 50 to 800 microseconds.
+    before ``addObserver`` returns, measured on macOS 26.6.2 at 50 to 800
+    microseconds.
 
     Args:
         manager: The classic manager.
@@ -518,10 +515,10 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
     """
     Report the manager's state now, and again on every change.
 
-    IOBluetooth was not seen to report the radio any other way: a channel
-    open at the time hears its link drop, and that was all. Measured across a
-    real toggle: the manager goes from powered on to powered off, on a
-    framework thread, about a millisecond before the channel is told.
+    IOBluetooth was not seen to report the radio any other way on macOS
+    26.6.2: a channel open at the time hears its link drop, and that was all.
+    Measured across a real toggle: the manager goes from powered on to powered
+    off, on a framework thread, about a millisecond before the channel is told.
 
     Every value is reported, the temporary ones included. What they mean is
     for the caller to decide.
@@ -559,15 +556,16 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
         reporter, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
     )
     try:
-        # Measured in a fresh process: the state settles while the observer is
-        # being added, after the initial notification has read it and before
-        # the observer hears of changes, so nothing reports it. Read again now
-        # that the observer is in place, queued behind that notification.
+        # Measured on macOS 26.6.2 in a fresh process: the state settles while
+        # the observer is being added, after the initial notification has read
+        # it and before the observer hears of changes, so nothing reports it.
+        # Read again now that the observer is in place, queued behind that
+        # notification.
         asyncio.get_running_loop().call_soon(once, manager.state, read_authorization())
 
         # Unknown is documented as temporary with an update to follow, but in
-        # a fresh process the update was measured going unreported. So while
-        # it is unknown, look again.
+        # a fresh process on macOS 26.6.2 the update was measured going
+        # unreported. So while it is unknown, look again.
         await asyncio.sleep(0)
         while last is not None and last[0] == CBManagerState.UNKNOWN:
             await asyncio.sleep(_UNKNOWN_POLL_SECONDS)
@@ -615,10 +613,11 @@ def _unusable(state: int) -> RfcommError:
     """
     match state:
         case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED:
-            # Both, because macOS reports a radio this program may not use as
-            # switched off -- so telling someone to turn Bluetooth on would
-            # send them to a switch that is already on. The authorization is
-            # what separates the two, as it does in the reported availability.
+            # Both, because macOS 26.6.2 reports a radio this program may not
+            # use as switched off -- so telling someone to turn Bluetooth on
+            # would send them to a switch that is already on. The authorization
+            # is what separates the two, as it does in the reported
+            # availability.
             if read_authorization() == CBManagerAuthorization.ALLOWED_ALWAYS:
                 return BluetoothUnavailableError(
                     Availability.SWITCHED_OFF,
@@ -739,11 +738,11 @@ class _ConnectionComplete(NSObject):
         if self.future.done():
             return
         if status:
-            # Not the IOKit status the header promises but CoreBluetooth's
-            # error code: the daemon's result made into an NSError, of which
-            # only the code is passed on. An unanswered page arrives as
-            # CONNECTION_FAILED, which mach_error_string renders as nonsense,
-            # so it is reported as the timeout it really is.
+            # On macOS 26.6.2, not the IOKit status the header promises but
+            # CoreBluetooth's error code: the daemon's result made into an
+            # NSError, of which only the code is passed on. An unanswered page
+            # arrives as CONNECTION_FAILED, which mach_error_string renders as
+            # nonsense, so it is reported as the timeout it really is.
             raise_as = (
                 IOReturn.TIMEOUT if status == CBError.CONNECTION_FAILED else status
             )
@@ -894,10 +893,10 @@ def read_authorization() -> int:
     """
     Read whether this process may use Bluetooth at all.
 
-    macOS reports an unauthorised radio as switched off, so without this a
-    program whose permission was never granted -- or was refused -- is told
-    to turn Bluetooth on, which it already is. Reading this neither prompts
-    nor touches the radio.
+    macOS 26.6.2 reports an unauthorized radio as switched off, so without this
+    a program whose permission was never granted -- or was refused -- is told
+    to turn Bluetooth on, which it already is. Reading this neither prompts nor
+    touches the radio.
 
     Returns:
         A ``CBManagerAuthorization``. rubicon hands ``NSInteger`` back as a
@@ -941,8 +940,8 @@ def list_known_devices(
         if wanted and not any(device.getServiceRecordForUUID(u) for u in wanted):
             continue
         address = _normalise(str(device.addressString))
-        # macOS lists some devices twice. Measured rather than guessed at:
-        # pairedDevices() returned thirteen entries holding twelve distinct
+        # macOS 26.6.2 lists some devices twice. Measured rather than guessed
+        # at: pairedDevices() returned thirteen entries holding twelve distinct
         # objects, with one device's object appearing at two non-adjacent
         # positions. The two entries are the same object, so there is nothing
         # to tell them apart and nothing to choose between them -- only a
@@ -1105,9 +1104,9 @@ class Channel:
         reference back by autoreleasing it, and an autorelease with no pool
         in place is never actually carried out. The channel would stay alive,
         stay open, and be handed back the next time one is asked for on this
-        number, complete with the previous caller's stream. Dropping the
-        wrapper inside a pool is what makes the release happen, and this
-        object being the only thing holding the channel is what makes
+        number, complete with the previous caller's stream, on macOS 26.6.2.
+        Dropping the wrapper inside a pool is what makes the release happen,
+        and this object being the only thing holding the channel is what makes
         dropping it enough.
 
         Calling this twice is harmless. The channel is unusable afterwards.
@@ -1164,7 +1163,7 @@ async def open_channel(
 
     # Before anything else touches the framework. That is the discipline
     # CoreBluetooth asks of its own callers, and reaching for a device first
-    # measurably delays the manager coming up.
+    # measurably delays the manager coming up on macOS 26.6.2.
     await _wait_until_ready()
 
     device = IOBluetoothDevice.deviceWithAddressString(address)
@@ -1180,15 +1179,15 @@ async def open_channel(
     # has only one of. And closing is serviced in the order channels were
     # opened rather than the one asked for, so with two open, closing either
     # tears down the wrong one and writes to the other go nowhere -- measured
-    # against a peer listening on three channels: asked to close 6, then 5,
-    # then 4, and 4, 5, 6 closed in that order, with the right number on the
-    # wire each time.
+    # on macOS 26.6.2 against a peer listening on three channels: asked to
+    # close 6, then 5, then 4, and 4, 5, 6 closed in that order, with the
+    # right number on the wire each time.
     #
     # All three are per device. Two devices at once share nothing: measured
-    # with channels open to two at the same time, neither the channels, the
-    # delegates nor the data crossed, and both closes were reported. So this
-    # is claimed per address, and before the first await, so that two callers
-    # racing here cannot both pass.
+    # on macOS 26.6.2 with channels open to two at the same time, neither the
+    # channels, the delegates nor the data crossed, and both closes were
+    # reported. So this is claimed per address, and before the first await, so
+    # that two callers racing here cannot both pass.
     key = address.upper()
     if key in _in_use:
         raise UnsupportedOperationError(
@@ -1248,9 +1247,9 @@ _HandleOpened = ctypes.CFUNCTYPE(
 
 # The hook runs on a framework thread, where rubicon is not safe to use: it
 # loads a class's methods on first use, and two threads doing so at once raise
-# -- measured, as a helper that failed to make a channel's delegate while the
-# hook read an incoming channel's result. So the hook reads with plain message
-# sends, and its keys are made here, on the main thread.
+# -- measured on macOS 26.6.2, as a helper that failed to make a channel's
+# delegate while the hook read an incoming channel's result. So the hook reads
+# with plain message sends, and its keys are made here, on the main thread.
 _send_with_object = ctypes.CFUNCTYPE(
     ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
 )(("objc_msgSend", _objc))
@@ -1356,8 +1355,8 @@ def _describe_result(result: int) -> str:
         result: A ``kCBMsgArgResult`` other than 0.
 
     Returns:
-        CoreBluetooth's own description, which for most results is only
-        "Unknown error."
+        CoreBluetooth's own description, which for most results on macOS
+        26.6.2 is only "Unknown error."
     """
     # A private category, so a macOS without it costs only the description.
     try:
@@ -1396,8 +1395,9 @@ def _close_unclaimed_socket(opened: _OpenResult) -> None:
 
     # CoreBluetooth duplicates each descriptor bluetoothd sends, and only the
     # channel object made for a success closes it. A failure carries
-    # bluetoothd's descriptor 0, /dev/null: measured, one leaked per refused
-    # open. Only /dev/null is closed, so a real socket never is.
+    # bluetoothd's descriptor 0, /dev/null: measured on macOS 26.6.2, one
+    # leaked per refused open. Only /dev/null is closed, so a real socket never
+    # is.
     if _is_null_device(opened.socket):
         os.close(opened.socket)
 
@@ -1414,11 +1414,11 @@ def hear_open_results() -> None:
     """
     Keep bluetoothd's result for each channel open, which nothing else sees.
 
-    ``-[CBClassicPeer handleRFCOMMChannelOpened:]`` turns the daemon's result
-    into an ``NSError`` and passes IOBluetooth only its code, which is 0 for
-    any result CoreBluetooth has no name for -- a refused channel among them
-    (follow-ups §13.6). So the method is wrapped, in this process only, to
-    note the result first and then do exactly what it did.
+    On macOS 26.6.2, ``-[CBClassicPeer handleRFCOMMChannelOpened:]`` turns
+    the daemon's result into an ``NSError`` and passes IOBluetooth only its
+    code, which is 0 for any result CoreBluetooth has no name for -- a refused
+    channel among them (follow-ups §13.6). So the method is wrapped, in this
+    process only, to note the result first and then do exactly what it did.
 
     Does nothing if this macOS has no such method, and nothing the second time.
     """
@@ -1691,24 +1691,25 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
     framework found one on that number and bound this wrapper to it instead.
     Nothing is outstanding, so no open-complete callback is coming and
     waiting on one would wait for ever. Such a wrapper is no use either --
-    the framework binds it and sets its delegate but never wires its
-    streams, so it can be written to and never delivers a byte, and what is
-    written goes to whoever still holds the channel. It is the previous
+    on macOS 26.6.2 the framework binds it and sets its delegate but never
+    wires its streams, so it can be written to and never delivers a byte, and
+    what is written goes to whoever still holds the channel. It is the previous
     channel to this device on this number, which the framework keeps handing
     over until it has finished tearing that one down, so the thing to do is
     wait and ask again.
 
     Waiting and asking again is cruder than waiting for the framework to say
     the old channel is gone, but nothing says so. ``rfcommChannelClosed:``
-    answers a different question -- it says the channel closed, which it
-    reports around thirteen milliseconds after ``closeChannel`` and well
-    before the framework stops handing that channel back.
+    answers a different question -- it says the channel closed, which on
+    macOS 26.6.2 it reports around thirteen milliseconds after
+    ``closeChannel`` and well before the framework stops handing that channel
+    back.
 
     ``registerForChannelCloseNotification`` never fires, for a close this
     program asks for or one the peer causes, where the delegate callback
-    does: measured with a real ``SEL``. The disassembly says why. A
-    ``CBClassicPeer`` has one disconnect callback. The coordinator that would
-    pass a close on to notifications sets it, and every
+    does: measured on macOS 26.6.2 with a real ``SEL``. The disassembly says
+    why. A ``CBClassicPeer`` has one disconnect callback. The coordinator that
+    would pass a close on to notifications sets it, and every
     ``IOBluetoothRFCOMMChannel`` set up on that peer replaces it with its own.
 
     Args:
@@ -1784,8 +1785,8 @@ async def _look_up(device: _Device, address: str, service: UUID) -> int:
     """
     Find which RFCOMM channel a service is on.
 
-    The cached record is tried first. macOS fills its cache from a real SDP
-    query rather than from advertising data, so a hit here is trustworthy.
+    The cached record is tried first. macOS 26.6.2 fills its cache from a real
+    SDP query rather than from advertising data, so a hit here is trustworthy.
     A miss is worth one query before giving up.
 
     Args:
@@ -1849,12 +1850,14 @@ def _translate(error: MachError, address: str) -> RfcommError:
 # Serving
 # --------------------------------------------------------------------------
 
-# kIOBluetoothUserNotificationChannelDirectionIncoming. Measured: IOBluetooth
-# never passes on a registration for kIOBluetoothUserNotificationChannelDirectionAny.
+# kIOBluetoothUserNotificationChannelDirectionIncoming.
+# Measured on macOS 26.6.2: IOBluetooth never passes on a registration for
+# kIOBluetoothUserNotificationChannelDirectionAny.
 _INCOMING = 1
 
-# bluetoothd never registers these two with its RFCOMM stack (disassembly), so
-# a service on one is not like a service anywhere else. They are left alone.
+# bluetoothd never registers these two with its RFCOMM stack (disassembly,
+# macOS 26.6.2), so a service on one is not like a service anywhere else. They
+# are left alone.
 _NOT_CHOSEN = (10, 15)
 
 # The protocol UUIDs a record names to say it is reached over RFCOMM.
@@ -1875,9 +1878,9 @@ def _record(service: UUID, name: str, number: int) -> ObjCInstance:
         The record, in the dictionary form IOBluetooth publishes.
     """
     # Sequences as plain arrays. Written as data element dictionaries, which
-    # is what the framework's own documentation shows, the encoder writes out
-    # the dictionaries' key names in place of their contents (follow-ups
-    # §10.1). Arrays it encodes correctly, measured.
+    # is what the framework's own documentation shows, the encoder on macOS
+    # 26.6.2 writes out the dictionaries' key names in place of their contents
+    # (follow-ups §10.1). Arrays it encodes correctly, measured.
     record: dict[str, Any] = {
         "0001": [_sdp_uuid(service)],
         "0004": [
@@ -1939,13 +1942,13 @@ def _choose_channel(channel: int | None, avoiding: Collection[int]) -> int:
     """
     # A channel that has had a record since Bluetooth was last switched on is
     # never served on again, because it may not work and nothing would say
-    # so. Measured, with the disassembly of bluetoothd: a record can never be
-    # withdrawn (each removal is answered OI_STATUS_INVALID_HANDLE, for the
-    # handle it gave out), and every connection to a channel, accepted ones
-    # included, is kept in a list never cleared. The next registration on the
-    # channel, in a later process, takes one off the list and accepts it
-    # instead of listening. The accept fails, the peer being long gone, and
-    # the service never hears a peer at all.
+    # so. Measured on macOS 26.6.2, with the disassembly of bluetoothd: a
+    # record can never be withdrawn (each removal is answered
+    # OI_STATUS_INVALID_HANDLE, for the handle it gave out), and every
+    # connection to a channel, accepted ones included, is kept in a list never
+    # cleared. The next registration on the channel, in a later process, takes
+    # one off the list and accepts it instead of listening. The accept fails,
+    # the peer being long gone, and the service never hears a peer at all.
     used = _channels_in_use() | set(avoiding)
     if channel is not None:
         if channel in used:
@@ -2061,18 +2064,19 @@ async def serve(
     # replacing the last, and frees only the last when the process ends.
     # Every one before it holds a slot in its RFCOMM stack until Bluetooth is
     # next switched off, and once the slots run out nothing on this Mac can
-    # serve -- measured, each registration reported as OI_STATUS_NO_RESOURCES
-    # and every peer's connection left waiting. Unregistering never reaches
-    # bluetoothd.
+    # serve -- measured on macOS 26.6.2, each registration reported as
+    # OI_STATUS_NO_RESOURCES and every peer's connection left waiting.
+    # Unregistering never reaches bluetoothd.
     #
-    # Made before this, IOBluetooth drops the registration unsent.
+    # Made before this, IOBluetooth on macOS 26.6.2 drops the registration
+    # unsent.
     await _wait_until_ready()
     number = _choose_channel(channel, avoiding)
 
     listener = _OpenListener.alloc().init()
     # A selector, not a string: given one, rubicon stores a selector made of
     # its first letter, the listener does not respond to it, and IOBluetooth
-    # silently lets every channel go -- measured.
+    # silently lets every channel go -- measured on macOS 26.6.2.
     notification = IOBluetoothRFCOMMChannel.registerForChannelOpenNotifications(
         listener,
         selector=SEL("channelOpened:channel:"),
@@ -2092,8 +2096,8 @@ async def serve(
         try:
             yield Service(number, listener)
         finally:
-            # Refused by this macOS (see _choose_channel), but asked, in case
-            # another is not.
+            # Refused by macOS 26.6.2 (see _choose_channel), but asked, in
+            # case another is not.
             record.removeServiceRecord()
     finally:
         notification.unregister()
@@ -2142,10 +2146,10 @@ def _normalise(address: str) -> str:
     """
     Put a Bluetooth address into the form this library reports.
 
-    IOBluetooth writes device addresses with dashes and in lower case, and
-    controller addresses with colons and in upper case. Callers compare these
-    against addresses from other platforms, so they are all made to look the
-    same.
+    On macOS 26.6.2, IOBluetooth writes device addresses with dashes and in
+    lower case, and controller addresses with colons and in upper case. Callers
+    compare these against addresses from other platforms, so they are all made
+    to look the same.
 
     Args:
         address: The address as IOBluetooth wrote it.

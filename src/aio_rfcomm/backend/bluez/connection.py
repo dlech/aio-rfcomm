@@ -5,13 +5,6 @@
 Channels and requests over the file descriptors BlueZ hands over.
 """
 
-# Measurements cited in this module name the BlueZ they were made on, one of:
-# - BlueZ 5.72: Ubuntu 24.04, package 5.72-0ubuntu5.5, before 2026-10-05. The
-#   kernel was not recorded.
-# - BlueZ 5.85: Ubuntu 26.04.1, package 5.85-4ubuntu0.3 or later, on kernel
-#   7.0.0-38-generic.
-# The peer was a Mac on macOS 26.6.2 (25G83).
-
 import asyncio
 import logging
 import os

@@ -179,12 +179,13 @@ class OIStatus(enum.IntEnum):
 
     RFCOMM_REMOTE_REJECT = 913
     """
-    ``OI_RFCOMM_REMOTE_REJECT`` -- the device refused the channel. Measured
-    against BlueZ 5.85 for a channel nothing listens on.
+    ``OI_RFCOMM_REMOTE_REJECT`` -- the device refused the channel. Measured on
+    macOS 26.6.2 against BlueZ 5.85, for a channel nothing listens on.
     """
 
     RFCOMM_REMOTE_DEVICE_DISCONNECTED = 927
     """
     ``OI_RFCOMM_REMOTE_DEVICE_DISCONNECTED`` -- the device hung up as the
-    channel opened. Measured against a BlueZ 5.85 server declining it.
+    channel opened. Measured on macOS 26.6.2 against a BlueZ 5.85 server
+    declining it.
     """
