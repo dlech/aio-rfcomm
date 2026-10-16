@@ -106,6 +106,9 @@ _BACKLOG = 4
 _ATTEMPTS = 4
 _BACKOFF_SECONDS = 0.5
 
+# What a connect to a channel the device refuses fails with.
+_WSAEHOSTDOWN = 10064
+
 
 class WindowsChannel(StreamChannel):
     """
@@ -785,6 +788,33 @@ async def _offers_any(device: BluetoothDevice, wanted: list[RfcommServiceId]) ->
     return False
 
 
+def _refused(error: OSError, address: str, channel: int) -> RfcommError | None:
+    """
+    Tell a refused channel from the flakiness that is worth trying again.
+
+    Args:
+        error: What the connect raised.
+        address: The device's Bluetooth address.
+        channel: The RFCOMM channel number.
+
+    Returns:
+        The error to raise for a refusal, or ``None`` for anything else.
+    """
+    # Measured on 2026-10-15 against a macOS 26.6.2 peer: a channel nothing
+    # listens on fails with WSAEHOSTDOWN as soon as the peer refuses it, while
+    # a device that is switched off, and an address never seen, time out with
+    # WSAETIMEDOUT. A link refused for authentication is not measured. Asking
+    # again is refused again, and Windows holds the next attempt on that
+    # device for about a minute, until its link to it has gone.
+    if getattr(error, "winerror", None) == _WSAEHOSTDOWN:
+        return ServiceNotFoundError(
+            f"{address} refused channel {channel}. Usually nothing there is "
+            "listening on it"
+        )
+
+    return None
+
+
 async def _open_socket(
     address: str, channel: int, adapter: str | None
 ) -> socket.socket:
@@ -811,7 +841,13 @@ async def _open_socket(
             await _reach(sock, address, channel)
         except OSError as error:
             sock.close()
+            refused = _refused(error, address, channel)
+
+            if refused is not None:
+                raise refused from error
+
             last = error
+
             if attempt + 1 < _ATTEMPTS:
                 await asyncio.sleep(_BACKOFF_SECONDS * (attempt + 1))
             continue

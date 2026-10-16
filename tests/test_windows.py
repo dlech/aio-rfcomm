@@ -27,12 +27,14 @@ from aio_rfcomm.backend.windows import (
     _each,
     _format,
     _parse,
+    _refused,
     _translate,
 )
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ConnectionFailedError,
     DeviceNotFoundError,
+    ServiceNotFoundError,
 )
 
 SERVICE = uuid.UUID("539f44f8-e629-4723-bd40-9bd0d2807056")
@@ -197,6 +199,31 @@ def test_no_free_channel_at_all_is_an_error() -> None:
     sock = _FakeSocket(set(range(FIRST_CHANNEL, LAST_CHANNEL + 1)))
     with pytest.raises(ChannelInUseError, match="every RFCOMM channel"):
         _bind_channel(sock, None)  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# Refusals
+#
+# Measured on 2026-10-15 on Windows 10.0.26200.9457 against a macOS 26.6.2
+# peer: a channel nothing listens on fails with WSAEHOSTDOWN, and a device
+# that is switched off, or an address never seen, with WSAETIMEDOUT.
+# --------------------------------------------------------------------------
+
+
+def _winsock_error(code: int) -> OSError:
+    error = OSError(code, "from Winsock")
+    error.winerror = code  # type: ignore[attr-defined]
+    return error
+
+
+def test_a_refused_channel_means_nothing_is_listening() -> None:
+    error = _refused(_winsock_error(10064), "00:11", 30)
+    assert isinstance(error, ServiceNotFoundError)
+    assert "refused channel 30" in str(error)
+
+
+def test_a_device_that_times_out_is_worth_asking_again() -> None:
+    assert _refused(_winsock_error(10060), "00:11", 30) is None
 
 
 # --------------------------------------------------------------------------
