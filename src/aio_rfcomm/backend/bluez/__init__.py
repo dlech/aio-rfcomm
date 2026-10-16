@@ -24,7 +24,6 @@ import logging
 import socket
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from typing import cast
 from uuid import UUID
 
 from dbus_fast import Message, Variant
@@ -48,9 +47,7 @@ from aio_rfcomm.backend.bluez.dbus import (
     DEVICE,
     OBJECT_MANAGER,
     PROFILE_MANAGER,
-    SERVICE,
     DeviceProxy,
-    Interface,
     ObjectManagerProxy,
     ProfileManagerProxy,
     add_match,
@@ -103,8 +100,10 @@ def _wanted(service: UUID | Collection[UUID] | None) -> set[str]:
     """
     if service is None:
         return set()
+
     if isinstance(service, UUID):
         return {str(service).lower()}
+
     return {str(u).lower() for u in service}
 
 
@@ -134,24 +133,6 @@ class BlueZBluetooth(BackendBluetooth):
         somewhere to report it.
         """
 
-    async def _interface(
-        self, path: str, name: str, kind: type[Interface]
-    ) -> Interface:
-        """
-        Get one interface of one object, typed.
-
-        Args:
-            path: The object path.
-            name: The interface name.
-            kind: The declared view of that interface.
-
-        Returns:
-            The interface.
-        """
-        introspection = await self._bus.introspect(SERVICE, path)
-        proxy = self._bus.get_proxy_object(SERVICE, path, introspection)
-        return cast(Interface, proxy.get_interface(name))
-
     @override
     async def list_known_devices(
         self, *, service: UUID | Collection[UUID] | None = None
@@ -161,7 +142,9 @@ class BlueZBluetooth(BackendBluetooth):
         # expensive to call repeatedly. bleak keeps one manager running and
         # follows change signals instead. Worth doing here if listing turns
         # out to be called often.
-        manager = await self._interface("/", OBJECT_MANAGER, ObjectManagerProxy)
+        manager = await get_interface(
+            self._bus, "/", OBJECT_MANAGER, ObjectManagerProxy
+        )
         objects = await manager.call_get_managed_objects()
 
         found: list[RfcommDeviceInfo] = []
@@ -308,10 +291,12 @@ class BlueZBluetooth(BackendBluetooth):
                 "Pass an explicit channel, or use a Python built against "
                 "libbluetooth."
             )
+
         if channel in self._claimed:
             raise ChannelInUseError(
                 f"this process is already serving on channel {channel}"
             )
+
         return channel
 
     @asynccontextmanager
@@ -330,8 +315,8 @@ class BlueZBluetooth(BackendBluetooth):
 
         path = f"/org/aio_rfcomm/server{next(profile_paths)}"
         profile = ServerProfile()
-        manager = await self._interface(
-            "/org/bluez", PROFILE_MANAGER, ProfileManagerProxy
+        manager = await get_interface(
+            self._bus, "/org/bluez", PROFILE_MANAGER, ProfileManagerProxy
         )
 
         self._bus.export(path, profile)
@@ -391,7 +376,9 @@ class BlueZBluetooth(BackendBluetooth):
             stack.callback(profile.forget, device_path, waiter)
 
             try:
-                remote = await self._interface(device_path, DEVICE, DeviceProxy)
+                remote = await get_interface(
+                    self._bus, device_path, DEVICE, DeviceProxy
+                )
             except Exception as error:
                 raise DeviceNotFoundError(address) from error
 

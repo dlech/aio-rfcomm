@@ -62,11 +62,13 @@ def translate_connect(error: Exception, address: str, uuid: str) -> RfcommError:
         or text == "br-connection-profile-unavailable"
     ):
         return ServiceNotFoundError(f"{address} does not offer {uuid}")
+
     # BlueZ 5.85 gives every other connection failure as one of these codes,
     # an errno turned into a fixed string (src/error.c), never as the errno's
     # own text. A device that does not answer is EHOSTDOWN.
     if text == "br-connection-page-timeout":
         return DeviceNotFoundError(f"{address} did not answer")
+
     return ConnectionFailedError(f"could not open a channel to {address}: {text}")
 
 
