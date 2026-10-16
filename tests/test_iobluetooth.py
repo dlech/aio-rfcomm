@@ -337,7 +337,7 @@ async def _channel(
 async def test_a_reader_giving_up_leaves_the_others_their_answer() -> None:
     """
     The stream and the reason for its end come over different sockets, so a
-    reader can see the end first and wait for the reason. Cancelling a task
+    reader can see the end first and wait for the reason. Canceling a task
     that awaits a future cancels the future, so a reason shared that way was
     lost to everyone else the moment that reader gave up.
     """

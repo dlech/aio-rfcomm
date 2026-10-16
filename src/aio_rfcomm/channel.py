@@ -61,7 +61,7 @@ class RfcommChannel:
         Send all of ``data``.
 
         It returns once the data is on its way, which does not mean the other device
-        has it yet. If it is cancelled, the data is still sent, unless the connection
+        has it yet. If it is canceled, the data is still sent, unless the connection
         ends first.
 
         Args:
@@ -113,7 +113,7 @@ class RfcommChannel:
         """
         Wait for exactly ``count`` bytes and return them.
 
-        If it is cancelled, the bytes it has read so far are kept for the next call.
+        If it is canceled, the bytes it has read so far are kept for the next call.
 
         Args:
             count: How many bytes, at least 1.
@@ -146,7 +146,7 @@ class RfcommChannel:
         line = await channel.receive_until(b"\n", max_bytes=1024)
         ```
 
-        If it is cancelled, the bytes it has read so far are kept for the next call.
+        If it is canceled, the bytes it has read so far are kept for the next call.
 
         Args:
             delimiter: The bytes that end each message. Not empty.

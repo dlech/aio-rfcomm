@@ -143,7 +143,7 @@ class FakeService(BackendService):
         self.service = service
         self.name = name
         self.withdrawn = False
-        # Whether a cancelled accept takes the next peer anyway. Not measured
+        # Whether a canceled accept takes the next peer anyway. Not measured
         # on any platform: a contract the core must survive, not a backend.
         self.accept_cancel_finishes = False
         self._channel = channel
@@ -185,7 +185,7 @@ class FakeBluetooth(BackendBluetooth):
     def __init__(self) -> None:
         self.open_calls = 0
         self.opens_block = False
-        # What a blocked open does when cancelled: re-raise, raise this
+        # What a blocked open does when canceled: re-raise, raise this
         # instead, or finish the open regardless.
         self.open_cancel_raises: BaseException | None = None
         self.open_cancel_finishes = False

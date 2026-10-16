@@ -74,7 +74,7 @@ async def read_message(channel) -> bytes:
 ```
 
 You can mix `receive`, `receive_until` and `receive_exactly`. Bytes that one
-call does not use are kept for the next, and cancelling a call loses no bytes.
+call does not use are kept for the next, and canceling a call loses no bytes.
 If the connection ends partway through a message, `receive_until` and
 `receive_exactly` raise `ChannelClosedError`, and `receive` then returns the
 part that arrived.

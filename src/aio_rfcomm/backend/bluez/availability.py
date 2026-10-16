@@ -189,7 +189,7 @@ async def follow_availability(
         except Exception as error:
             # A failed read says nothing about Bluetooth, so what was last
             # known stands until the next signal. With nothing known yet,
-            # opening Bluetooth would wait for ever.
+            # opening Bluetooth would wait forever.
             logger.exception("could not read whether Bluetooth is usable")
 
             if not state.is_known:

@@ -165,7 +165,7 @@ class StreamProtocol(asyncio.Protocol):
     def _end(self) -> None:
         self.ended = True
         self._arrived.set()
-        # A sender waiting for room would otherwise wait for ever.
+        # A sender waiting for room would otherwise wait forever.
         self._writable.set()
 
 
@@ -255,7 +255,7 @@ class StreamChannel(BackendChannel):
         Close the channel, letting what was sent go first.
 
         Waits for as long as the peer takes to accept what is still queued,
-        with no limit of its own. Cancelled, it drops the rest and closes at
+        with no limit of its own. Canceled, it drops the rest and closes at
         once.
         """
         self._transport.close()

@@ -59,7 +59,7 @@ the same task group notices that too.
 
 ## Cancellation
 
-Cancelling an operation stops your program waiting for it. It does not always
+Canceling an operation stops your program waiting for it. It does not always
 stop the operation itself, because some Bluetooth operations underneath
 cannot be called off. The library does what each platform allows, such as
 closing the connection.
@@ -76,8 +76,8 @@ waiting for it. A shielded `receive`, for example, still holds the channel, so
 your next `receive` raises
 [`BusyResourceError`][aio_rfcomm.errors.BusyResourceError].
 
-**Cancelling `send` loses nothing.** `send` queues all its bytes before it
-waits. If it is cancelled, the bytes are still sent, in order, unless the
+**Canceling `send` loses nothing.** `send` queues all its bytes before it
+waits. If it is canceled, the bytes are still sent, in order, unless the
 connection ends first. Sending them again after a timeout sends them twice.
 
 !!! tip "To be sure everything has stopped, leave the block"

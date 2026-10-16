@@ -89,7 +89,7 @@ class _Profile(ServiceInterface):
     ) -> None:
         waiters = self._waiting.get(device)
         if not waiters:
-            # Nobody is waiting: the attempt was cancelled just before BlueZ
+            # Nobody is waiting: the attempt was canceled just before BlueZ
             # answered, or a peer connected unprompted. Either way the
             # descriptor is ours to close, and dropping it silently would leak
             # it.

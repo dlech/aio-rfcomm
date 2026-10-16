@@ -148,7 +148,7 @@ class Link:
                 # at all, and a partial write can only happen without them.
                 if fds:
                     sent = socket.send_fds(self._sock, [frame], fds)
-                    # Gone as soon as sendmsg returns: they travelled with the
+                    # Gone as soon as sendmsg returns: they traveled with the
                     # frame's first byte, so a partial write does not leave
                     # any of them behind.
                     for fd in fds:

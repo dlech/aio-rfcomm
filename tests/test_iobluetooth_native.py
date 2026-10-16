@@ -71,7 +71,7 @@ def manager(monkeypatch: pytest.MonkeyPatch) -> FakeManager:
     _classic_manager down is the code under test.
 
     Returns:
-        The fake, starting out in the unknown state and authorised.
+        The fake, starting out in the unknown state and authorized.
     """
     fake = FakeManager.alloc().init()
     found = FakeCoordinatorClass(fake)
@@ -169,7 +169,7 @@ async def test_a_switched_off_radio_is_reported_not_waited_for(
 ) -> None:
     """
     Powered off settles as firmly as powered on, so waiting for powered on
-    alone would wait for ever.
+    alone would wait forever.
     """
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(BluetoothUnavailableError) as raised:
@@ -219,7 +219,7 @@ async def test_a_state_from_the_future_is_still_a_failure(
     manager: FakeManager,
 ) -> None:
     """
-    Settling on something unrecognised must say so rather than be taken for
+    Settling on something unrecognized must say so rather than be taken for
     one of the states that happens to be handled.
     """
     manager.state = 9

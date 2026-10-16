@@ -208,7 +208,7 @@ async def test_another_device_does_not_steal_the_connection() -> None:
 
 async def test_a_connection_nobody_wants_is_closed_not_leaked() -> None:
     """
-    An attempt cancelled just before BlueZ answers leaves a descriptor that
+    An attempt canceled just before BlueZ answers leaves a descriptor that
     is ours to close. Dropping it silently would leak it.
     """
     profile = _Profile()

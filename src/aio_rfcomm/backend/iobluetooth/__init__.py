@@ -660,7 +660,7 @@ def _not_allowed(authorization: int) -> str:
 
 def _wanted(service: UUID | Collection[UUID] | None) -> list[str]:
     """
-    Normalise the service filter into something the protocol can carry.
+    Normalize the service filter into something the protocol can carry.
 
     Args:
         service: One service, several, or ``None`` for no filter.

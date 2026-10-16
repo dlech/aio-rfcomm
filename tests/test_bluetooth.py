@@ -275,7 +275,7 @@ async def test_an_open_in_progress_ends_when_bluetooth_goes(
     assert caught.value.reason is Availability.SWITCHED_OFF
 
 
-async def test_cancelling_an_open_is_still_a_cancellation(
+async def test_canceling_an_open_is_still_a_cancellation(
     bluetooth: Bluetooth, provider: FakeProvider
 ) -> None:
     provider.backend.opens_block = True

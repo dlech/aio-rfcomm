@@ -227,7 +227,7 @@ async def test_the_reason_is_asked_for_once() -> None:
     assert first.reason is second.reason is CloseReason.LINK_LOST
 
 
-async def test_a_cancelled_receive_loses_nothing() -> None:
+async def test_a_canceled_receive_loses_nothing() -> None:
     async with _channel() as (channel, peer):
         waiting = asyncio.ensure_future(channel.receive())
         await asyncio.sleep(0)
@@ -240,7 +240,7 @@ async def test_a_cancelled_receive_loses_nothing() -> None:
             assert await channel.receive() == b"still here"
 
 
-async def test_data_that_arrives_as_a_receive_is_cancelled_survives() -> None:
+async def test_data_that_arrives_as_a_receive_is_canceled_survives() -> None:
     """
     The receive has been woken by the data but not yet run when the cancel
     lands. Nothing may have been taken by then.
@@ -270,7 +270,7 @@ async def test_a_full_buffer_stops_reading_until_it_is_taken() -> None:
 
 
 @_TCP_PAIR
-async def test_a_cancelled_send_still_sends_everything() -> None:
+async def test_a_canceled_send_still_sends_everything() -> None:
     data = bytes(range(256)) * 16 * 1024
     async with _channel() as (channel, theirs):
         sending = asyncio.ensure_future(channel.send(data))

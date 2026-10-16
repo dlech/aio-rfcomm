@@ -92,7 +92,7 @@ async def _nothing() -> None:
 
 def _wanted(service: UUID | Collection[UUID] | None) -> set[str]:
     """
-    Normalise the service filter to a set of lower-case UUID strings.
+    Normalize the service filter to a set of lower-case UUID strings.
 
     Args:
         service: One service, several, or ``None`` for no filter.

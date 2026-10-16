@@ -387,7 +387,7 @@ class BackendChannel(ABC):
         Send all of ``data``.
 
         Hands all of it to the platform before waiting for anything, so that
-        cancelling the wait never splits it: a cancelled send still sends
+        canceling the wait never splits it: a canceled send still sends
         everything, unless the channel ends first.
 
         Args:
@@ -479,7 +479,7 @@ class BackendRequest(ABC):
         """
         Hang up at once, unless a channel has the connection already.
 
-        Safe to call more than once, and from a finaliser.
+        Safe to call more than once, and from a finalizer.
         """
         raise NotImplementedError
 
@@ -488,7 +488,7 @@ class BackendRequest(ABC):
         Turn the peer away.
 
         Hangs up before anything is awaited, so it takes effect even if
-        cancelled. A backend that has to wait for its platform to finish
+        canceled. A backend that has to wait for its platform to finish
         overrides this, and still closes first.
         """
         self.close()

@@ -5,7 +5,7 @@
 Cancellation is ordinary control flow, so every operation has to survive it.
 
 The dangerous case is silent damage: a channel left open because the block
-that owned it was cancelled. Receiving under cancellation is tested against
+that owned it was canceled. Receiving under cancellation is tested against
 the real stream channel, in test_stream.py.
 """
 
@@ -17,7 +17,7 @@ from aio_rfcomm.bluetooth import Bluetooth
 from tests.fake import DEVICE, FakeProvider
 
 
-async def test_cancelling_the_scope_still_closes_the_channel(
+async def test_canceling_the_scope_still_closes_the_channel(
     bluetooth: Bluetooth, provider: FakeProvider
 ) -> None:
     """

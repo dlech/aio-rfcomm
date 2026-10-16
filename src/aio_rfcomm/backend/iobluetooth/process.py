@@ -85,7 +85,7 @@ class Ending:
     Why a channel ended, once the helper has said.
 
     Each waiter waits on an event of its own rather than on a shared future:
-    cancelling a task that awaits a future cancels the future, which would
+    canceling a task that awaits a future cancels the future, which would
     take the answer away from everyone else waiting for it. A future awaited
     through ``asyncio.shield`` would do as well, but only where every await
     remembers the shield. Here the safe wait is the only one there is.
@@ -502,7 +502,7 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
                     reader.cancel()
     finally:
         # Whatever still waits on this helper -- a channel closing, say --
-        # hears that it has gone rather than waiting for it for ever.
+        # hears that it has gone rather than waiting for it forever.
         helper._stop(HelperFailedError("the macOS Bluetooth helper was stopped"))
         link.close()
         await _reap(pid)
@@ -776,7 +776,7 @@ async def _reap(pid: int) -> None:
     try:
         await _wait_for_exit(pid)
     except asyncio.CancelledError:
-        # Cancelled part way, as when the program leaves its block while a
+        # Canceled part way, as when the program leaves its block while a
         # helper is being replaced: it is not left behind either way.
         _kill(pid)
         raise

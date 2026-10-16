@@ -301,7 +301,7 @@ _POWER_ON = 1
 
 # A bound on waiting for the framework to finish closing a channel. This is
 # the one place a limit belongs: it sits on the teardown path, and teardown
-# that can block forever leaves a cancelled caller unable to unwind at all.
+# that can block forever leaves a canceled caller unable to unwind at all.
 # Running out is not an error, so it gives up by carrying on.
 _CLOSE_TIMEOUT = 5.0
 
@@ -312,7 +312,7 @@ _CLOSE_TIMEOUT = 5.0
 # should be allowed -- that is the caller's to decide -- but the point at
 # which a local quirk stops looking like settling and starts looking like a
 # framework that is wedged, which is worth saying out loud rather than waiting
-# on for ever.
+# on forever.
 _OPEN_ATTEMPTS = 20
 _SETTLE_SECONDS = 0.1
 
@@ -350,7 +350,7 @@ _RELINK_SECONDS = 0.1
 
 # A write's refcon is the address of the object holding its future, and that
 # object has to stay alive until the completion callback reads it back out --
-# including when whoever asked for the write was cancelled long ago and the
+# including when whoever asked for the write was canceled long ago and the
 # frame that held it is gone. Keyed by the address the callback is handed.
 _in_flight: dict[int, "ctypes.py_object[asyncio.Future[int]]"] = {}
 
@@ -364,7 +364,7 @@ class _Completion(Protocol):
 
 
 # IOBluetooth stores the target of an asynchronous call unretained (Apple
-# FB13705522), so one has to be held here until its callback fires: a cancelled
+# FB13705522), so one has to be held here until its callback fires: a canceled
 # caller's frame goes away while the call is still outstanding, and the
 # framework would then message a deallocated object. A callback that never
 # arrives leaks one small object, which is the cheaper of the two failures.
@@ -473,7 +473,7 @@ async def _wait_until_ready() -> None:
 
     # Settling is not the same as being usable: a refused or switched-off radio
     # settles just as firmly as a working one, and waiting for powered-on alone
-    # would wait for ever.
+    # would wait forever.
     state = manager.state
     if state != CBManagerState.POWERED_ON:
         raise _unusable(state)
@@ -725,7 +725,7 @@ class _ConnectionComplete(NSObject):
     token: int
 
     # No return annotation: rubicon reads annotations to build the
-    # Objective-C signature, and an initialiser's is already known.
+    # Objective-C signature, and an initializer's is already known.
     @objc_method
     def init(self):
         self.future = asyncio.get_running_loop().create_future()
@@ -939,7 +939,7 @@ def list_known_devices(
     for device in IOBluetoothDevice.pairedDevices() or []:
         if wanted and not any(device.getServiceRecordForUUID(u) for u in wanted):
             continue
-        address = _normalise(str(device.addressString))
+        address = _normalize(str(device.addressString))
         # macOS 26.6.2 lists some devices twice. Measured rather than guessed
         # at: pairedDevices() returned thirteen entries holding twelve distinct
         # objects, with one device's object appearing at two non-adjacent
@@ -1000,7 +1000,7 @@ class Channel:
         """
         name = self._device.name
         return RfcommDeviceInfo(
-            _normalise(str(self._device.addressString)), str(name) if name else None
+            _normalize(str(self._device.addressString)), str(name) if name else None
         )
 
     async def wait_until_open(self) -> None:
@@ -1044,7 +1044,7 @@ class Channel:
         holder = ctypes.py_object(future)
         refcon = ctypes.addressof(holder)
         # Held until the completion callback takes it back out. Letting it go
-        # when this task is cancelled would leave the callback reading an
+        # when this task is canceled would leave the callback reading an
         # address whose memory has been freed, which crashes the process some
         # unrelated moment later.
         _in_flight[refcon] = holder
@@ -1096,7 +1096,7 @@ class Channel:
         Two things have to happen and the order matters. ``closeChannel``
         only starts the teardown, so this waits for the framework to say it
         has finished -- with a bound, since teardown that can block forever
-        leaves a cancelled caller unable to unwind, and giving up here means
+        leaves a canceled caller unable to unwind, and giving up here means
         carrying on rather than raising.
 
         Then the channel is let go of, which is not tidiness. rubicon keeps a
@@ -1174,7 +1174,7 @@ async def open_channel(
     # One caller at a time per device, refused rather than queued, because
     # macOS gets a second one wrong three separate ways. Connecting keeps one
     # completion target per device, so a second ``openConnection:`` while one
-    # is outstanding overwrites the first's and that caller waits for ever.
+    # is outstanding overwrites the first's and that caller waits forever.
     # Opening a channel likewise installs its completion in a slot the device
     # has only one of. And closing is serviced in the order channels were
     # opened rather than the one asked for, so with two open, closing either
@@ -1332,7 +1332,7 @@ def record_open_result(address: str, channel: int, result: int) -> None:
         channel: The RFCOMM channel number.
         result: The daemon's ``kCBMsgArgResult``, 0 for success.
     """
-    _open_results[(_normalise(address), channel)] = result
+    _open_results[(_normalize(address), channel)] = result
 
 
 def _note_open_result(opened: _OpenResult) -> None:
@@ -1611,7 +1611,7 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
     Open a channel, asking again if the framework never says whether it did.
 
     A failed open that reports no error reaches neither delegate method, so the
-    caller would otherwise wait for ever -- see ``_OPEN_REPORT_SECONDS``.
+    caller would otherwise wait forever -- see ``_OPEN_REPORT_SECONDS``.
     Asking again costs nothing on the air: an open that did land leaves the
     channel where the framework finds it and hands it straight back, and one
     that did not never reached the peer.
@@ -1630,7 +1630,7 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
         ConnectionFailedError: The channel could not be opened, or the
             framework never reported one open.
     """
-    key = (_normalise(address), number)
+    key = (_normalize(address), number)
     for _attempt in range(_OPEN_REPORT_ATTEMPTS):
         _open_results.pop(key, None)
         opening = await _request(device, number, address)
@@ -1690,7 +1690,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
     A channel that comes back already open was not opened by this call: the
     framework found one on that number and bound this wrapper to it instead.
     Nothing is outstanding, so no open-complete callback is coming and
-    waiting on one would wait for ever. Such a wrapper is no use either --
+    waiting on one would wait forever. Such a wrapper is no use either --
     on macOS 26.6.2 the framework binds it and sets its delegate but never
     wires its streams, so it can be written to and never delivers a byte, and
     what is written goes to whoever still holds the channel. It is the previous
@@ -2114,7 +2114,7 @@ async def serve(
 
 def _each(service: UUID | Collection[UUID] | None) -> list[UUID]:
     """
-    Normalise the service filter to a list.
+    Normalize the service filter to a list.
 
     Args:
         service: One service, several, or ``None`` for no filter.
@@ -2142,7 +2142,7 @@ def _sdp_uuid(service: UUID) -> _UUID:
     return IOBluetoothSDPUUID.uuidWithData(service.bytes)
 
 
-def _normalise(address: str) -> str:
+def _normalize(address: str) -> str:
     """
     Put a Bluetooth address into the form this library reports.
 

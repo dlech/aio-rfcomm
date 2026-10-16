@@ -115,7 +115,7 @@ async def wait_for_retry() -> bool:
     """
     Let the user say when to try again.
 
-    prompt_async can be cancelled, unlike a blocking read handed to a thread,
+    prompt_async can be canceled, unlike a blocking read handed to a thread,
     which would keep the process alive until someone pressed Enter.
 
     Returns:

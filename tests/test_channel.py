@@ -64,7 +64,7 @@ async def test_exactly_gathers_across_arrivals(
     assert await channel.receive() == b"fg"
 
 
-async def test_a_cancelled_exactly_leaves_what_it_gathered(
+async def test_a_canceled_exactly_leaves_what_it_gathered(
     opened: tuple[RfcommChannel, FakeChannel],
 ) -> None:
     channel, fake = opened

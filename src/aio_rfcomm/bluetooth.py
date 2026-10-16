@@ -105,7 +105,7 @@ class _Interruption:
         self.task = task
         self.cancelling = task.cancelling()
         self.error: BluetoothUnavailableError | None = None
-        self.cancelled = False
+        self.canceled = False
 
     def fire(self, error: BluetoothUnavailableError) -> None:
         if self.error is not None:
@@ -116,16 +116,16 @@ class _Interruption:
         # on 3.11 a cancel taken back is still delivered at its next await.
         if self.task is not asyncio.current_task():
             self.task.cancel()
-            self.cancelled = True
+            self.canceled = True
 
     def settle(self) -> bool:
         """
         Take back the cancel, if one was made.
 
         Returns:
-            Whether nothing else cancelled the task meanwhile.
+            Whether nothing else canceled the task meanwhile.
         """
-        if not self.cancelled:
+        if not self.canceled:
             return True
         return self.task.uncancel() <= self.cancelling
 
@@ -329,8 +329,8 @@ class Bluetooth:
         becomes so.
 
         Works the way ``asyncio.timeout`` does: the waiting task is
-        cancelled, and the cancellation is taken back and replaced on the way
-        out, unless something else cancelled it too.
+        canceled, and the cancellation is taken back and replaced on the way
+        out, unless something else canceled it too.
 
         Yields:
             Nothing. The block runs until Bluetooth stops being usable.

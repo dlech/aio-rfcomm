@@ -86,7 +86,7 @@ _BACKLOG = 4
 
 def _each(service: UUID | Collection[UUID] | None) -> list[UUID]:
     """
-    Normalise the service filter to a list.
+    Normalize the service filter to a list.
 
     Args:
         service: One service, several, or ``None`` for no filter.
