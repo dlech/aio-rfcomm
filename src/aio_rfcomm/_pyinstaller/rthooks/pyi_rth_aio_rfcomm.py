@@ -18,7 +18,7 @@ def _run_helper_if_asked() -> None:
 
     import runpy
 
-    runpy.run_module("aio_rfcomm.backend.iobluetooth", run_name="__main__")
+    runpy.run_module("aio_rfcomm.backend.iobluetooth.helper", run_name="__main__")
     sys.exit(0)
 
 

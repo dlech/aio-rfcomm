@@ -40,7 +40,7 @@ from aio_rfcomm.backend.iobluetooth import (
 )
 from aio_rfcomm.backend.iobluetooth.bundle import _identifier, _key
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
-from aio_rfcomm.backend.iobluetooth.helper import (
+from aio_rfcomm.backend.iobluetooth.process import (
     Helper,
     HelperFailedError,
     _rebuild,
@@ -687,7 +687,7 @@ async def test_the_helper_says_so_when_it_has_let_the_device_go() -> None:
     Everything from the helper's request handling down through the native
     layer runs. Only the framework is stood in for.
     """
-    from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
+    from aio_rfcomm.backend.iobluetooth.helper import __main__ as helper_main
     from tests.fake_iobluetooth import fake_framework
 
     async with _pair() as (here, there):

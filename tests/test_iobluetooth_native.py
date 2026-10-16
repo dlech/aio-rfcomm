@@ -37,9 +37,9 @@ from rubicon.objc import NSObject, ObjCInstance, ns_from_py, objc_method, objc_p
 from rubicon.objc.runtime import set_ivar
 
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth import native
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
-from aio_rfcomm.backend.iobluetooth.native import _Device
+from aio_rfcomm.backend.iobluetooth.helper import native
+from aio_rfcomm.backend.iobluetooth.helper.native import _Device
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelInUseError,

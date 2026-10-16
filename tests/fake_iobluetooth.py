@@ -46,13 +46,13 @@ from typing_extensions import override
 
 load_library("AppKit")
 
-from aio_rfcomm.backend.iobluetooth import native
 from aio_rfcomm.backend.iobluetooth.codes import (
     CBError,
     CBManagerAuthorization,
     CBManagerState,
     IOReturn,
 )
+from aio_rfcomm.backend.iobluetooth.helper import native
 
 
 class FakeManager(NSObject):

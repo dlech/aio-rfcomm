@@ -60,8 +60,8 @@ class CBManagerState(enum.IntEnum):
 
     The members are CoreBluetooth's own ``CBManagerState`` cases without their
     shared prefix, and carry its values because the framework reports them as
-    numbers. The two temporary ones are kept apart in ``native._UNSETTLED``,
-    since they are not answers.
+    numbers. The two temporary ones are kept apart in
+    ``helper.native._UNSETTLED``, since they are not answers.
     """
 
     UNKNOWN = 0

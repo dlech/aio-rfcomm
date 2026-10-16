@@ -8,7 +8,7 @@ IOBluetooth will only work from the main thread of a process running a
 CFRunLoop, and macOS ends any process that touches Bluetooth without an
 application bundle saying why it wants to. A library cannot impose either
 condition on the program that imports it, so it brings its own process that
-meets both. See ``aio_rfcomm.backend.iobluetooth.__main__``.
+meets both. See ``aio_rfcomm.backend.iobluetooth.helper``.
 
 Nothing on this side imports rubicon or the framework. What comes back from
 the helper is an ordinary connected file descriptor, which is exactly what the
@@ -30,7 +30,7 @@ from typing_extensions import override
 from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
-from aio_rfcomm.backend.iobluetooth.helper import (
+from aio_rfcomm.backend.iobluetooth.process import (
     Ending,
     Helper,
     HelperFailedError,
@@ -143,7 +143,7 @@ class _Served:
     # A helper per service because bluetoothd frees a registration only when
     # the process that made it ends, and a second from one process leaks the
     # first's slot in its RFCOMM stack until Bluetooth is next switched off
-    # (see native.serve).
+    # (see helper.native.serve).
 
     def __init__(self) -> None:
         self.helper: Helper | None = None
@@ -316,9 +316,9 @@ class IOBluetoothBluetooth(BackendBluetooth):
         """
         self._serve_in = serve_in
         # Every channel this program has served on, kept for good, since its
-        # record outlives the service (see native._choose_channel). A helper
-        # reads the others' records for itself, but not one being published
-        # at the same moment, nor any if that private path has gone.
+        # record outlives the service (see helper.native._choose_channel). A
+        # helper reads the others' records for itself, but not one being
+        # published at the same moment, nor any if that private path has gone.
         self._served_on: set[int] = set()
         self._choosing = asyncio.Lock()
 

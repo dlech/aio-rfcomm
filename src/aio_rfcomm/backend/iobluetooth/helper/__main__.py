@@ -4,7 +4,7 @@
 """
 The macOS helper process.
 
-Run as ``python -m aio_rfcomm.backend.iobluetooth`` from inside a generated
+Run as ``python -m aio_rfcomm.backend.iobluetooth.helper`` from inside a generated
 application bundle, with the control socket already on the descriptor named by
 ``AIO_RFCOMM_CONTROL_FD``. Not useful to start by hand.
 
@@ -34,8 +34,8 @@ load_library("AppKit")
 
 from rubicon.objc.eventloop import RubiconEventLoop
 
-from aio_rfcomm.backend.iobluetooth import native
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
+from aio_rfcomm.backend.iobluetooth.helper import native
 from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.errors import BluetoothUnavailableError, CloseReason, RfcommError
 

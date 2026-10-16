@@ -706,7 +706,11 @@ def _spawn(
         target = _FIRST_FREE_FD if source != _FIRST_FREE_FD else _FIRST_FREE_FD + 1
         _libc.posix_spawn_file_actions_adddup2(ctypes.byref(actions), source, target)
 
-        words = [os.fsencode(executable), b"-m", b"aio_rfcomm.backend.iobluetooth"]
+        words = [
+            os.fsencode(executable),
+            b"-m",
+            b"aio_rfcomm.backend.iobluetooth.helper",
+        ]
         argv = (ctypes.c_char_p * (len(words) + 1))(*words, None)
 
         pairs = [f"{k}={v}".encode() for k, v in _environment(target).items()]

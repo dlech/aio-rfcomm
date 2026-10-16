@@ -33,6 +33,6 @@ def prompt_under_name(*, name: str, reason: str) -> None:
         reason: Why the program needs Bluetooth, shown in the permission dialog.
     """
     if sys.platform == "darwin":
-        from aio_rfcomm.backend.iobluetooth.helper import prompt_under_name
+        from aio_rfcomm.backend.iobluetooth.process import prompt_under_name
 
         prompt_under_name(name=name, reason=reason)
