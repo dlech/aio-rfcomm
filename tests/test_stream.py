@@ -11,6 +11,7 @@ place of the Bluetooth one.
 
 import asyncio
 import socket
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,14 @@ from typing_extensions import override
 
 from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
 from aio_rfcomm.errors import ChannelClosedError, CloseReason
+
+# On Windows the socket pair is two TCP sockets over loopback, which take a
+# write after the far end has closed and swallow 4 MiB at once. Measured on
+# 2026-10-15 on Windows 10.0.26200.9457. Neither is what RFCOMM does, so the
+# tests that rest on it say nothing there.
+_TCP_PAIR = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows makes the socket pair from TCP"
+)
 
 
 @asynccontextmanager
@@ -129,6 +138,7 @@ async def test_the_end_is_the_same_every_time_it_is_asked() -> None:
         assert first.value.reason is second.value.reason is sending.value.reason
 
 
+@_TCP_PAIR
 async def test_a_send_straight_after_the_peer_has_gone_is_not_a_success() -> None:
     """
     The write itself fails, before the loop has heard the connection is lost.
@@ -259,6 +269,7 @@ async def test_a_full_buffer_stops_reading_until_it_is_taken() -> None:
     assert not transport.paused
 
 
+@_TCP_PAIR
 async def test_a_cancelled_send_still_sends_everything() -> None:
     data = bytes(range(256)) * 16 * 1024
     async with _channel() as (channel, theirs):

@@ -19,9 +19,11 @@ pytest.importorskip(
 import uuid
 
 from winrt.windows.devices.bluetooth import BluetoothError
+from winrt.windows.devices.radios import RadioState
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.windows import (
+    _availability_of,
     _each,
     _format,
     _parse,
@@ -195,3 +197,22 @@ def test_no_free_channel_at_all_is_an_error() -> None:
     sock = _FakeSocket(set(range(FIRST_CHANNEL, LAST_CHANNEL + 1)))
     with pytest.raises(ChannelInUseError, match="every RFCOMM channel"):
         _bind_channel(sock, None)  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# Radio state
+# --------------------------------------------------------------------------
+
+
+def test_a_radio_that_is_on_is_usable() -> None:
+    assert _availability_of(RadioState.ON, "LOKI") == (Availability.USABLE, None)
+
+
+@pytest.mark.parametrize(
+    "radio", [RadioState.OFF, RadioState.DISABLED, RadioState.UNKNOWN]
+)
+def test_any_other_radio_is_switched_off_and_says_which(radio: RadioState) -> None:
+    availability, detail = _availability_of(radio, "LOKI")
+    assert availability is Availability.SWITCHED_OFF
+    assert detail is not None
+    assert "LOKI" in detail

@@ -20,10 +20,11 @@ it fails and then succeeds with nothing changed, so it is retried.
 """
 
 # Measurements cited in this module were made by 2026-09-20 on a Windows
-# machine whose version was not recorded. With any new one, record the Windows
-# version and build and the file versions of the Bluetooth stack: bthport.sys,
-# rfcomm.sys, bthenum.sys, bthusb.sys and bthserv.dll, which Windows updates
-# through servicing, apart from its own version.
+# machine whose version was not recorded, unless a claim says it was made on
+# 2026-10-15. Those were made on Windows 10.0.26200.9457 (25H2), with
+# bthport.sys, bthenum.sys and bthusb.sys 10.0.26100.9444, and rfcomm.sys and
+# bthserv.dll 10.0.26100.9278. With any new one, record the same: Windows
+# updates the Bluetooth stack through servicing, apart from its own version.
 
 from __future__ import annotations
 
@@ -32,8 +33,14 @@ import errno
 import logging
 import socket
 import threading
-from collections.abc import AsyncGenerator, Collection
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncGenerator, Callable, Collection
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    ExitStack,
+    asynccontextmanager,
+)
+from typing import assert_never
 from uuid import UUID
 
 from typing_extensions import override
@@ -45,9 +52,15 @@ from winrt.windows.devices.bluetooth import (
     BluetoothError,
 )
 from winrt.windows.devices.bluetooth.rfcomm import RfcommServiceId
-from winrt.windows.devices.enumeration import DeviceInformation
-from winrt.windows.devices.radios import RadioState
+from winrt.windows.devices.enumeration import (
+    DeviceInformation,
+    DeviceWatcher,
+    DeviceWatcherStatus,
+)
+from winrt.windows.devices.radios import Radio, RadioState
+from winrt.windows.foundation import EventRegistrationToken
 
+from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.provider import (
     FIRST_CHANNEL,
@@ -58,7 +71,6 @@ from aio_rfcomm.backend.provider import (
     BackendProvider,
     BackendRequest,
     BackendService,
-    NoBluetooth,
 )
 from aio_rfcomm.backend.sdp import SdpError, read_channel
 from aio_rfcomm.backend.stream import StreamChannel, open_stream
@@ -255,7 +267,46 @@ class WindowsBluetooth(BackendBluetooth):
         Args:
             address: The radio's own address, if WinRT reports one.
         """
-        self._address = address
+        self.address = address
+        """
+        The radio's own address, if WinRT reports one.
+        """
+
+        self.adapter: str | None = None
+        """
+        The device identifier of the adapter in use.
+        """
+
+        self._radio: Radio | None = None
+        self._radio_token: EventRegistrationToken | None = None
+
+    def follow_radio(
+        self,
+        adapter: str | None,
+        radio: Radio | None,
+        notice: Callable[..., None],
+    ) -> None:
+        """
+        Listen to the radio of the adapter in use, and only to it.
+
+        Args:
+            adapter: The adapter's device identifier, or ``None`` for none.
+            radio: Its radio, as just read.
+            notice: What the radio's state changes call.
+        """
+        # Subscribed afresh on every read, since an adapter unplugged and
+        # plugged back in between two reads keeps its identifier but has a
+        # new radio.
+        if self._radio is not None and self._radio_token is not None:
+            self._radio.remove_state_changed(self._radio_token)
+
+        self._radio = None
+        self._radio_token = None
+        self.adapter = adapter
+
+        if radio is not None:
+            self._radio_token = radio.add_state_changed(notice)
+            self._radio = radio
 
     @override
     async def list_known_devices(
@@ -362,7 +413,7 @@ class WindowsBluetooth(BackendBluetooth):
             channel = await _look_up(device, address, service)
 
         async with AsyncExitStack() as stack:
-            sock = await _open_socket(address, channel, self._address)
+            sock = await _open_socket(address, channel, self.address)
             stack.callback(sock.close)
 
             # An ordinary asyncio stream over a Bluetooth socket, which reads
@@ -381,6 +432,110 @@ class WindowsBluetooth(BackendBluetooth):
             yield opened
 
 
+def _stop(watcher: DeviceWatcher) -> None:
+    """
+    Stop a device watcher, unless it already has.
+
+    Args:
+        watcher: The watcher.
+    """
+    # Stop raises for a watcher that is not running, and one aborts by itself
+    # when it fails. Only documented.
+    if watcher.status in (
+        DeviceWatcherStatus.STARTED,
+        DeviceWatcherStatus.ENUMERATION_COMPLETED,
+    ):
+        watcher.stop()
+
+
+def _availability_of(radio: RadioState, name: str) -> tuple[Availability, str | None]:
+    """
+    Say whether a radio in a given state can be used.
+
+    Args:
+        radio: The radio's state.
+        name: What to call the radio.
+
+    Returns:
+        The availability, and what to tell the user.
+    """
+    match radio:
+        case RadioState.ON:
+            return Availability.USABLE, None
+        case RadioState.OFF | RadioState.DISABLED | RadioState.UNKNOWN:
+            return (
+                Availability.SWITCHED_OFF,
+                f"{name} is switched off. Turn Bluetooth on",
+            )
+        case unexpected:
+            assert_never(unexpected)
+
+
+async def _read(
+    bluetooth: WindowsBluetooth, state: AvailabilityState, notice: Callable[..., None]
+) -> None:
+    """
+    Read whether Bluetooth is usable, and which radio to use.
+
+    Args:
+        bluetooth: Where the radio in use is kept.
+        state: Where to report availability.
+        notice: What the radio's events call.
+    """
+    available = await _list_adapters()
+    # The one in use is kept while it is there. Otherwise the first.
+    chosen = next((a for a in available if a[0] == bluetooth.adapter), None)
+    chosen = chosen or (available[0] if available else None)
+    found = None if chosen is None else await BluetoothAdapter.from_id_async(chosen[0])
+    radio = None if found is None else await found.get_radio_async()
+
+    if chosen is None or radio is None:
+        bluetooth.follow_radio(None, None, notice)
+        state.set(Availability.NO_ADAPTER)
+        return
+
+    identifier, address, name = chosen
+    bluetooth.follow_radio(identifier, radio, notice)
+    bluetooth.address = address
+    state.set(*_availability_of(radio.state, name or identifier))
+
+
+async def _follow(
+    bluetooth: WindowsBluetooth,
+    state: AvailabilityState,
+    changed: asyncio.Event,
+    notice: Callable[..., None],
+) -> None:
+    """
+    Read whether the radio is usable, and again after anything that may have
+    changed it.
+
+    Args:
+        bluetooth: Where the radio in use is kept.
+        state: Where to report availability.
+        changed: Set by every event that may matter.
+        notice: What the radio's events call.
+    """
+    while True:
+        changed.clear()
+
+        try:
+            await _read(bluetooth, state, notice)
+        except Exception as error:
+            # A failed read says nothing about Bluetooth, so what was last
+            # known stands until the next event. With nothing known yet,
+            # opening Bluetooth would wait for ever.
+            logger.exception("could not read whether Bluetooth is usable")
+
+            if not state.is_known:
+                state.set(
+                    Availability.SERVICE_UNAVAILABLE,
+                    f"could not read whether Bluetooth is usable: {error}",
+                )
+
+        await changed.wait()
+
+
 class WindowsBackend(BackendProvider):
     """
     The Windows implementation.
@@ -397,13 +552,7 @@ class WindowsBackend(BackendProvider):
         self, state: AvailabilityState
     ) -> AsyncGenerator[BackendBluetooth, None]:
         """
-        Read whether the radio is usable, once.
-
-        REVISIT: availability is read only when Bluetooth is opened. Windows
-        reports a radio's changes through ``Radio.StateChanged`` and adapters
-        arriving through a device watcher, neither yet measured. Until they
-        are, a radio switched off later is noticed by the channels it ends
-        rather than reported here.
+        Follow whether the radio is usable, for as long as Bluetooth is open.
 
         Args:
             state: Where to report availability.
@@ -411,31 +560,42 @@ class WindowsBackend(BackendProvider):
         Yields:
             Bluetooth through the first radio.
         """
-        available = await _list_adapters()
-        if not available:
-            state.set(Availability.NO_ADAPTER)
-            yield NoBluetooth()
-            return
+        loop = asyncio.get_running_loop()
+        changed = asyncio.Event()
 
-        identifier, address, name = available[0]
-        found = await BluetoothAdapter.from_id_async(identifier)
-        radio = None if found is None else await found.get_radio_async()
+        def notice(*_: object) -> None:
+            # WinRT calls back on threads of its own.
+            loop.call_soon_threadsafe(changed.set)
 
-        if radio is None:
-            # Gone between the listing and now.
-            state.set(Availability.NO_ADAPTER)
-            yield NoBluetooth()
-            return
+        bluetooth = WindowsBluetooth(None)
+        # Adapters arriving and leaving, which is only documented. Switching
+        # the radio off is not one: measured on 2026-10-15, the adapter stays
+        # and the watcher says nothing, while the radio reports StateChanged
+        # within 50 ms.
+        watcher = DeviceInformation.create_watcher_aqs_filter(
+            BluetoothAdapter.get_device_selector()
+        )
 
-        if radio.state == RadioState.ON:
-            state.set(Availability.USABLE)
-        else:
-            state.set(
-                Availability.SWITCHED_OFF,
-                f"{name or identifier} is switched off. Turn Bluetooth on",
-            )
+        with ExitStack() as cleanup:
+            # Undone in reverse, so the handlers go before the watcher stops,
+            # and nothing stays subscribed if stopping fails.
+            cleanup.callback(bluetooth.follow_radio, None, None, notice)
+            cleanup.callback(_stop, watcher)
+            cleanup.callback(watcher.remove_added, watcher.add_added(notice))
+            cleanup.callback(watcher.remove_removed, watcher.add_removed(notice))
+            cleanup.callback(watcher.remove_updated, watcher.add_updated(notice))
+            watcher.start()
 
-        yield WindowsBluetooth(address)
+            with unwrap_lone_error():
+                async with asyncio.TaskGroup() as group:
+                    following = group.create_task(
+                        _follow(bluetooth, state, changed, notice)
+                    )
+
+                    try:
+                        yield bluetooth
+                    finally:
+                        following.cancel()
 
 
 async def _list_adapters() -> list[tuple[str, str | None, str | None]]:
