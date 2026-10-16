@@ -23,19 +23,15 @@ pytest.importorskip("dbus_fast", reason="the Linux backend needs dbus-fast")
 from dbus_fast import DBusError
 
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.bluez import (
-    BlueZBluetooth,
-    _Adapter,
-    _powered,
-    _Profile,
-    _Profiles,
-    _Request,
-    _take_connection,
-    _translate_connect,
-    _translate_registration,
-    _translate_socket_connect,
-    _wanted,
+from aio_rfcomm.backend.bluez import BlueZBluetooth, _wanted
+from aio_rfcomm.backend.bluez.availability import _Adapter, _powered
+from aio_rfcomm.backend.bluez.connection import _Request, _take_connection
+from aio_rfcomm.backend.bluez.errors import (
+    translate_connect,
+    translate_registration,
+    translate_socket_connect,
 )
+from aio_rfcomm.backend.bluez.profile import Profiles, _Profile
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     ChannelInUseError,
@@ -78,7 +74,7 @@ def test_several_services_are_all_accepted() -> None:
 
 
 def test_unavailable_profile_means_the_service_is_missing() -> None:
-    error = _translate_connect(
+    error = translate_connect(
         DBusError("org.bluez.Error.Failed", "br-connection-profile-unavailable"),
         "00:11",
         SERVICE,
@@ -91,7 +87,7 @@ def test_a_missing_profile_named_only_by_the_error_is_the_service_missing() -> N
     Measured on BlueZ 5.85: a service missing from the device's stored
     services fails ``ConnectProfile`` with this name and this text.
     """
-    error = _translate_connect(
+    error = translate_connect(
         DBusError(
             "org.bluez.Error.BREDR.ProfileUnavailable", "No more profiles to connect to"
         ),
@@ -102,7 +98,7 @@ def test_a_missing_profile_named_only_by_the_error_is_the_service_missing() -> N
 
 
 def test_page_timeout_means_the_device_did_not_answer() -> None:
-    error = _translate_connect(
+    error = translate_connect(
         # Measured on BlueZ 5.85, for a paired device that is switched off.
         DBusError("org.bluez.Error.Failed", "br-connection-page-timeout"),
         "00:11",
@@ -112,7 +108,7 @@ def test_page_timeout_means_the_device_did_not_answer() -> None:
 
 
 def test_anything_else_is_a_connection_failure() -> None:
-    error = _translate_connect(
+    error = translate_connect(
         DBusError("org.bluez.Error.Failed", "br-connection-busy"), "00:11", SERVICE
     )
     assert isinstance(error, ConnectionFailedError)
@@ -121,7 +117,7 @@ def test_anything_else_is_a_connection_failure() -> None:
 
 def test_a_uuid_held_elsewhere_says_so() -> None:
     # Measured on BlueZ 5.85.
-    error = _translate_registration(
+    error = translate_registration(
         DBusError("org.bluez.Error.NotPermitted", "UUID already registered"), SERVICE
     )
     assert isinstance(error, ConnectionFailedError)
@@ -282,9 +278,9 @@ def _asking(manager: _FakeManager) -> Callable[[], Awaitable[_FakeManager]]:
     return get
 
 
-def _profiles() -> tuple[_Profiles, _FakeBus, _FakeManager]:
+def _profiles() -> tuple[Profiles, _FakeBus, _FakeManager]:
     bus, manager = _FakeBus(), _FakeManager()
-    return _Profiles(bus, _asking(manager)), bus, manager  # type: ignore[arg-type]
+    return Profiles(bus, _asking(manager)), bus, manager  # type: ignore[arg-type]
 
 
 async def test_concurrent_users_share_one_registration() -> None:
@@ -324,7 +320,7 @@ async def test_a_failed_registration_leaves_nothing_exported() -> None:
     manager = _FakeManager(
         fails=DBusError("org.bluez.Error.NotPermitted", "UUID already registered")
     )
-    profiles = _Profiles(bus, _asking(manager))  # type: ignore[arg-type]
+    profiles = Profiles(bus, _asking(manager))  # type: ignore[arg-type]
 
     with pytest.raises(ConnectionFailedError, match="another program"):
         async with profiles.acquire(SERVICE):
@@ -373,7 +369,7 @@ async def test_channel_numbers_need_bluetooth_sockets(
 
 
 def test_a_refused_channel_means_nothing_is_listening() -> None:
-    error = _translate_socket_connect(
+    error = translate_socket_connect(
         ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused"),
         "00:11:22:33:44:55",
         12,
@@ -382,14 +378,14 @@ def test_a_refused_channel_means_nothing_is_listening() -> None:
 
 
 def test_a_device_that_is_not_there_is_not_found() -> None:
-    error = _translate_socket_connect(
+    error = translate_socket_connect(
         OSError(errno.EHOSTDOWN, "Host is down"), "00:11:22:33:44:55", 12
     )
     assert isinstance(error, DeviceNotFoundError)
 
 
 def test_other_socket_failures_are_failed_connections() -> None:
-    error = _translate_socket_connect(
+    error = translate_socket_connect(
         OSError(errno.EIO, "Input/output error"), "00:11:22:33:44:55", 12
     )
     assert isinstance(error, ConnectionFailedError)
