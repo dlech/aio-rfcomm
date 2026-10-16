@@ -32,8 +32,8 @@ from typing import Any, NamedTuple
 
 from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth._bundle import build_helper
-from aio_rfcomm.backend.iobluetooth._protocol import Link
+from aio_rfcomm.backend.iobluetooth.bundle import build_helper
+from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,

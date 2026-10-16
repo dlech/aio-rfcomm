@@ -33,9 +33,9 @@ if sys.platform != "darwin":
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import IOBluetoothBackend, IOBluetoothBluetooth
 from aio_rfcomm.backend.iobluetooth import __main__ as helper_main
-from aio_rfcomm.backend.iobluetooth._codes import CBManagerState
-from aio_rfcomm.backend.iobluetooth._helper import Helper, HelperFailedError
-from aio_rfcomm.backend.iobluetooth._protocol import Link
+from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
+from aio_rfcomm.backend.iobluetooth.helper import Helper, HelperFailedError
+from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (

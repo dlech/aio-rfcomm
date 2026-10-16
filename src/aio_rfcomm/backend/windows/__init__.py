@@ -75,7 +75,7 @@ from aio_rfcomm.backend.provider import (
 )
 from aio_rfcomm.backend.sdp import SdpError, read_channel
 from aio_rfcomm.backend.stream import StreamChannel, open_stream
-from aio_rfcomm.backend.windows import _service
+from aio_rfcomm.backend.windows import publish
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
@@ -383,7 +383,7 @@ class WindowsBluetooth(BackendBluetooth):
             sock.listen(_BACKLOG)
 
             try:
-                _service.register(service, name, chosen)
+                publish.register(service, name, chosen)
             except OSError as error:
                 raise ConnectionFailedError(
                     f"could not advertise {service} on channel {chosen}: {error}"
@@ -914,7 +914,7 @@ def _deregister(service: UUID, name: str, channel: int) -> None:
         name: The name it was published under.
         channel: The channel it was published on.
     """
-    failure = _service.delete(service, name, channel)
+    failure = publish.delete(service, name, channel)
     if failure:
         # Not raised: Windows drops the record when the process exits anyway,
         # and the delete is refused even for a query set that registered

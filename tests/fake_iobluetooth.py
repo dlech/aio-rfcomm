@@ -46,8 +46,8 @@ from typing_extensions import override
 
 load_library("AppKit")
 
-from aio_rfcomm.backend.iobluetooth import _native
-from aio_rfcomm.backend.iobluetooth._codes import (
+from aio_rfcomm.backend.iobluetooth import native
+from aio_rfcomm.backend.iobluetooth.codes import (
     CBError,
     CBManagerAuthorization,
     CBManagerState,
@@ -600,9 +600,9 @@ class Framework:
         Stand in for ``ObjCClass``, for the private classes looked up by name.
         """
         match name:
-            case _native._COORDINATOR:
+            case native._COORDINATOR:
                 return FakeCoordinatorClass(self.manager)
-            case _native._DEVICE_MANAGER:
+            case native._DEVICE_MANAGER:
                 return self.devices
             case _:
                 raise NameError(f"ObjC Class {name} couldn't be found.")
@@ -655,11 +655,11 @@ def fake_framework_parts(
     fake = FakeManager.alloc().init()
     fake.state = int(state)
     framework = Framework(fake)
-    monkeypatch.setattr(_native, "ObjCClass", framework.find_class)
-    monkeypatch.setattr(_native, "CBManager", FakeAuthorization(authorization))
-    monkeypatch.setattr(_native, "IOBluetoothDevice", FakeDeviceClass)
-    monkeypatch.setattr(_native, "IOBluetoothRFCOMMChannel", framework.channels)
-    monkeypatch.setattr(_native, "IOBluetoothSDPServiceRecord", framework.records)
+    monkeypatch.setattr(native, "ObjCClass", framework.find_class)
+    monkeypatch.setattr(native, "CBManager", FakeAuthorization(authorization))
+    monkeypatch.setattr(native, "IOBluetoothDevice", FakeDeviceClass)
+    monkeypatch.setattr(native, "IOBluetoothRFCOMMChannel", framework.channels)
+    monkeypatch.setattr(native, "IOBluetoothSDPServiceRecord", framework.records)
     monkeypatch.setattr(FakeDeviceClass, "answers", answers)
     monkeypatch.setattr(FakeDeviceClass, "connected", connected)
     return framework
@@ -674,12 +674,12 @@ def clean_state() -> Generator[None, None, None]:
     reloaded to get this back. Clearing what it holds is the nearest thing to
     the fresh process each test is written as though it had.
     """
-    _native._in_use.clear()
-    _native._closed_at.clear()
+    native._in_use.clear()
+    native._closed_at.clear()
     FakeDeviceClass.made.clear()
     opened.clear()
     yield
-    _native._in_use.clear()
-    _native._closed_at.clear()
+    native._in_use.clear()
+    native._closed_at.clear()
     FakeDeviceClass.made.clear()
     opened.clear()

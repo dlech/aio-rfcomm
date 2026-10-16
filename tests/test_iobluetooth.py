@@ -38,15 +38,15 @@ from aio_rfcomm.backend.iobluetooth import (
     _reason,
     _wanted,
 )
-from aio_rfcomm.backend.iobluetooth._bundle import _identifier, _key
-from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
-from aio_rfcomm.backend.iobluetooth._helper import (
+from aio_rfcomm.backend.iobluetooth.bundle import _identifier, _key
+from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
+from aio_rfcomm.backend.iobluetooth.helper import (
     Helper,
     HelperFailedError,
     _rebuild,
     run_helper,
 )
-from aio_rfcomm.backend.iobluetooth._protocol import MAX_MESSAGE, Link, ProtocolError
+from aio_rfcomm.backend.iobluetooth.protocol import MAX_MESSAGE, Link, ProtocolError
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,

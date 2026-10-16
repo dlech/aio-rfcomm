@@ -54,7 +54,7 @@ from rubicon.objc.runtime import autoreleasepool, libc, load_library, objc_id
 from typing_extensions import override
 
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth._codes import (
+from aio_rfcomm.backend.iobluetooth.codes import (
     CBError,
     CBManagerAuthorization,
     CBManagerState,

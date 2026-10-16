@@ -126,7 +126,7 @@ def test_the_socket_address_is_packed_the_way_windows_reads_it() -> None:
     """
     import ctypes
 
-    from aio_rfcomm.backend.windows._service import _SOCKADDR_BTH
+    from aio_rfcomm.backend.windows.publish import _SOCKADDR_BTH
 
     assert ctypes.sizeof(_SOCKADDR_BTH) == 30
     assert _SOCKADDR_BTH.port.offset == 26
@@ -136,7 +136,7 @@ def test_the_socket_address_is_packed_the_way_windows_reads_it() -> None:
 def test_a_uuid_survives_the_trip_into_windows_layout() -> None:
     import ctypes
 
-    from aio_rfcomm.backend.windows._service import _GUID
+    from aio_rfcomm.backend.windows.publish import _GUID
 
     value = uuid.UUID("c0ffee00-1dea-4b1d-9f00-a100c0ffee01")
     guid = _GUID.of(value)

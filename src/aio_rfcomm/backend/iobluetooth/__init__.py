@@ -29,8 +29,8 @@ from typing_extensions import override
 
 from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
-from aio_rfcomm.backend.iobluetooth._helper import (
+from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
+from aio_rfcomm.backend.iobluetooth.helper import (
     Ending,
     Helper,
     HelperFailedError,
@@ -143,7 +143,7 @@ class _Served:
     # A helper per service because bluetoothd frees a registration only when
     # the process that made it ends, and a second from one process leaks the
     # first's slot in its RFCOMM stack until Bluetooth is next switched off
-    # (see _native.serve).
+    # (see native.serve).
 
     def __init__(self) -> None:
         self.helper: Helper | None = None
@@ -316,7 +316,7 @@ class IOBluetoothBluetooth(BackendBluetooth):
         """
         self._serve_in = serve_in
         # Every channel this program has served on, kept for good, since its
-        # record outlives the service (see _native._choose_channel). A helper
+        # record outlives the service (see native._choose_channel). A helper
         # reads the others' records for itself, but not one being published
         # at the same moment, nor any if that private path has gone.
         self._served_on: set[int] = set()

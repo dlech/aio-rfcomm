@@ -37,9 +37,9 @@ from rubicon.objc import NSObject, ObjCInstance, ns_from_py, objc_method, objc_p
 from rubicon.objc.runtime import set_ivar
 
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth import _native
-from aio_rfcomm.backend.iobluetooth._codes import CBManagerAuthorization, CBManagerState
-from aio_rfcomm.backend.iobluetooth._native import _Device
+from aio_rfcomm.backend.iobluetooth import native
+from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
+from aio_rfcomm.backend.iobluetooth.native import _Device
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelInUseError,
@@ -81,9 +81,9 @@ def manager(monkeypatch: pytest.MonkeyPatch) -> FakeManager:
     """
     fake = FakeManager.alloc().init()
     found = FakeCoordinatorClass(fake)
-    monkeypatch.setattr(_native, "ObjCClass", lambda _name: found)
+    monkeypatch.setattr(native, "ObjCClass", lambda _name: found)
     monkeypatch.setattr(
-        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+        native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
     )
     return fake
 
@@ -98,14 +98,14 @@ async def test_a_manager_already_powered_on_is_not_waited_for(
 ) -> None:
     manager.state = CBManagerState.POWERED_ON
     async with asyncio.timeout(1):
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
 
 
 async def test_an_unknown_state_is_waited_out(manager: FakeManager) -> None:
     """
     Unknown is the state every process starts in, and it means nothing yet.
     """
-    waiting = asyncio.ensure_future(_native._wait_until_ready())
+    waiting = asyncio.ensure_future(native._wait_until_ready())
     await asyncio.sleep(SETTLE)
     assert not waiting.done()
 
@@ -122,7 +122,7 @@ async def test_resetting_is_waited_out_rather_than_reported(
     another value rather than being one.
     """
     manager.state = CBManagerState.RESETTING
-    waiting = asyncio.ensure_future(_native._wait_until_ready())
+    waiting = asyncio.ensure_future(native._wait_until_ready())
     await asyncio.sleep(SETTLE)
     assert not waiting.done()
 
@@ -137,10 +137,10 @@ async def test_a_later_reset_is_waited_out_too(manager: FakeManager) -> None:
     once per process and then assumed.
     """
     manager.state = CBManagerState.POWERED_ON
-    await _native._wait_until_ready()
+    await native._wait_until_ready()
 
     manager.state = CBManagerState.RESETTING
-    waiting = asyncio.ensure_future(_native._wait_until_ready())
+    waiting = asyncio.ensure_future(native._wait_until_ready())
     await asyncio.sleep(SETTLE)
     assert not waiting.done()
 
@@ -160,9 +160,9 @@ async def test_a_manager_that_cannot_be_reached_is_not_waited_for(
     def gone(_name: str) -> object:
         raise ValueError("no Objective-C class named that")
 
-    monkeypatch.setattr(_native, "ObjCClass", gone)
+    monkeypatch.setattr(native, "ObjCClass", gone)
     async with asyncio.timeout(1):
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
 
 
 # --------------------------------------------------------------------------
@@ -180,7 +180,7 @@ async def test_a_switched_off_radio_is_reported_not_waited_for(
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(BluetoothUnavailableError) as raised:
         async with asyncio.timeout(1):
-            await _native._wait_until_ready()
+            await native._wait_until_ready()
     assert raised.value.reason is Availability.SWITCHED_OFF
 
 
@@ -192,11 +192,11 @@ async def test_a_refused_radio_does_not_look_switched_off(
     telling someone to turn on Bluetooth that is already on helps nobody.
     """
     monkeypatch.setattr(
-        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
+        native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
     )
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(BluetoothUnavailableError) as raised:
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
     assert raised.value.reason is Availability.NOT_ALLOWED
 
 
@@ -204,11 +204,11 @@ async def test_an_unauthorized_state_is_a_permission_error(
     manager: FakeManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
+        native, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
     )
     manager.state = CBManagerState.UNAUTHORIZED
     with pytest.raises(BluetoothUnavailableError) as raised:
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
     assert raised.value.reason is Availability.NOT_ALLOWED
 
 
@@ -217,7 +217,7 @@ async def test_a_machine_with_no_bluetooth_is_not_an_adapter_that_is_off(
 ) -> None:
     manager.state = CBManagerState.UNSUPPORTED
     with pytest.raises(BluetoothUnavailableError) as raised:
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
     assert raised.value.reason is Availability.UNSUPPORTED
 
 
@@ -230,7 +230,7 @@ async def test_a_state_from_the_future_is_still_a_failure(
     """
     manager.state = 9
     with pytest.raises(ConnectionFailedError, match="9"):
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
 
 
 async def test_a_powered_on_in_the_middle_of_a_toggle_is_taken_at_face_value(
@@ -244,7 +244,7 @@ async def test_a_powered_on_in_the_middle_of_a_toggle_is_taken_at_face_value(
     taken, and the one that matters is the state read by the next open.
     """
     manager.state = CBManagerState.RESETTING
-    waiting = asyncio.ensure_future(_native._wait_until_ready())
+    waiting = asyncio.ensure_future(native._wait_until_ready())
     await asyncio.sleep(SETTLE)
     assert not waiting.done()
 
@@ -255,12 +255,12 @@ async def test_a_powered_on_in_the_middle_of_a_toggle_is_taken_at_face_value(
     # The radio really does go, a moment later.
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(BluetoothUnavailableError) as raised:
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
     assert raised.value.reason is Availability.SWITCHED_OFF
 
     manager.state = CBManagerState.POWERED_ON
     async with asyncio.timeout(1):
-        await _native._wait_until_ready()
+        await native._wait_until_ready()
 
 
 async def test_a_power_on_from_a_framework_thread_is_heard(
@@ -270,7 +270,7 @@ async def test_a_power_on_from_a_framework_thread_is_heard(
     Measured at startup: the move to powered on arrived on a framework
     thread, where nothing that belongs to the event loop may be touched.
     """
-    waiting = asyncio.ensure_future(_native._wait_until_ready())
+    waiting = asyncio.ensure_future(native._wait_until_ready())
     await asyncio.sleep(SETTLE)
     assert not waiting.done()
 
@@ -301,7 +301,7 @@ async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None
     manager.state = CBManagerState.POWERED_ON
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        _native.report_states(lambda *each: reports.append(each))
+        native.report_states(lambda *each: reports.append(each))
     )
     try:
         await until_observed(manager)
@@ -325,7 +325,7 @@ async def test_a_restart_is_reported_state_by_state(manager: FakeManager) -> Non
     manager.state = CBManagerState.POWERED_ON
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        _native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(lambda state, _auth: reports.append((state, 0)))
     )
     try:
         await until_observed(manager)
@@ -356,14 +356,14 @@ async def test_a_state_that_settles_unheard_is_still_reported(
     """
     settling = SettlingManager.alloc().init()
     monkeypatch.setattr(
-        _native, "ObjCClass", lambda _name: FakeCoordinatorClass(settling)
+        native, "ObjCClass", lambda _name: FakeCoordinatorClass(settling)
     )
     monkeypatch.setattr(
-        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+        native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
     )
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        _native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(lambda state, _auth: reports.append((state, 0)))
     )
     try:
         states = [state for state, _ in await _reported(reports, 2)]
@@ -382,7 +382,7 @@ async def test_a_state_still_unknown_after_observing_is_looked_at_again(
     manager.state = CBManagerState.UNKNOWN
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        _native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(lambda state, _auth: reports.append((state, 0)))
     )
     try:
         await until_observed(manager)
@@ -401,7 +401,7 @@ async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> N
     rest of the process, into a loop that may have gone.
     """
     manager.state = CBManagerState.POWERED_ON
-    watching = asyncio.ensure_future(_native.report_states(lambda *_each: None))
+    watching = asyncio.ensure_future(native.report_states(lambda *_each: None))
     await until_observed(manager)
     watching.cancel()
     await asyncio.gather(watching, return_exceptions=True)
@@ -426,14 +426,14 @@ async def test_a_manager_that_cannot_be_reached_reports_the_power_once(
     def gone(_name: str) -> object:
         raise ValueError("no Objective-C class named that")
 
-    monkeypatch.setattr(_native, "ObjCClass", gone)
-    monkeypatch.setattr(_native, "IOBluetoothHostController", _Controller)
+    monkeypatch.setattr(native, "ObjCClass", gone)
+    monkeypatch.setattr(native, "IOBluetoothHostController", _Controller)
     monkeypatch.setattr(
-        _native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+        native, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
     )
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        _native.report_states(lambda *each: reports.append(each))
+        native.report_states(lambda *each: reports.append(each))
     )
     try:
         await asyncio.sleep(SETTLE)
@@ -457,8 +457,8 @@ async def test_a_device_never_used_is_not_waited_for(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     began = asyncio.get_running_loop().time()
-    await _native._wait_for_relink(ADDRESS)
-    assert asyncio.get_running_loop().time() - began < _native._RELINK_SECONDS / 2
+    await native._wait_for_relink(ADDRESS)
+    assert asyncio.get_running_loop().time() - began < native._RELINK_SECONDS / 2
 
 
 async def test_a_channel_just_closed_is_waited_out(
@@ -468,10 +468,10 @@ async def test_a_channel_just_closed_is_waited_out(
     Reopening inside the window is swallowed by the framework, so the wait is
     what the next open has instead of a lost second.
     """
-    _native._closed_at[ADDRESS] = time.monotonic()
+    native._closed_at[ADDRESS] = time.monotonic()
     began = time.monotonic()
-    await _native._wait_for_relink(ADDRESS)
-    assert time.monotonic() - began >= _native._RELINK_SECONDS * 0.9
+    await native._wait_for_relink(ADDRESS)
+    assert time.monotonic() - began >= native._RELINK_SECONDS * 0.9
 
 
 async def test_only_the_remainder_of_the_window_is_waited_out(
@@ -481,12 +481,12 @@ async def test_only_the_remainder_of_the_window_is_waited_out(
     It is a deadline rather than a delay: a caller that did anything at all in
     between pays for none of it.
     """
-    half = _native._RELINK_SECONDS / 2
-    _native._closed_at[ADDRESS] = time.monotonic() - half
+    half = native._RELINK_SECONDS / 2
+    native._closed_at[ADDRESS] = time.monotonic() - half
     began = time.monotonic()
-    await _native._wait_for_relink(ADDRESS)
+    await native._wait_for_relink(ADDRESS)
     waited = time.monotonic() - began
-    assert waited < _native._RELINK_SECONDS
+    assert waited < native._RELINK_SECONDS
     assert waited > 0
 
 
@@ -494,13 +494,13 @@ async def test_a_window_long_gone_is_not_waited_for(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        _native,
+        native,
         "_closed_at",
-        {ADDRESS: time.monotonic() - _native._RELINK_SECONDS * 10},
+        {ADDRESS: time.monotonic() - native._RELINK_SECONDS * 10},
     )
     began = time.monotonic()
-    await _native._wait_for_relink(ADDRESS)
-    assert time.monotonic() - began < _native._RELINK_SECONDS / 2
+    await native._wait_for_relink(ADDRESS)
+    assert time.monotonic() - began < native._RELINK_SECONDS / 2
 
 
 # --------------------------------------------------------------------------
@@ -514,13 +514,13 @@ def devices(manager: FakeManager, monkeypatch: pytest.MonkeyPatch) -> None:
     A powered-on manager and a device class that needs no radio.
     """
     manager.state = CBManagerState.POWERED_ON
-    monkeypatch.setattr(_native, "IOBluetoothDevice", FakeDeviceClass)
-    monkeypatch.setattr(_native, "IOBluetoothRFCOMMChannel", wrap_channel)
+    monkeypatch.setattr(native, "IOBluetoothDevice", FakeDeviceClass)
+    monkeypatch.setattr(native, "IOBluetoothRFCOMMChannel", wrap_channel)
 
 
 async def test_an_address_that_is_not_one_is_refused(devices: None) -> None:
     with pytest.raises(DeviceNotFoundError):
-        async with _native.open_channel(FakeDeviceClass.unknown, channel=4):
+        async with native.open_channel(FakeDeviceClass.unknown, channel=4):
             pass
 
 
@@ -529,9 +529,9 @@ async def test_a_second_channel_to_one_device_is_refused(devices: None) -> None:
     macOS closes channels in the order they were opened rather than the one
     asked for, so holding two to a device loses both.
     """
-    _native._in_use.add(ADDRESS.upper())
+    native._in_use.add(ADDRESS.upper())
     with pytest.raises(UnsupportedOperationError, match="already has"):
-        async with _native.open_channel(ADDRESS, channel=4):
+        async with native.open_channel(ADDRESS, channel=4):
             pass
 
 
@@ -541,11 +541,11 @@ async def test_a_channel_to_another_device_is_not_refused(
     """
     The claim is per device: two at once share nothing.
     """
-    _native._in_use.add("00:11:22:33:44:55")
+    native._in_use.add("00:11:22:33:44:55")
     monkeypatch.setattr(FakeDeviceClass, "connected", False)
     monkeypatch.setattr(FakeDeviceClass, "answers", False)
     with pytest.raises(DeviceNotFoundError, match="did not answer"):
-        async with _native.open_channel(ADDRESS, channel=4):
+        async with native.open_channel(ADDRESS, channel=4):
             pass
 
 
@@ -560,9 +560,9 @@ async def test_the_claim_is_let_go_of_when_the_open_fails(
     monkeypatch.setattr(FakeDeviceClass, "connected", False)
     monkeypatch.setattr(FakeDeviceClass, "answers", False)
     with pytest.raises(DeviceNotFoundError):
-        async with _native.open_channel(ADDRESS, channel=4):
+        async with native.open_channel(ADDRESS, channel=4):
             pass
-    assert _native._in_use == set()
+    assert native._in_use == set()
 
 
 # --------------------------------------------------------------------------
@@ -621,12 +621,12 @@ def quick(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     The framework stood in for, and its waits shortened so tests stay quick.
     """
-    monkeypatch.setattr(_native, "_OPEN_REPORT_SECONDS", 0.05)
-    monkeypatch.setattr(_native, "_SETTLE_SECONDS", 0.01)
-    monkeypatch.setattr(_native, "_CLOSE_TIMEOUT", 0.05)
-    monkeypatch.setattr(_native, "_open_results", {})
+    monkeypatch.setattr(native, "_OPEN_REPORT_SECONDS", 0.05)
+    monkeypatch.setattr(native, "_SETTLE_SECONDS", 0.01)
+    monkeypatch.setattr(native, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(native, "_open_results", {})
     monkeypatch.setattr(
-        _native,
+        native,
         "IOBluetoothRFCOMMChannel",
         lambda _handle: HandedBack(bool(_pending.pop(0)) if _pending else False),
     )
@@ -637,7 +637,7 @@ _pending: list[int] = []
 
 async def test_an_open_reported_at_once_is_not_asked_for_twice(quick: None) -> None:
     device = FlakyDevice(report_on=1)
-    await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 1
 
 
@@ -649,7 +649,7 @@ async def test_an_open_that_is_never_reported_is_asked_for_again(
     silence is the only symptom there is to act on.
     """
     device = FlakyDevice(report_on=3)
-    await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 3
 
 
@@ -658,8 +658,8 @@ async def test_an_open_never_reported_at_all_gives_up_and_says_so(
 ) -> None:
     device = FlakyDevice(report_on=99)
     with pytest.raises(ConnectionFailedError, match="never reported"):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
-    assert device.attempts == _native._OPEN_REPORT_ATTEMPTS
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == native._OPEN_REPORT_ATTEMPTS
 
 
 class RefusingDevice(FlakyDevice):
@@ -684,7 +684,7 @@ class RefusingDevice(FlakyDevice):
     ) -> int:
         self.attempts += 1
         asyncio.get_running_loop().call_soon(
-            _native.record_open_result, ADDRESS, withChannelID, self.result
+            native.record_open_result, ADDRESS, withChannelID, self.result
         )
         return 0
 
@@ -692,7 +692,7 @@ class RefusingDevice(FlakyDevice):
 async def test_a_refused_channel_is_not_asked_for_again(quick: None) -> None:
     device = RefusingDevice()
     with pytest.raises(ServiceNotFoundError, match="refused channel 4"):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 1
 
 
@@ -701,7 +701,7 @@ async def test_a_device_hanging_up_as_the_channel_opens_is_not_asked_again(
 ) -> None:
     device = RefusingDevice(927)
     with pytest.raises(ConnectionFailedError, match="hung up as channel 4 opened"):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 1
 
 
@@ -710,7 +710,7 @@ async def test_any_other_answer_from_bluetoothd_is_not_asked_for_again(
 ) -> None:
     device = RefusingDevice(911)
     with pytest.raises(ConnectionFailedError, match="bluetoothd said 911"):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 1
 
 
@@ -722,8 +722,8 @@ async def test_an_open_bluetoothd_says_succeeded_is_asked_for_again(
     """
     device = RefusingDevice(0)
     with pytest.raises(ConnectionFailedError, match="never reported"):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
-    assert device.attempts == _native._OPEN_REPORT_ATTEMPTS
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == native._OPEN_REPORT_ATTEMPTS
 
 
 class _Peer(NSObject):
@@ -745,23 +745,23 @@ def _pointer(thing: object) -> int:
     return cast(int, cast(Any, thing).ptr.value)
 
 
-def _read(info: dict[str, int]) -> _native._OpenResult:
+def _read(info: dict[str, int]) -> native._OpenResult:
     ns = ns_from_py(cast(Any, info))
-    return _native._read_open_result(_pointer(_peer()), _pointer(ns))
+    return native._read_open_result(_pointer(_peer()), _pointer(ns))
 
 
 async def test_the_result_the_daemon_sent_is_noted_by_address_and_channel(
     quick: None,
 ) -> None:
-    _native._note_open_result(
+    native._note_open_result(
         _read({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12})
     )
-    assert _native._open_results == {(ADDRESS, 12): 913}
+    assert native._open_results == {(ADDRESS, 12): 913}
 
 
 async def test_a_result_without_a_channel_is_ignored(quick: None) -> None:
-    _native._note_open_result(_read({"kCBMsgArgResult": 913}))
-    assert _native._open_results == {}
+    native._note_open_result(_read({"kCBMsgArgResult": 913}))
+    assert native._open_results == {}
 
 
 async def test_a_value_of_another_type_is_left_unread(quick: None) -> None:
@@ -784,19 +784,19 @@ def test_the_daemon_s_report_is_read_off_the_main_thread() -> None:
         ObjCInstance,
         ns_from_py({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12}),
     )
-    read: list[_native._OpenResult] = []
+    read: list[native._OpenResult] = []
     framework = threading.Thread(
         target=lambda: read.append(
-            _native._read_open_result(_pointer(peer), _pointer(info))
+            native._read_open_result(_pointer(peer), _pointer(info))
         )
     )
     framework.start()
     framework.join()
-    assert read == [_native._OpenResult(ADDRESS, 12, 913, None)]
+    assert read == [native._OpenResult(ADDRESS, 12, 913, None)]
 
 
-def _failed_open(result: int, descriptor: int) -> _native._OpenResult:
-    return _native._OpenResult(ADDRESS, 4, result, descriptor)
+def _failed_open(result: int, descriptor: int) -> native._OpenResult:
+    return native._OpenResult(ADDRESS, 4, result, descriptor)
 
 
 def _is_open(descriptor: int) -> bool:
@@ -870,7 +870,7 @@ def _read_unread_on_a_thread(channel: NSObject) -> bytes:
     # than hanging the suite.
     read: list[bytes] = []
     framework = threading.Thread(
-        target=lambda: read.append(_native._read_unread(_pointer(channel))),
+        target=lambda: read.append(native._read_unread(_pointer(channel))),
         daemon=True,
     )
     framework.start()
@@ -922,19 +922,19 @@ def test_a_stream_that_does_not_say_its_socket_has_nothing_unread() -> None:
 def test_a_channel_with_no_stream_left_has_nothing_unread() -> None:
     channel = _ClosingChannel.alloc().init()
 
-    assert _native._read_unread(_pointer(channel)) == b""
+    assert native._read_unread(_pointer(channel)) == b""
 
 
 async def test_bytes_read_out_at_close_arrive_before_the_end() -> None:
-    delegate = cast(Any, _native._ChannelDelegate.alloc().init())
+    delegate = cast(Any, native._ChannelDelegate.alloc().init())
     channel = _ClosingChannel.alloc().init()
-    _native._unread[_pointer(channel)] = b"tail"
+    native._unread[_pointer(channel)] = b"tail"
 
     delegate.rfcommChannelClosed_(channel)
 
     assert delegate.arrived.get_nowait() == b"tail"
     assert delegate.ended.is_set()
-    assert not _native._unread
+    assert not native._unread
 
 
 def test_the_null_device_a_failed_open_leaves_is_closed() -> None:
@@ -942,21 +942,21 @@ def test_the_null_device_a_failed_open_leaves_is_closed() -> None:
     Measured: one /dev/null descriptor left open per refused channel.
     """
     descriptor = os.open(os.devnull, os.O_RDONLY)
-    _native._close_unclaimed_socket(_failed_open(913, descriptor))
+    native._close_unclaimed_socket(_failed_open(913, descriptor))
     assert not _is_open(descriptor)
 
 
 def test_a_real_socket_is_never_closed_whatever_the_result() -> None:
     ours, theirs = socket.socketpair()
     with ours, theirs:
-        _native._close_unclaimed_socket(_failed_open(913, ours.fileno()))
+        native._close_unclaimed_socket(_failed_open(913, ours.fileno()))
         assert _is_open(ours.fileno())
 
 
 def test_nothing_is_closed_after_a_success() -> None:
     descriptor = os.open(os.devnull, os.O_RDONLY)
     try:
-        _native._close_unclaimed_socket(_failed_open(0, descriptor))
+        native._close_unclaimed_socket(_failed_open(0, descriptor))
         assert _is_open(descriptor)
     finally:
         os.close(descriptor)
@@ -965,19 +965,19 @@ def test_nothing_is_closed_after_a_success() -> None:
 async def test_a_refusal_of_another_channel_is_not_taken_for_this_one(
     quick: None,
 ) -> None:
-    _native.record_open_result(ADDRESS, 5, 913)
+    native.record_open_result(ADDRESS, 5, 913)
     device = FlakyDevice(report_on=99)
     with pytest.raises(ConnectionFailedError, match="never reported"):
-        await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+        await native._open_reported(cast(_Device, device), 4, ADDRESS)
 
 
 async def test_a_refusal_left_from_before_is_forgotten(quick: None) -> None:
     """
     Something may be listening by now, so only this attempt's result counts.
     """
-    _native.record_open_result(ADDRESS, 4, 913)
+    native.record_open_result(ADDRESS, 4, 913)
     device = FlakyDevice(report_on=2)
-    await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 2
 
 
@@ -988,7 +988,7 @@ async def test_a_channel_still_open_from_before_is_waited_out(quick: None) -> No
     """
     _pending[:] = [1, 1, 0]
     device = FlakyDevice(report_on=1)
-    await _native._open_reported(cast(_Device, device), 4, ADDRESS)
+    await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 3
     assert _pending == []
 
@@ -1001,17 +1001,17 @@ async def test_a_radio_switched_off_after_a_connection_is_reported(
     nothing reports that on its own -- so the state is read again at every
     open rather than settled once and assumed.
     """
-    async with _native.open_channel(ADDRESS, channel=4):
+    async with native.open_channel(ADDRESS, channel=4):
         pass
 
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(BluetoothUnavailableError) as raised:
-        async with _native.open_channel(ADDRESS, channel=4):
+        async with native.open_channel(ADDRESS, channel=4):
             pass
     assert raised.value.reason is Availability.SWITCHED_OFF
 
     manager.state = CBManagerState.POWERED_ON
-    async with _native.open_channel(ADDRESS, channel=4):
+    async with native.open_channel(ADDRESS, channel=4):
         pass
 
 
@@ -1021,15 +1021,15 @@ async def test_a_radio_switched_off_does_not_strand_the_device_claim(
     """
     Refusing an open before the claim is taken must leave nothing behind.
     """
-    async with _native.open_channel(ADDRESS, channel=4):
+    async with native.open_channel(ADDRESS, channel=4):
         pass
 
     manager.state = CBManagerState.POWERED_OFF
     with pytest.raises(BluetoothUnavailableError) as raised:
-        async with _native.open_channel(ADDRESS, channel=4):
+        async with native.open_channel(ADDRESS, channel=4):
             pass
     assert raised.value.reason is Availability.SWITCHED_OFF
-    assert _native._in_use == set()
+    assert native._in_use == set()
 
 
 # --------------------------------------------------------------------------
@@ -1043,7 +1043,7 @@ async def test_a_service_is_published_on_the_channel_it_reports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     framework = fake_framework_parts(monkeypatch)
-    async with _native.serve(SERVICE, name="chat", channel=None) as service:
+    async with native.serve(SERVICE, name="chat", channel=None) as service:
         [published] = framework.records.published
         record = cast(Any, published.record)
         assert record["0100"] == "chat"
@@ -1061,7 +1061,7 @@ async def test_one_registration_is_made_and_it_reaches_the_listener(
     listener really answers.
     """
     framework = fake_framework_parts(monkeypatch)
-    async with _native.serve(SERVICE, name="chat", channel=None) as service:
+    async with native.serve(SERVICE, name="chat", channel=None) as service:
         fake = framework.channels.connect_in(ADDRESS, service.channel)
         async with asyncio.timeout(1):
             channel = await service.accept()
@@ -1085,7 +1085,7 @@ async def test_registering_waits_until_the_manager_is_ready(
     Measured: made before the manager is ready, a registration is never sent.
     """
     framework = fake_framework_parts(monkeypatch, state=CBManagerState.UNKNOWN)
-    serving = asyncio.ensure_future(_native.serve(SERVICE, name="chat").__aenter__())
+    serving = asyncio.ensure_future(native.serve(SERVICE, name="chat").__aenter__())
     await until_observed(framework.manager)
     assert not serving.done()
     change_state(framework.manager, CBManagerState.POWERED_ON)
@@ -1108,7 +1108,7 @@ async def test_a_channel_is_chosen_away_from_this_mac_s_own(
 ) -> None:
     framework = fake_framework_parts(monkeypatch)
     framework.devices.shared.records = [FakeLocalRecord(n) for n in in_use]
-    async with _native.serve(SERVICE, name="chat") as service:
+    async with native.serve(SERVICE, name="chat") as service:
         assert service.channel == chosen
 
 
@@ -1117,7 +1117,7 @@ async def test_a_channel_this_mac_already_serves_is_refused(
 ) -> None:
     fake_framework_parts(monkeypatch)
     with pytest.raises(ChannelInUseError, match="8"):
-        async with _native.serve(SERVICE, name="chat", channel=8):
+        async with native.serve(SERVICE, name="chat", channel=8):
             pass
 
 
@@ -1129,7 +1129,7 @@ async def test_a_withdrawn_service_lets_new_channels_go(
     the channel, and the framework, with nobody to give it to, closes it.
     """
     framework = fake_framework_parts(monkeypatch)
-    async with _native.serve(SERVICE, name="chat") as service:
+    async with native.serve(SERVICE, name="chat") as service:
         number = service.channel
     late = framework.channels.connect_in(ADDRESS, number)
     assert not late.open
@@ -1139,7 +1139,7 @@ async def test_channels_nobody_took_are_closed_on_withdrawal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     framework = fake_framework_parts(monkeypatch)
-    async with _native.serve(SERVICE, name="chat") as service:
+    async with native.serve(SERVICE, name="chat") as service:
         waiting = framework.channels.connect_in(ADDRESS, service.channel)
         await asyncio.sleep(0)
     assert not waiting.open
@@ -1153,12 +1153,12 @@ async def test_a_channel_served_before_is_never_chosen_again(
     connection bluetoothd kept from before instead of listening -- measured.
     """
     framework = fake_framework_parts(monkeypatch)
-    async with _native.serve(SERVICE, name="chat") as first:
+    async with native.serve(SERVICE, name="chat") as first:
         number = first.channel
-    async with _native.serve(SERVICE, name="chat") as again:
+    async with native.serve(SERVICE, name="chat") as again:
         assert again.channel != number
     with pytest.raises(ChannelInUseError, match="switched off and on"):
-        async with _native.serve(SERVICE, name="chat", channel=number):
+        async with native.serve(SERVICE, name="chat", channel=number):
             pass
     assert len(framework.records.published) == 2
 
@@ -1167,5 +1167,5 @@ async def test_channels_another_service_here_holds_are_avoided(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_framework_parts(monkeypatch)
-    async with _native.serve(SERVICE, name="chat", avoiding=(30, 29)) as service:
+    async with native.serve(SERVICE, name="chat", avoiding=(30, 29)) as service:
         assert service.channel == 28

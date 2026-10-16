@@ -34,9 +34,9 @@ load_library("AppKit")
 
 from rubicon.objc.eventloop import RubiconEventLoop
 
-from aio_rfcomm.backend.iobluetooth import _native
-from aio_rfcomm.backend.iobluetooth._codes import CBManagerState
-from aio_rfcomm.backend.iobluetooth._protocol import Link
+from aio_rfcomm.backend.iobluetooth import native
+from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
+from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.errors import BluetoothUnavailableError, CloseReason, RfcommError
 
 logger = logging.getLogger(__name__)
@@ -128,16 +128,16 @@ async def _report_states(link: Link) -> None:
         link.send({"event": "state", "state": state, "authorization": authorization})
 
     try:
-        await _native.report_states(report)
+        await native.report_states(report)
     except Exception:
         # Losing the watch costs the reports, not the helper and its channels,
         # but the library waits for a first one: the power state stands in.
         logger.exception("could not watch the manager's state")
         try:
-            powered = _native.read_power_state()
+            powered = native.read_power_state()
             report(
                 CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF,
-                _native.read_authorization(),
+                native.read_authorization(),
             )
         except Exception:
             logger.exception("could not read the power state either")
@@ -175,7 +175,7 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
                 # call that needs it -- by ending the process -- so a
                 # handshake that made none would report a healthy helper that
                 # is about to die.
-                _native.read_power_state()
+                native.read_power_state()
                 link.send({"id": number, "ok": None})
 
             case "devices":
@@ -185,7 +185,7 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
                         "id": number,
                         "ok": [
                             [d.address, d.name]
-                            for d in _native.list_known_devices(wanted or None)
+                            for d in native.list_known_devices(wanted or None)
                         ],
                     }
                 )
@@ -196,7 +196,7 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
             case "serve":
                 if session.serving is not None:
                     # A second registration would replace the first in
-                    # bluetoothd and leak its slot: see _native.serve.
+                    # bluetoothd and leak its slot: see native.serve.
                     raise RfcommError("this helper is already serving")
                 session.serving = asyncio.current_task()
                 await _publish(session, number, message)
@@ -260,7 +260,7 @@ async def _carry_channel(
         message: The request.
     """
     service = message.get("service")
-    async with _native.open_channel(
+    async with native.open_channel(
         message["address"],
         service=UUID(service) if service else None,
         channel=message.get("channel"),
@@ -277,7 +277,7 @@ def _reply_opened(link: Link, number: int, handle: int, fd: int) -> None:
 async def _hand_over(
     link: Link,
     handle: int,
-    channel: _native.Channel,
+    channel: native.Channel,
     announce: Callable[[int], None],
 ) -> None:
     """
@@ -324,7 +324,7 @@ async def _publish(session: _Session, number: int, message: dict[str, Any]) -> N
         number: The request's number, for the reply.
         message: The request.
     """
-    async with _native.serve(
+    async with native.serve(
         UUID(message["service"]),
         name=message["name"],
         channel=message.get("channel"),
@@ -343,7 +343,7 @@ async def _publish(session: _Session, number: int, message: dict[str, Any]) -> N
             session.group.create_task(_take(session.link, channel))
 
 
-async def _take(link: Link, channel: _native.Channel) -> None:
+async def _take(link: Link, channel: native.Channel) -> None:
     """
     Offer the parent a channel a peer opened, and carry it until it ends.
 
@@ -379,7 +379,7 @@ async def _take(link: Link, channel: _native.Channel) -> None:
 
 
 async def _carry(
-    channel: _native.Channel,
+    channel: native.Channel,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> CloseReason | None:
@@ -411,7 +411,7 @@ async def _carry(
                     settle(None)
                     return
                 await channel.send(data)
-        except (OSError, _native.MachError):
+        except (OSError, native.MachError):
             settle(CloseReason.LINK_LOST)
 
     async def from_device() -> None:
@@ -485,8 +485,8 @@ def main() -> int:
     )
 
     sock = socket.socket(fileno=fd)
-    _native.hear_open_results()
-    _native.keep_unread_bytes()
+    native.hear_open_results()
+    native.keep_unread_bytes()
     # Every IOBluetooth call below runs on this thread, driven by the
     # CFRunLoop this loop is built on. Anywhere else, asynchronous calls
     # return success and then never complete.
