@@ -148,4 +148,4 @@ def optional_string(value: Variant | None) -> str | None:
     Returns:
         Its string, or ``None`` if it is missing.
     """
-    return None if value is None else str(value.value)
+    return None if value is None else value.value

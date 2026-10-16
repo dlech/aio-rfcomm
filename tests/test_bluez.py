@@ -443,7 +443,9 @@ def test_an_adapter_with_no_address_cannot_probe_either() -> None:
 
 
 def _adapter_with(powered: bool, power_state: str | None) -> _Adapter:
-    return _Adapter("/org/bluez/hci0", None, "freyr", powered, power_state)
+    return _Adapter(
+        "/org/bluez/hci0", "00:1A:7D:DA:71:0C", "freyr", powered, power_state
+    )
 
 
 @pytest.mark.parametrize(

@@ -172,25 +172,27 @@ class BlueZBluetooth(BackendBluetooth):
         found: list[RfcommDeviceInfo] = []
         for path, interfaces in sorted(objects.items()):
             properties = interfaces.get(DEVICE)
+
             if properties is None:
                 continue
+
             # Ask the device which adapter it belongs to rather than inferring
-            # it from the shape of the object path. There is no sensible
-            # default to compare against -- an empty string is not a valid
-            # object path -- so an absent property just means no match.
-            belongs_to = properties.get("Adapter")
-            if belongs_to is None or belongs_to.value != self.path:
+            # it from the shape of the object path. Address, Alias and Adapter
+            # are always there. UUIDs is documented as optional (BlueZ 5.85,
+            # doc/org.bluez.Device.rst).
+            if properties["Adapter"].value != self.path:
                 continue
+
             uuids = {
                 u.lower() for u in properties.get("UUIDs", Variant("as", [])).value
             }
+
             if wanted and not wanted & uuids:
                 continue
+
             found.append(
                 RfcommDeviceInfo(
-                    properties["Address"].value,
-                    properties.get("Alias", Variant("s", "")).value or None,
-                    path,
+                    properties["Address"].value, properties["Alias"].value, path
                 )
             )
         return found

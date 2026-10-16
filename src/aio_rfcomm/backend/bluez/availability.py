@@ -18,7 +18,6 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, NamedTuple
 
-from dbus_fast import Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.errors import DBusError
 
@@ -71,8 +70,8 @@ WATCHED = (
 
 class _Adapter(NamedTuple):
     path: str
-    address: str | None
-    name: str | None
+    address: str
+    name: str
     powered: bool
     power_state: str | None
 
@@ -91,7 +90,8 @@ def _powered(adapter: _Adapter) -> tuple[Availability, str | None]:
     Returns:
         Its availability, and what to tell the user about it.
     """
-    name = adapter.name or adapter.path
+    name = adapter.name
+
     match adapter.power_state:
         case None if adapter.powered:
             return Availability.USABLE, None
@@ -122,13 +122,14 @@ async def _list_adapters(bus: MessageBus) -> list[_Adapter]:
     manager = await get_interface(bus, "/", OBJECT_MANAGER, ObjectManagerProxy)
     objects = await manager.call_get_managed_objects()
 
+    # Address, Alias and Powered are always there. PowerState is documented
+    # as experimental, so it may not be (BlueZ 5.85, doc/org.bluez.Adapter.rst).
     return [
         _Adapter(
             path,
-            interfaces[ADAPTER].get("Address", Variant("s", "")).value or None,
-            interfaces[ADAPTER].get("Alias", Variant("s", "")).value or None,
-            bool(interfaces[ADAPTER].get("Powered", Variant("b", False)).value),
-            # Newer than Powered, so not always there.
+            interfaces[ADAPTER]["Address"].value,
+            interfaces[ADAPTER]["Alias"].value,
+            interfaces[ADAPTER]["Powered"].value,
             optional_string(interfaces[ADAPTER].get("PowerState")),
         )
         for path, interfaces in sorted(objects.items())
