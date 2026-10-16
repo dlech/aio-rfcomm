@@ -48,6 +48,7 @@ from winrt.system import unbox_string
 from winrt.windows.devices.bluetooth import (
     BluetoothAdapter,
     BluetoothCacheMode,
+    BluetoothConnectionStatus,
     BluetoothDevice,
     BluetoothError,
 )
@@ -709,6 +710,16 @@ async def _look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int
     )
     if result.error != BluetoothError.SUCCESS:
         raise _translate(result.error, address)
+
+    # A device that does not answer is not an error to this query. Measured
+    # on 2026-10-15, for a paired device switched off and for an address
+    # Windows had never seen: SUCCESS with no services after about 5 s, the
+    # device still disconnected. One that answered is connected by then.
+    if (
+        not result.services
+        and found.connection_status == BluetoothConnectionStatus.DISCONNECTED
+    ):
+        raise DeviceNotFoundError(f"{address} did not answer")
 
     offered = [s for s in result.services if s.service_id.uuid == service]
     if not offered:
