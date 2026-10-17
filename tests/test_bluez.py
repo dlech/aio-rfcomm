@@ -204,26 +204,29 @@ async def test_another_device_does_not_steal_the_connection() -> None:
     profile = _Profile()
     waiting = profile.expect(DEVICE)
 
-    read_fd, write_fd = os.pipe()
-    os.close(write_fd)
-    profile.NewConnection(OTHER, read_fd, {})
+    peer, kept, fd = _served()
+    with peer, kept:
+        profile.NewConnection(OTHER, fd, {})
 
     assert not waiting.done()
 
 
-async def test_a_connection_nobody_wants_is_closed_not_leaked() -> None:
+async def test_a_connection_nobody_wants_is_hung_up_not_leaked() -> None:
     """
     An attempt canceled just before BlueZ answers leaves a descriptor that
-    is ours to close. Dropping it silently would leak it.
+    is ours to hang up. Dropping it silently would leak it.
     """
     profile = _Profile()
-    read_fd, write_fd = os.pipe()
-    os.close(write_fd)
+    peer, kept, fd = _served()
 
-    profile.NewConnection(DEVICE, read_fd, {})
+    with peer, kept:
+        profile.NewConnection(DEVICE, fd, {})
+
+        peer.settimeout(5)
+        assert peer.recv(1) == b""
 
     with pytest.raises(OSError):
-        os.fstat(read_fd)
+        os.fstat(fd)
 
 
 async def test_forgetting_a_waiter_leaves_the_next_one_alone() -> None:

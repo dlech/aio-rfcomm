@@ -31,7 +31,13 @@ from typing_extensions import override
 from aio_rfcomm.backend.provider import BackendChannel
 from aio_rfcomm.errors import ChannelClosedError
 
-__all__ = ["StreamChannel", "StreamProtocol", "hang_up", "open_stream"]
+__all__ = [
+    "StreamChannel",
+    "StreamProtocol",
+    "hang_up",
+    "hang_up_descriptor",
+    "open_stream",
+]
 
 # How much may arrive unread before reading from the socket pauses, leaving the
 # rest to the kernel's buffer and the peer's flow control. asyncio's default.
@@ -51,6 +57,17 @@ def hang_up(sock: socket.socket) -> None:
     # down ends the connection however many copies there are.
     with contextlib.suppress(OSError):
         sock.shutdown(socket.SHUT_RDWR)
+
+
+def hang_up_descriptor(fd: int) -> None:
+    """
+    End the connection a socket's descriptor carries, and close it.
+
+    Args:
+        fd: The descriptor, which is ours to close.
+    """
+    with socket.socket(fileno=fd) as sock:
+        hang_up(sock)
 
 
 class StreamProtocol(asyncio.Protocol):

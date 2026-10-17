@@ -13,7 +13,6 @@ The Profile1 objects BlueZ calls back with connected file descriptors.
 import asyncio
 import itertools
 import logging
-import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -24,6 +23,7 @@ from dbus_fast.service import ServiceInterface, method
 
 from aio_rfcomm.backend.bluez.dbus import ProfileManagerProxy
 from aio_rfcomm.backend.bluez.errors import translate_registration
+from aio_rfcomm.backend.stream import hang_up_descriptor
 
 __all__ = ["Profiles", "ServerProfile", "profile_paths"]
 
@@ -91,10 +91,9 @@ class _Profile(ServiceInterface):
         if not waiters:
             # Nobody is waiting: the attempt was canceled just before BlueZ
             # answered, or a peer connected unprompted. Either way the
-            # descriptor is ours to close, and dropping it silently would leak
-            # it.
+            # descriptor is ours to hang up, and dropping it would leak it.
             logger.debug("unexpected connection from %s. Closing fd %d", device, fd)
-            os.close(fd)
+            hang_up_descriptor(fd)
             return
         waiters.pop(0).set_result(fd)
 
@@ -211,11 +210,11 @@ class ServerProfile(ServiceInterface):
 
     def discard_queued(self) -> None:
         """
-        Close any connection nobody took.
+        Hang up on any peer nobody took.
 
         Called when the service is withdrawn. These descriptors belong to
-        peers that connected and were never handed to a handler, so closing
-        them is the only correct end.
+        peers that connected and were never handed to a handler, so hanging
+        up is the only correct end.
         """
         while True:
             try:
@@ -223,7 +222,7 @@ class ServerProfile(ServiceInterface):
             except asyncio.QueueEmpty:
                 return
             logger.debug("closing fd %d, queued but never taken", fd)
-            os.close(fd)
+            hang_up_descriptor(fd)
 
     @method()
     def Release(self) -> None:
