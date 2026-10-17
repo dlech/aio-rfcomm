@@ -33,7 +33,7 @@ from aio_rfcomm.backend.provider import (
     BackendService,
 )
 from aio_rfcomm.backend.stream import StreamChannel, open_stream
-from aio_rfcomm.backend.windows.errors import translate_refusal
+from aio_rfcomm.backend.windows.errors import translate_failure, translate_refusal
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     ChannelInUseError,
@@ -47,10 +47,11 @@ logger = logging.getLogger(__name__)
 
 # Connecting is retried because it fails without anything being wrong: a run
 # on an unrecorded Windows version that eventually succeeded took four
-# attempts, the first three timing out. These are not a limit on how long a
-# caller may wait -- that is the caller's to decide with a cancel scope -- but
-# the point at which retrying stops looking like flakiness and starts looking
-# like a device that is not there.
+# attempts, the first three timing out. On Windows 10.0.26200.9711 a BlueZ 5.85
+# peer that was on timed out once, and the next attempt connected. These are
+# not a limit on how long a caller may wait -- that is the caller's to decide
+# with a cancel scope -- but the point at which retrying stops looking like
+# flakiness and starts looking like a device that is not there.
 _ATTEMPTS = 4
 
 _BACKOFF_SECONDS = 0.5
@@ -147,7 +148,10 @@ async def open_socket(address: str, channel: int, adapter: str | None) -> socket
         The connected socket.
 
     Raises:
-        ConnectionFailedError: Every attempt failed.
+        ServiceNotFoundError: The device refused the channel.
+        DeviceNotFoundError: Every attempt timed out.
+        ConnectionFailedError: Every attempt failed, the last for another
+            reason.
     """
     last: OSError | None = None
     for attempt in range(_ATTEMPTS):
@@ -173,10 +177,8 @@ async def open_socket(address: str, channel: int, adapter: str | None) -> socket
             raise
         return sock
 
-    raise ConnectionFailedError(
-        f"could not reach {address} on channel {channel} after "
-        f"{_ATTEMPTS} attempts: {last}"
-    )
+    assert last is not None
+    raise translate_failure(last, address, channel) from last
 
 
 def bind_channel(sock: socket.socket, channel: int | None) -> int:

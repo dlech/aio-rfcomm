@@ -44,10 +44,13 @@ since claims in the code refer to it.
 
 ## Windows 10.0.26200.9711
 
-- Windows 11 Home 25H2, the same machine as above, after servicing.
+- Windows 11 Home 25H2, the same machine as above after servicing.
+- bthport.sys, bthenum.sys, bthusb.sys, bthserv.dll, BluetoothApis.dll and
+  Windows.Devices.Bluetooth.dll 10.0.26100.9711.
 - rfcomm.sys 10.0.26100.9549.
-- Windows.Devices.Bluetooth.dll 10.0.26100.3037.
-- The other Bluetooth files were not recorded.
+- Adapter: Qualcomm FastConnect 7800.
+- Python 3.11.9, arm64.
+- Peer: the Linux machine above, on BlueZ package 5.85-4ubuntu0.4.
 
 ## Recording a new one
 
@@ -57,4 +60,7 @@ since claims in the code refer to it.
   The kernel matters, since RFCOMM sockets are the kernel's.
 - Windows: the build from the registry (`CurrentBuild` and `UBR`), and the
   file versions of the drivers above. Windows updates the Bluetooth stack
-  through servicing, apart from its own version.
+  through servicing, apart from its own version. Read `FileVersionRaw` from
+  PowerShell's `(Get-Item FILE).VersionInfo`. The `FileVersion` text is not
+  updated by servicing: on 10.0.26200.9711 it said 10.0.26100.3037 for
+  Windows.Devices.Bluetooth.dll, whose version is 10.0.26100.9711.
