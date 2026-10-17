@@ -146,4 +146,15 @@ To refresh it, connect the device, and then try again:
 bluetoothctl connect 00:1A:7D:DA:71:0C
 ```
 
+## Windows
+
+### When a device's services change
+
+[`open_service`][aio_rfcomm.Bluetooth.open_service] always asks the device,
+so it finds a service that has moved to another channel.
+[`list_known_devices`][aio_rfcomm.Bluetooth.list_known_devices] with a
+`service` uses Windows' stored copy of each device's services instead. It can
+leave out a service the device has added since, or list one it has removed.
+Each `open_service` refreshes the stored copy for that device.
+
 **Next:** [Troubleshooting](troubleshooting.md), for when something goes wrong.
