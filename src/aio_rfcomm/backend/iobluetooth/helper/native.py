@@ -49,6 +49,7 @@ from typing_extensions import override
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth.codes import (
+    HCI_ERRORS,
     CBError,
     CBManagerAuthorization,
     CBManagerState,
@@ -71,12 +72,15 @@ __all__ = [
     "Channel",
     "MachError",
     "Service",
+    "hear_close_results",
     "hear_open_results",
     "keep_unread_bytes",
     "list_known_devices",
     "open_channel",
     "read_authorization",
     "read_power_state",
+    "record_close_result",
+    "record_link_gone",
     "record_open_result",
     "report_states",
     "serve",
@@ -375,6 +379,13 @@ _completion_tokens = itertools.count()
 # it to an error code, by device address and channel. Written on a framework
 # thread by the hook hear_open_results installs.
 _open_results: dict[tuple[str, int], int] = {}
+
+# The same for each channel close, from the hook hear_close_results installs.
+_close_results: dict[tuple[str, int], int] = {}
+
+# Channels closed because the whole link to their device went down, by device
+# address and channel. Written on a framework thread by the same function.
+_links_gone: set[tuple[str, int]] = set()
 
 # Devices a caller is using. Claimed before the link is brought up and held
 # until after the channel closes, so for part of its life there is no channel
@@ -959,6 +970,43 @@ def list_known_devices(
 # --------------------------------------------------------------------------
 
 
+def _close_reason(result: int | None, gone: bool, device: _Device) -> CloseReason:
+    """
+    Say why a channel closed.
+
+    Args:
+        result: bluetoothd's result for the close, if the hook heard one.
+        gone: Whether the close came with the whole link going down.
+        device: The device the channel ran over.
+
+    Returns:
+        Why it closed.
+    """
+    # Measured on macOS 26.6.2 against BlueZ 5.85: 927 when the peer hangs up
+    # the channel, 721 when it switches its radio off, and 708 when it vanishes
+    # and the link times out. When the link goes down, its own report can
+    # reach the channel first, and bluetoothd's result for the channel never
+    # arrives.
+    match result:
+        case OIStatus.RFCOMM_REMOTE_DEVICE_DISCONNECTED:
+            return CloseReason.PEER_CLOSED
+        case int() if result in HCI_ERRORS:
+            return CloseReason.LINK_LOST
+        case _ if gone:
+            return CloseReason.LINK_LOST
+        case _:
+            pass
+
+    # Without a result, whether the link is still up is the next best sign.
+    # It races the close, so it is only a guess.
+    logger.debug("a channel closed with bluetoothd result %s", result)
+
+    if device.isConnected():
+        return CloseReason.PEER_CLOSED
+
+    return CloseReason.LINK_LOST
+
+
 class Channel:
     """
     An RFCOMM channel, from the moment the framework hands one over.
@@ -972,19 +1020,31 @@ class Channel:
     """
 
     def __init__(
-        self, channel: _Channel, delegate: _ChannelDelegate, device: _Device
+        self,
+        channel: _Channel,
+        delegate: _ChannelDelegate,
+        device: _Device,
+        address: str,
+        number: int,
     ) -> None:
         """
         Args:
             channel: The ``IOBluetoothRFCOMMChannel``, which may not be open
                 yet.
             delegate: Its delegate, held here because the channel does not.
-            device: The device it runs over, for telling a hang-up apart from
-                a lost link.
+            device: The device it runs over.
+            address: The device's address, in any of the forms IOBluetooth
+                writes.
+            number: Its RFCOMM channel number.
         """
         self._channel = channel
         self._delegate = delegate
         self._device = device
+        self._key = (_normalize(address), number)
+        # Left over from an earlier channel on the same number, whose close
+        # nobody asked about.
+        _close_results.pop(self._key, None)
+        _links_gone.discard(self._key)
 
     @property
     def arrived(self) -> asyncio.Queue[bytes]:
@@ -1060,14 +1120,12 @@ class Channel:
         Wait for the far end to close the channel.
 
         Returns:
-            Why it closed. The baseband link tells the two cases apart: if it
-            is still up, the peer closed just this channel. If it is gone, the
-            whole link went away.
+            Why it closed, from bluetoothd's result for the close.
         """
         await self._delegate.ended.wait()
-        if self._device.isConnected():
-            return CloseReason.PEER_CLOSED
-        return CloseReason.LINK_LOST
+        gone = self._key in _links_gone
+        _links_gone.discard(self._key)
+        return _close_reason(_close_results.pop(self._key, None), gone, self._device)
 
     def release(self) -> None:
         """
@@ -1241,8 +1299,13 @@ async def _wait_for_relink(key: str) -> None:
         await asyncio.sleep(left)
 
 
-_HandleOpened = ctypes.CFUNCTYPE(
+_HandleReport = ctypes.CFUNCTYPE(
     None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+)
+# The channel, the selector, the CBClassicPeer, and an error code passed on
+# untouched.
+_PeerDisconnected = ctypes.CFUNCTYPE(
+    None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
 )
 
 # The hook runs on a framework thread, where rubicon is not safe to use: it
@@ -1274,14 +1337,19 @@ _OBJECT_FOR_KEY = _objc.sel_registerName(b"objectForKey:")
 _INT_VALUE = _objc.sel_registerName(b"intValue")
 _ADDRESS_STRING = _objc.sel_registerName(b"addressString")
 _UTF8_STRING = _objc.sel_registerName(b"UTF8String")
+# BluetoothRFCOMMChannelID is one byte.
+_send_for_channel_id = ctypes.CFUNCTYPE(
+    ctypes.c_uint8, ctypes.c_void_p, ctypes.c_void_p
+)(("objc_msgSend", _objc))
+_CHANNEL_ID = _objc.sel_registerName(b"getChannelID")
 _RESULT_KEY = cast(ObjCInstance, ns_from_py("kCBMsgArgResult"))
 _CHANNEL_KEY = cast(ObjCInstance, ns_from_py("kCBMsgArgRFCOMMChannelID"))
 _SOCKET_KEY = cast(ObjCInstance, ns_from_py("kCBMsgArgSocket"))
 
 
-class _OpenResult(NamedTuple):
+class _ChannelReport(NamedTuple):
     """
-    What bluetoothd said about one channel open.
+    What bluetoothd said about one channel opening or closing.
     """
 
     address: str | None
@@ -1290,12 +1358,32 @@ class _OpenResult(NamedTuple):
     socket: int | None
 
 
-def _read_open_result(peer: int, info: int) -> _OpenResult:
+def _peer_address(peer: int) -> str | None:
     """
-    Read bluetoothd's report of a channel open, on whatever thread.
+    Read a ``CBClassicPeer``'s address, on whatever thread.
 
     Args:
-        peer: The ``CBClassicPeer`` the channel was opened to.
+        peer: The peer.
+
+    Returns:
+        Its address, or ``None`` if it gave none.
+    """
+    text = _send_for_object(peer, _ADDRESS_STRING)
+
+    if not text or not _send_is_kind(text, _IS_KIND_OF_CLASS, _NSSTRING):
+        return None
+
+    utf8 = _send_for_text(text, _UTF8_STRING)
+    return utf8.decode() if utf8 else None
+
+
+def _read_channel_report(peer: int, info: int) -> _ChannelReport:
+    """
+    Read bluetoothd's report of a channel opening or closing, on whatever
+    thread.
+
+    Args:
+        peer: The ``CBClassicPeer`` the channel is to.
         info: What bluetoothd sent.
 
     Returns:
@@ -1311,15 +1399,11 @@ def _read_open_result(peer: int, info: int) -> _OpenResult:
 
         return None
 
-    address = None
-    text = _send_for_object(peer, _ADDRESS_STRING)
-
-    if text and _send_is_kind(text, _IS_KIND_OF_CLASS, _NSSTRING):
-        utf8 = _send_for_text(text, _UTF8_STRING)
-        address = utf8.decode() if utf8 else None
-
-    return _OpenResult(
-        address, number(_CHANNEL_KEY), number(_RESULT_KEY), number(_SOCKET_KEY)
+    return _ChannelReport(
+        _peer_address(peer),
+        number(_CHANNEL_KEY),
+        number(_RESULT_KEY),
+        number(_SOCKET_KEY),
     )
 
 
@@ -1335,7 +1419,7 @@ def record_open_result(address: str, channel: int, result: int) -> None:
     _open_results[(_normalize(address), channel)] = result
 
 
-def _note_open_result(opened: _OpenResult) -> None:
+def _note_open_result(opened: _ChannelReport) -> None:
     """
     Note one channel open's result as bluetoothd reported it.
 
@@ -1383,7 +1467,7 @@ def _is_null_device(descriptor: int) -> bool:
     )
 
 
-def _close_unclaimed_socket(opened: _OpenResult) -> None:
+def _close_unclaimed_socket(opened: _ChannelReport) -> None:
     """
     Close the descriptor a failed channel open leaves behind.
 
@@ -1406,7 +1490,8 @@ def _close_unclaimed_socket(opened: _OpenResult) -> None:
 # framework calls through them on threads of its own.
 _hooked: list[object] = []
 
-# The same for the hook keep_unread_bytes installs.
+# The same for the hooks hear_close_results and keep_unread_bytes install.
+_hearing_closes: list[object] = []
 _keeping: list[object] = []
 
 
@@ -1434,13 +1519,13 @@ def hear_open_results() -> None:
         logger.debug("CoreBluetooth has no handleRFCOMMChannelOpened: to hear")
         return
 
-    original = _HandleOpened(_objc.method_getImplementation(method))
+    original = _HandleReport(_objc.method_getImplementation(method))
 
     def opened(peer: int, selector: int, info: int) -> None:
         said = None
 
         try:
-            said = _read_open_result(peer, info)
+            said = _read_channel_report(peer, info)
             _note_open_result(said)
         except Exception:
             # Losing the note costs a clearer error, never the open itself.
@@ -1454,8 +1539,120 @@ def hear_open_results() -> None:
             except Exception:
                 logger.debug("could not check a failed open's socket", exc_info=True)
 
-    replacement = _HandleOpened(opened)
+    replacement = _HandleReport(opened)
     _hooked.extend([original, replacement])
+    _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
+
+
+def record_close_result(address: str, channel: int, result: int) -> None:
+    """
+    Record bluetoothd's result for one channel close.
+
+    Only the first is kept. After the close, bluetoothd reports the channel
+    closed again, for a channel CoreBluetooth no longer has, with result 1901,
+    measured on macOS 26.6.2.
+
+    Args:
+        address: The device's address, in any of the forms IOBluetooth writes.
+        channel: The RFCOMM channel number.
+        result: The daemon's ``kCBMsgArgResult``.
+    """
+    _close_results.setdefault((_normalize(address), channel), result)
+
+
+def hear_close_results() -> None:
+    """
+    Keep bluetoothd's result for each channel close, which nothing else sees.
+
+    ``-[CBClassicPeer handleRFCOMMChannelClosed:]`` reduces the result to an
+    error code, which is 0 for every result that says why, and IOBluetooth
+    drops even that. Read in the disassembly of CoreBluetooth and IOBluetooth
+    on macOS 26.6.2 (25G83). So the method is wrapped, in this process only, to
+    note the result first. It runs before the delegate hears of the close.
+
+    Does nothing if this macOS has no such method, and nothing the second time.
+    """
+    if _hearing_closes:
+        return
+
+    try:
+        selector = _objc.sel_registerName(b"handleRFCOMMChannelClosed:")
+        method = _objc.class_getInstanceMethod(_class("CBClassicPeer").ptr, selector)
+    except Exception:  # noqa: BLE001
+        method = None
+    if not method:
+        logger.debug("CoreBluetooth has no handleRFCOMMChannelClosed: to hear")
+        return
+
+    original = _HandleReport(_objc.method_getImplementation(method))
+
+    def closed(peer: int, selector: int, info: int) -> None:
+        try:
+            said = _read_channel_report(peer, info)
+
+            if said.address and said.channel is not None and said.result is not None:
+                record_close_result(said.address, said.channel, said.result)
+        except Exception:
+            # Losing the note costs only a surer reason for the close.
+            logger.debug("could not read a channel close's result", exc_info=True)
+
+        original(peer, selector, info)
+
+    replacement = _HandleReport(closed)
+    _hearing_closes.extend([original, replacement])
+    _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
+    _hear_links_going()
+
+
+def record_link_gone(address: str, channel: int) -> None:
+    """
+    Record that a channel closed because the link to its device went down.
+
+    Args:
+        address: The device's address, in any of the forms IOBluetooth writes.
+        channel: The RFCOMM channel number.
+    """
+    _links_gone.add((_normalize(address), channel))
+
+
+def _hear_links_going() -> None:
+    """
+    Note each channel closed because the whole link to its device went down.
+
+    When the link goes down, IOBluetooth can close the channel from the
+    device's disconnect, through ``-[IOBluetoothRFCOMMChannel
+    peerDisconnected:withError:]``, before bluetoothd's result for the channel
+    arrives, and then that result never does. Measured on macOS 26.6.2 against
+    a BlueZ 5.85 peer whose radio was unplugged. The method is called only when
+    the link is down, read in the disassembly of IOBluetooth on the same macOS.
+    """
+    try:
+        selector = _objc.sel_registerName(b"peerDisconnected:withError:")
+        method = _objc.class_getInstanceMethod(
+            _class("IOBluetoothRFCOMMChannel").ptr, selector
+        )
+    except Exception:  # noqa: BLE001
+        method = None
+    if not method:
+        logger.debug("IOBluetooth has no peerDisconnected:withError: to hear")
+        return
+
+    original = _PeerDisconnected(_objc.method_getImplementation(method))
+
+    def disconnected(channel: int, selector: int, peer: int, error: int) -> None:
+        try:
+            address = _peer_address(peer)
+
+            if address:
+                record_link_gone(address, _send_for_channel_id(channel, _CHANNEL_ID))
+        except Exception:
+            # Losing the note costs only a surer reason for the close.
+            logger.debug("could not read a lost link's channel", exc_info=True)
+
+        original(channel, selector, peer, error)
+
+    replacement = _PeerDisconnected(disconnected)
+    _hearing_closes.extend([original, replacement])
     _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
 
 
@@ -1745,7 +1942,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
 
         opened = IOBluetoothRFCOMMChannel(handle)
         if not opened.isOpen():
-            return Channel(opened, delegate, device)
+            return Channel(opened, delegate, device, address, number)
 
         logger.debug(
             "channel %d on %s is still open from an earlier use. Waiting",
@@ -2030,7 +2227,10 @@ class Service:
                 # Closed while it waited, before it had a delegate to say so.
                 delegate.ended.set()
 
-            return Channel(opened, delegate, opened.getDevice())
+            device = opened.getDevice()
+            return Channel(
+                opened, delegate, device, str(device.addressString), self.channel
+            )
         except Exception:
             with autoreleasepool():
                 opened.closeChannel()

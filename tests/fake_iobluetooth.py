@@ -240,11 +240,18 @@ class FakeChannel:
             None, ctypes.addressof(buffer), len(data)
         )
 
-    def hang_up(self) -> None:
+    def hang_up(self, result: int | None = None) -> None:
         """
-        The peer closes this channel and keeps the link up.
+        The channel closes from the far end.
+
+        Args:
+            result: What bluetoothd says about the close, which reaches the
+                hook before the delegate hears of it. ``None`` for a macOS the
+                hook could not be installed on.
         """
         self.open = False
+        if result is not None:
+            native.record_close_result(self.device.address, self.number, result)
         self._report_closed()
 
     def _report_closed(self) -> None:
@@ -676,10 +683,14 @@ def clean_state() -> Generator[None, None, None]:
     """
     native._in_use.clear()
     native._closed_at.clear()
+    native._close_results.clear()
+    native._links_gone.clear()
     FakeDeviceClass.made.clear()
     opened.clear()
     yield
     native._in_use.clear()
     native._closed_at.clear()
+    native._close_results.clear()
+    native._links_gone.clear()
     FakeDeviceClass.made.clear()
     opened.clear()

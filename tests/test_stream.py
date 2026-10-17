@@ -192,6 +192,22 @@ async def test_a_reset_does_not_take_what_had_already_arrived() -> None:
         await channel.receive()
 
 
+async def test_a_clean_end_leaves_no_error_to_explain() -> None:
+    async with _channel() as (channel, peer):
+        peer.close()
+        async with asyncio.timeout(1):
+            with pytest.raises(ChannelClosedError):
+                await channel.receive()
+        assert channel._protocol.error is None  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_what_failed_the_connection_is_kept_for_the_backend() -> None:
+    _channel, protocol, _transport = _driven()
+    failure = ConnectionAbortedError()
+    protocol.connection_lost(failure)
+    assert protocol.error is failure
+
+
 async def test_the_reason_is_asked_for_once() -> None:
     """
     A backend may have to wait to learn why a channel ended -- macOS waits for

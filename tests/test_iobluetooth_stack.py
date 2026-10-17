@@ -28,6 +28,7 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import IOBluetoothBackend, IOBluetoothBluetooth
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
 from aio_rfcomm.backend.iobluetooth.helper import __main__ as helper_main
+from aio_rfcomm.backend.iobluetooth.helper import native
 from aio_rfcomm.backend.iobluetooth.process import Helper, HelperFailedError
 from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
@@ -180,6 +181,84 @@ async def test_a_lost_link_is_not_mistaken_for_a_hang_up(
             with pytest.raises(ChannelClosedError) as caught:
                 await channel.receive()
         assert caught.value.reason is CloseReason.LINK_LOST
+
+
+@pytest.mark.parametrize(
+    ("result", "connected", "reason"),
+    [
+        # Each measured on macOS 26.6.2 against BlueZ 5.85. The link's state
+        # races the close, so it is set here to the answer it must not give.
+        (927, False, CloseReason.PEER_CLOSED),  # the peer hung up the channel
+        (721, True, CloseReason.LINK_LOST),  # the peer switched its radio off
+        (708, True, CloseReason.LINK_LOST),  # the link timed out
+    ],
+)
+async def test_bluetoothd_s_result_says_why_a_channel_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    result: int,
+    connected: bool,
+    reason: CloseReason,
+) -> None:
+    fake_framework(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        fake = opened[-1]
+        fake.device.connected = connected
+        fake.hang_up(result)
+        async with asyncio.timeout(1):
+            with pytest.raises(ChannelClosedError) as caught:
+                await channel.receive()
+        assert caught.value.reason is reason
+
+
+async def test_a_channel_closed_by_its_link_going_down_lost_the_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on macOS 26.6.2 against a BlueZ 5.85 peer whose radio was
+    unplugged: the device's disconnect closed the channel, and bluetoothd's
+    result for the channel never arrived.
+    """
+    fake_framework(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        fake = opened[-1]
+        native.record_link_gone(fake.device.address, 5)
+        fake.hang_up()
+        async with asyncio.timeout(1):
+            with pytest.raises(ChannelClosedError) as caught:
+                await channel.receive()
+        assert caught.value.reason is CloseReason.LINK_LOST
+
+
+async def test_only_bluetoothd_s_first_result_for_a_close_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on macOS 26.6.2: after the close, bluetoothd reports it again
+    with result 1901, for a channel CoreBluetooth no longer has.
+    """
+    fake_framework(monkeypatch)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        fake = opened[-1]
+        native.record_close_result(fake.device.address, 5, 721)
+        native.record_close_result(fake.device.address, 5, 1901)
+        fake.hang_up()
+        async with asyncio.timeout(1):
+            with pytest.raises(ChannelClosedError) as caught:
+                await channel.receive()
+        assert caught.value.reason is CloseReason.LINK_LOST
+
+
+async def test_an_earlier_channel_s_close_result_is_not_taken_for_the_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_framework(monkeypatch)
+    native.record_close_result(DEVICE.address, 5, 721)
+    async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
+        opened[-1].hang_up()
+        async with asyncio.timeout(1):
+            with pytest.raises(ChannelClosedError) as caught:
+                await channel.receive()
+        assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
 async def test_a_closed_channel_leaves_the_device_free(

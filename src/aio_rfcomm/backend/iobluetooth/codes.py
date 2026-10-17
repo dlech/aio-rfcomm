@@ -193,7 +193,16 @@ class OIStatus(enum.IntEnum):
 
     RFCOMM_REMOTE_DEVICE_DISCONNECTED = 927
     """
-    ``OI_RFCOMM_REMOTE_DEVICE_DISCONNECTED`` -- the device hung up as the
-    channel opened. Measured on macOS 26.6.2 against a BlueZ 5.85 server
-    declining it.
+    ``OI_RFCOMM_REMOTE_DEVICE_DISCONNECTED`` -- the device hung up the
+    channel, as it opened or later. Measured on macOS 26.6.2 against a BlueZ
+    5.85 server declining it, and closing it after it had been open.
     """
+
+
+HCI_ERRORS = range(701, 800)
+"""
+The results bluetoothd's stack gives for an HCI error: 700 plus the HCI code.
+708 is ``OI_HCIERR_CONNECTION_TIMEOUT`` (HCI 0x08) and 721 is
+``OI_HCIERR_OTHER_END_POWERING_OFF`` (HCI 0x15), read from the status-name
+table in bluetoothd on macOS 26.6.2 (25G83).
+"""

@@ -27,6 +27,7 @@ __all__ = [
     "ProfileManagerProxy",
     "add_match",
     "get_interface",
+    "is_connected",
     "optional_string",
     "system_bus",
 ]
@@ -138,6 +139,33 @@ async def add_match(bus: MessageBus, rule: str) -> None:
     if reply is None or reply.message_type is MessageType.ERROR:
         # Not fatal: Bluetooth still works, but changes to it go unnoticed.
         logger.warning("the system bus refused %s: %s", rule, reply and reply.body)
+
+
+async def is_connected(bus: MessageBus, device_path: str) -> bool | None:
+    """
+    Ask BlueZ whether a device's link is up.
+
+    Args:
+        bus: A connected system bus.
+        device_path: The device's object path.
+
+    Returns:
+        Whether it is connected, or ``None`` if BlueZ did not say.
+    """
+    reply = await bus.call(
+        Message(
+            destination=SERVICE,
+            path=device_path,
+            interface="org.freedesktop.DBus.Properties",
+            member="Get",
+            signature="ss",
+            body=[DEVICE, "Connected"],
+        )
+    )
+    if reply is None or reply.message_type is MessageType.ERROR:
+        return None
+
+    return bool(cast(Variant, reply.body[0]).value)
 
 
 def optional_string(value: Variant | None) -> str | None:

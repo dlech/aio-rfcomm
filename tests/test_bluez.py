@@ -10,6 +10,7 @@ all ordinary logic. They are also where the bugs have actually been, so they
 are worth pinning down here rather than leaving to a machine with Bluetooth.
 """
 
+import asyncio
 import errno
 import os
 import socket
@@ -30,16 +31,22 @@ from aio_rfcomm.backend.bluez.availability import (
     _powered,
     may_change_availability,
 )
-from aio_rfcomm.backend.bluez.connection import _Request, _take_connection
+from aio_rfcomm.backend.bluez.connection import (
+    BlueZChannel,
+    _Request,
+    _take_connection,
+)
 from aio_rfcomm.backend.bluez.errors import (
     translate_connect,
     translate_registration,
     translate_socket_connect,
 )
 from aio_rfcomm.backend.bluez.profile import Profiles, _Profile
+from aio_rfcomm.backend.stream import StreamProtocol
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     ChannelInUseError,
+    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     ServiceNotFoundError,
@@ -143,6 +150,10 @@ async def _nothing() -> None:
     pass
 
 
+async def _link_up() -> bool | None:
+    return True
+
+
 def _served() -> tuple[socket.socket, socket.socket, int]:
     """
     A connection as BlueZ hands it over.
@@ -157,7 +168,7 @@ def _served() -> tuple[socket.socket, socket.socket, int]:
 def test_declining_hangs_up_on_the_peer() -> None:
     peer, kept, fd = _served()
     with peer, kept:
-        _Request(RfcommDeviceInfo("00:11:22:33:44:55"), fd, _nothing).close()
+        _Request(RfcommDeviceInfo("00:11:22:33:44:55"), fd, _nothing, _link_up).close()
 
         peer.settimeout(5)
         assert peer.recv(1) == b""
@@ -166,12 +177,34 @@ def test_declining_hangs_up_on_the_peer() -> None:
 async def test_closing_a_channel_hangs_up_on_the_peer() -> None:
     peer, kept, fd = _served()
     with peer, kept:
-        async with _take_connection(fd, _nothing) as channel:
+        async with _take_connection(fd, _nothing, _link_up) as channel:
             await channel.send(b"bye")
 
         peer.settimeout(5)
         assert peer.recv(3) == b"bye"
         assert peer.recv(1) == b""
+
+
+@pytest.mark.parametrize(
+    ("error", "link_up", "reason"),
+    [
+        # Each measured on BlueZ 5.85 with kernel 7.0.0-38.
+        (ConnectionResetError(), True, CloseReason.PEER_CLOSED),  # hung up
+        (ConnectionResetError(), False, CloseReason.LINK_LOST),  # switched off
+        (TimeoutError(), True, CloseReason.LINK_LOST),  # timed out
+        (None, None, CloseReason.PEER_CLOSED),  # BlueZ did not say
+    ],
+)
+async def test_the_link_says_why_a_channel_ended(
+    error: Exception | None, link_up: bool | None, reason: CloseReason
+) -> None:
+    async def asked() -> bool | None:
+        return link_up
+
+    protocol = StreamProtocol()
+    protocol.connection_lost(error)
+    channel = BlueZChannel(asyncio.Transport(), protocol, _nothing, asked)
+    assert await channel.explain_end() is reason
 
 
 # --------------------------------------------------------------------------

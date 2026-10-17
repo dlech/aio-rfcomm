@@ -16,21 +16,27 @@ pytest.importorskip(
     "winrt.windows.devices.bluetooth", reason="the Windows backend needs WinRT"
 )
 
+import asyncio
 import uuid
+from typing import cast
 
 from winrt.windows.devices.bluetooth import BluetoothError
 from winrt.windows.devices.radios import RadioState
 
 from aio_rfcomm.availability import Availability
+from aio_rfcomm.backend.stream import StreamProtocol
 from aio_rfcomm.backend.windows import _each
 from aio_rfcomm.backend.windows.addresses import format_address, parse_address
 from aio_rfcomm.backend.windows.availability import _availability_of
+from aio_rfcomm.backend.windows.connection import WindowsChannel
 from aio_rfcomm.backend.windows.errors import (
     translate_bluetooth_error,
     translate_refusal,
 )
+from aio_rfcomm.backend.windows.link import LinkWatch
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
+    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     ServiceNotFoundError,
@@ -242,3 +248,33 @@ def test_any_other_radio_is_switched_off_and_says_which(radio: RadioState) -> No
     assert availability is Availability.SWITCHED_OFF
     assert detail is not None
     assert "LOKI" in detail
+
+
+class _Link:
+    """
+    Stands in for watching a device's link, with the answer already known.
+    """
+
+    def __init__(self, down: bool) -> None:
+        self.down = down
+
+    async def went_down(self) -> bool:
+        return self.down
+
+
+@pytest.mark.parametrize(
+    ("link", "reason"),
+    [
+        # Measured on Windows 10.0.26200.9457 against BlueZ 5.85.
+        (_Link(down=False), CloseReason.PEER_CLOSED),  # the peer hung up
+        (_Link(down=True), CloseReason.LINK_LOST),  # the peer switched off
+        (None, CloseReason.PEER_CLOSED),  # the peer could not be watched
+    ],
+)
+async def test_the_link_says_why_a_channel_ended(
+    link: _Link | None, reason: CloseReason
+) -> None:
+    channel = WindowsChannel(
+        asyncio.Transport(), StreamProtocol(), cast(LinkWatch | None, link)
+    )
+    assert await channel.explain_end() is reason

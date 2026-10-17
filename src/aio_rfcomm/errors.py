@@ -118,7 +118,8 @@ class CloseReason(enum.Enum):
 
     PEER_CLOSED = "the other device hung up"
     """
-    The other device hung up.
+    The other device hung up. It is still connected, so it can be reached
+    again.
     """
 
     LINK_LOST = "the connection was lost"

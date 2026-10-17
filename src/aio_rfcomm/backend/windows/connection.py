@@ -32,11 +32,13 @@ from aio_rfcomm.backend.provider import (
     BackendRequest,
     BackendService,
 )
-from aio_rfcomm.backend.stream import StreamChannel, open_stream
+from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
 from aio_rfcomm.backend.windows.errors import translate_refusal
+from aio_rfcomm.backend.windows.link import LinkWatch, watch_link
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     ChannelInUseError,
+    CloseReason,
     ConnectionFailedError,
 )
 
@@ -59,10 +61,46 @@ _BACKOFF_SECONDS = 0.5
 class WindowsChannel(StreamChannel):
     """
     An RFCOMM channel over a Bluetooth socket.
-
-    Nothing to add: once connected it is an ordinary stream. It stays a class
-    of its own so that a backtrace names the platform.
     """
+
+    def __init__(
+        self,
+        transport: asyncio.Transport,
+        protocol: StreamProtocol,
+        link: LinkWatch | None,
+    ) -> None:
+        """
+        Args:
+            transport: Carries the connected socket.
+            protocol: What the transport reports to.
+            link: Hears when the link to the peer goes down, or ``None`` if
+                the peer could not be found to watch.
+        """
+        super().__init__(transport, protocol)
+        self._link = link
+
+    @override
+    async def explain_end(self) -> CloseReason:
+        """
+        Tell a hang-up from a lost link by whether the link went down too.
+
+        Returns:
+            Why the channel went away.
+        """
+        # Measured on Windows 10.0.26200.9457: the socket itself cannot tell.
+        # It ends cleanly both when the peer hangs up and when it switches off.
+        if self._link is not None and await self._link.went_down():
+            return CloseReason.LINK_LOST
+
+        return CloseReason.PEER_CLOSED
+
+    @override
+    async def close(self) -> None:
+        try:
+            await super().close()
+        finally:
+            if self._link is not None:
+                self._link.close()
 
 
 def _settle(reached: asyncio.Future[None], error: BaseException | None) -> None:
@@ -223,19 +261,23 @@ def bind_channel(sock: socket.socket, channel: int | None) -> int:
 
 
 @asynccontextmanager
-async def _take(conn: socket.socket) -> AsyncGenerator[BackendChannel, None]:
+async def _take(
+    conn: socket.socket, address: str
+) -> AsyncGenerator[BackendChannel, None]:
     """
     Turn an accepted socket into a channel, closed on exit.
 
     Args:
         conn: The accepted socket.
+        address: The peer's address.
 
     Yields:
         The channel.
     """
     async with AsyncExitStack() as stack:
+        link = await watch_link(address)
         transport, protocol = await open_stream(conn)
-        opened = WindowsChannel(transport, protocol)
+        opened = WindowsChannel(transport, protocol, link)
         stack.push_async_callback(opened.close)
         yield opened
 
@@ -262,7 +304,7 @@ class _Request(BackendRequest):
     async def _take(self) -> AsyncGenerator[BackendChannel, None]:
         conn, self._conn = self._conn, None
         assert conn is not None, "a request's connection was taken twice"
-        async with _take(conn) as channel:
+        async with _take(conn, self._peer.address) as channel:
             yield channel
 
     @override

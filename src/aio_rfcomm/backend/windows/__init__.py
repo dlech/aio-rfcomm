@@ -70,6 +70,7 @@ from aio_rfcomm.backend.windows.devices import (
     offers_any,
     read_address,
 )
+from aio_rfcomm.backend.windows.link import watch_link
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     ConnectionFailedError,
@@ -288,8 +289,9 @@ class WindowsBluetooth(BackendBluetooth):
             # family -- so once the socket is connected, by whatever means,
             # the standard APIs drive it unchanged. That is what lets this
             # share a stream channel with backends on other platforms.
+            link = await watch_link(address)
             transport, protocol = await open_stream(sock)
-            opened = WindowsChannel(transport, protocol)
+            opened = WindowsChannel(transport, protocol, link)
             stack.push_async_callback(opened.close)
 
             yield opened

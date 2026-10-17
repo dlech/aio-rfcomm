@@ -749,9 +749,9 @@ def _pointer(thing: object) -> int:
     return cast(int, cast(Any, thing).ptr.value)
 
 
-def _read(info: dict[str, int]) -> native._OpenResult:
+def _read(info: dict[str, int]) -> native._ChannelReport:
     ns = ns_from_py(cast(Any, info))
-    return native._read_open_result(_pointer(_peer()), _pointer(ns))
+    return native._read_channel_report(_pointer(_peer()), _pointer(ns))
 
 
 async def test_the_result_the_daemon_sent_is_noted_by_address_and_channel(
@@ -789,19 +789,19 @@ def test_the_daemon_s_report_is_read_off_the_main_thread() -> None:
         ObjCInstance,
         ns_from_py({"kCBMsgArgResult": 913, "kCBMsgArgRFCOMMChannelID": 12}),
     )
-    read: list[native._OpenResult] = []
+    read: list[native._ChannelReport] = []
     framework = threading.Thread(
         target=lambda: read.append(
-            native._read_open_result(_pointer(peer), _pointer(info))
+            native._read_channel_report(_pointer(peer), _pointer(info))
         )
     )
     framework.start()
     framework.join()
-    assert read == [native._OpenResult(ADDRESS, 12, 913, None)]
+    assert read == [native._ChannelReport(ADDRESS, 12, 913, None)]
 
 
-def _failed_open(result: int, descriptor: int) -> native._OpenResult:
-    return native._OpenResult(ADDRESS, 4, result, descriptor)
+def _failed_open(result: int, descriptor: int) -> native._ChannelReport:
+    return native._ChannelReport(ADDRESS, 4, result, descriptor)
 
 
 def _is_open(descriptor: int) -> bool:

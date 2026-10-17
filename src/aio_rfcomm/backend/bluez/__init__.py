@@ -20,6 +20,7 @@ works, unchecked.
 
 import asyncio
 import errno
+import functools
 import logging
 import socket
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
@@ -52,6 +53,7 @@ from aio_rfcomm.backend.bluez.dbus import (
     ProfileManagerProxy,
     add_match,
     get_interface,
+    is_connected,
     system_bus,
 )
 from aio_rfcomm.backend.bluez.errors import (
@@ -132,6 +134,18 @@ class BlueZBluetooth(BackendBluetooth):
         Reads whether Bluetooth is usable and reports it. Set once there is
         somewhere to report it.
         """
+
+    async def _link_up(self, device_path: str) -> bool | None:
+        """
+        Ask BlueZ whether the link to a device is up.
+
+        Args:
+            device_path: The device's object path.
+
+        Returns:
+            Whether it is, or ``None`` if BlueZ did not say.
+        """
+        return await is_connected(self._bus, device_path)
 
     @override
     async def list_known_devices(
@@ -338,7 +352,7 @@ class BlueZBluetooth(BackendBluetooth):
                 raise translate_registration(error, str(service)) from error
 
             try:
-                yield BlueZService(profile, channel, self.refresh)
+                yield BlueZService(profile, channel, self.refresh, self._link_up)
             finally:
                 await manager.call_unregister_profile(path)
         finally:
@@ -390,7 +404,12 @@ class BlueZBluetooth(BackendBluetooth):
             fd = await waiter
             sock = socket.socket(fileno=fd)
             transport, protocol = await open_stream(sock)
-            opened = BlueZChannel(transport, protocol, self.refresh)
+            opened = BlueZChannel(
+                transport,
+                protocol,
+                self.refresh,
+                functools.partial(self._link_up, device_path),
+            )
             stack.push_async_callback(opened.close)
 
             yield opened
@@ -441,7 +460,12 @@ class BlueZBluetooth(BackendBluetooth):
                 raise translate_socket_connect(error, address, channel) from error
 
             transport, protocol = await open_stream(sock)
-            opened = BlueZChannel(transport, protocol, self.refresh)
+            opened = BlueZChannel(
+                transport,
+                protocol,
+                self.refresh,
+                functools.partial(self._link_up, self._device_path(device)),
+            )
             stack.push_async_callback(opened.close)
 
             yield opened
