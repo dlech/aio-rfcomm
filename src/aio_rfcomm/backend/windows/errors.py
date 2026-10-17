@@ -20,11 +20,12 @@ from aio_rfcomm.errors import (
     ServiceNotFoundError,
 )
 
-__all__ = ["translate_bluetooth_error", "translate_refusal"]
+__all__ = ["translate_bluetooth_error", "translate_failure", "translate_refusal"]
 
-# What a connect to a channel the device refuses fails with, on
-# Windows 10.0.26200.9457.
+# What a connect fails with when the device refuses the channel, and when
+# nothing answers, measured on Windows 10.0.26200.9457 and 10.0.26200.9711.
 _WSAEHOSTDOWN = 10064
+_WSAETIMEDOUT = 10060
 
 
 def translate_bluetooth_error(error: BluetoothError, address: str) -> RfcommError:
@@ -59,13 +60,12 @@ def translate_refusal(error: OSError, address: str, channel: int) -> RfcommError
     Returns:
         The error to raise for a refusal, or ``None`` for anything else.
     """
-    # Measured on Windows 10.0.26200.9457 against a macOS 26.6.2 peer: a
-    # channel nothing listens on fails with WSAEHOSTDOWN as soon as the peer
-    # refuses it, while a device that is switched off, and an address never
-    # seen, time out with WSAETIMEDOUT. A link refused for authentication is
-    # not measured. Asking again is refused again, and Windows holds the next
-    # attempt on that device for about a minute, until its link to it has
-    # gone.
+    # Measured on Windows 10.0.26200.9457 against macOS 26.6.2 and on
+    # 10.0.26200.9711 against BlueZ 5.85: a channel nothing listens on fails
+    # with WSAEHOSTDOWN as soon as the peer refuses it. A link refused for
+    # authentication is not measured. Asking again is refused again, and after
+    # a refusal that had to set up the link, Windows holds the next attempt on
+    # that device for about a minute.
     if getattr(error, "winerror", None) == _WSAEHOSTDOWN:
         return ServiceNotFoundError(
             f"{address} refused channel {channel}. Usually nothing there is "
@@ -73,3 +73,28 @@ def translate_refusal(error: OSError, address: str, channel: int) -> RfcommError
         )
 
     return None
+
+
+def translate_failure(error: OSError, address: str, channel: int) -> RfcommError:
+    """
+    Say what it means that the last attempt to connect failed too.
+
+    Args:
+        error: What the last attempt raised.
+        address: The device's Bluetooth address.
+        channel: The RFCOMM channel number.
+
+    Returns:
+        The error to raise.
+    """
+    # A device that is on times out now and then too: measured on
+    # Windows 10.0.26200.9711, once against BlueZ 5.85 on a link that had to be
+    # set up. So only a timeout on every attempt means nothing answered.
+    if getattr(error, "winerror", None) == _WSAETIMEDOUT:
+        return DeviceNotFoundError(
+            f"{address} did not answer. It may be switched off or out of range"
+        )
+
+    return ConnectionFailedError(
+        f"could not reach {address} on channel {channel}: {error}"
+    )
