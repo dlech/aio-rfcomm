@@ -183,6 +183,16 @@ class FakeCoordinatorClass:
         return self.shared
 
 
+class FakeConnection:
+    """
+    CoreBluetooth's ``CBRFCOMMChannel`` under a channel, which knows its
+    real number.
+    """
+
+    def __init__(self, channel_id: int) -> None:
+        self.channelID = channel_id
+
+
 class FakeChannel:
     """
     An ``IOBluetoothRFCOMMChannel`` that opens, carries bytes and closes.
@@ -201,9 +211,17 @@ class FakeChannel:
     def __init__(self, device: "FakeDevice", number: int, delegate: object) -> None:
         self.device = device
         self.number = number
+        #: The channel bluetoothd connected, which on macOS 26.6.2 is not
+        #: always the one asked for: an earlier open that lands late is given
+        #: to the newest channel waiting.
+        self.connected_to = number
         self.delegate: object = delegate
         self.open = False
         self.written = bytearray()
+
+    @property
+    def rfcommchannel(self) -> "FakeConnection | None":
+        return FakeConnection(self.connected_to) if self.open else None
 
     def isOpen(self) -> bool:
         return self.open

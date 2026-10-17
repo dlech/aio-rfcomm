@@ -50,6 +50,7 @@ from typing_extensions import override
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth.codes import (
+    ALREADY_CONNECTING,
     CBError,
     CBManagerAuthorization,
     CBManagerState,
@@ -125,7 +126,16 @@ class _Record(Protocol):
     def getAttributeDataElement(self, attribute: int, /) -> _DataElement | None: ...
 
 
+class _Connection(Protocol):
+    # CoreBluetooth's CBRFCOMMChannel, private, under an IOBluetooth channel.
+    @property
+    def channelID(self) -> int: ...
+
+
 class _Channel(Protocol):
+    # Private, and nil until bluetoothd has connected the channel.
+    @property
+    def rfcommchannel(self) -> _Connection | None: ...
     def isOpen(self) -> bool: ...
     def getMTU(self) -> int: ...
     def closeChannel(self) -> int: ...
@@ -1052,14 +1062,49 @@ class Channel:
             _normalize(str(self._device.addressString)), str(name) if name else None
         )
 
-    async def wait_until_open(self) -> None:
+    async def wait_until_open(self, seconds: float) -> bool:
         """
-        Wait for the framework to finish opening the channel.
+        Wait a while for the framework to finish opening the channel.
+
+        Waiting again after running out of time is fine: the open is still
+        heard, because only this wait ends, not the open's future.
+
+        Args:
+            seconds: How long to wait this time.
+
+        Returns:
+            Whether it opened in that time.
 
         Raises:
             MachError: The channel could not be opened.
         """
-        await self._delegate.opened
+        opened = self._delegate.opened
+        await asyncio.wait([opened], timeout=seconds)
+        if not opened.done():
+            return False
+
+        opened.result()
+        return True
+
+    def connected_number(self) -> int | None:
+        """
+        Find which channel this one is actually connected to.
+
+        Not always the one asked for. On macOS 26.6.2 a device's peer holds a
+        single callback for opens, and each new open replaces it. So an
+        earlier open that lands late is reported to the newest channel, which
+        takes it on as its own, while ``getChannelID`` goes on giving the
+        number that channel was asked for. Only the CoreBluetooth channel
+        underneath says which it really is.
+
+        Returns:
+            The channel number bluetoothd connected, or ``None`` if the
+            framework holds no connection for this channel.
+        """
+        connection = self._channel.rfcommchannel
+        if connection is None:
+            return None
+        return int(connection.channelID)
 
     async def send(self, data: bytes) -> None:
         """
@@ -1124,6 +1169,9 @@ class Channel:
         if not hasattr(self, "_channel"):
             return
 
+        # A report that comes after all is then ignored, rather than left
+        # with nobody to read it.
+        self._delegate.opened.cancel()
         _unread.pop(_address_of(self._channel), None)
         # Dropped inside a pool for the reason close() explains at length.
         with autoreleasepool():
@@ -1155,6 +1203,7 @@ class Channel:
         if not hasattr(self, "_channel"):
             return
 
+        self._delegate.opened.cancel()
         self._channel.closeChannel()
         try:
             if not self._delegate.ended.is_set():
@@ -1662,6 +1711,90 @@ def keep_unread_bytes() -> None:
     _objc.method_setImplementation(method, ctypes.cast(replacement, ctypes.c_void_p))
 
 
+def _failure(result: int | None, number: int, address: str) -> RfcommError | None:
+    """
+    Say what one of bluetoothd's results for a channel open means.
+
+    Args:
+        result: The daemon's ``kCBMsgArgResult``, if it sent one.
+        number: The RFCOMM channel number.
+        address: The device's address, for the error message.
+
+    Returns:
+        The error to raise, or ``None`` while the open may still succeed.
+    """
+    if result is None or result in (0, ALREADY_CONNECTING):
+        return None
+
+    # Every other result bluetoothd gave over four days of opens on macOS
+    # 26.6.2 (911, 913 and 927) was a definite failure.
+    match result:
+        case OIStatus.RFCOMM_DLCI_EXISTS:
+            return ConnectionFailedError(
+                f"channel {number} on {address} is already open or "
+                "opening, perhaps in another program on this computer"
+            )
+        case OIStatus.RFCOMM_REMOTE_REJECT:
+            return ServiceNotFoundError(
+                f"{address} refused channel {number}. Usually nothing "
+                "there is listening on it"
+            )
+        case OIStatus.RFCOMM_REMOTE_DEVICE_DISCONNECTED:
+            return ConnectionFailedError(
+                f"{address} hung up as channel {number} opened"
+            )
+        case _:
+            return ConnectionFailedError(
+                f"could not open channel {number} on {address} "
+                f"(bluetoothd said {result}: {_describe_result(result)})"
+            )
+
+
+async def _wait_for_report(opening: Channel, number: int, address: str) -> bool:
+    """
+    Wait for the framework to say a channel opened.
+
+    Args:
+        opening: The channel, asked for and not yet open.
+        number: The RFCOMM channel number.
+        address: The device's address.
+
+    For as long as bluetoothd says an earlier ask is still going, this keeps
+    waiting. The caller's cancel is what ends that.
+
+    Returns:
+        Whether it said so. ``False`` means silence from the framework and
+        nothing from bluetoothd that settles it either.
+
+    Raises:
+        MachError: The framework said the open failed.
+        RfcommError: bluetoothd said the open failed.
+    """
+    key = (_normalize(address), number)
+    while True:
+        if await opening.wait_until_open(_OPEN_REPORT_SECONDS):
+            return True
+
+        result = _open_results.get(key)
+        failure = _failure(result, number, address)
+        if failure is not None:
+            raise failure
+
+        if result != ALREADY_CONNECTING:
+            return False
+
+        # An earlier ask for a channel on this device is still going, and
+        # whatever it ends in is reported to this channel, the newest. Asking
+        # again would only be answered the same way. Measured on macOS 26.6.2
+        # against BlueZ 5.85: an ask went unanswered for 5 s, asking again got
+        # this at once, and the first ask then opened its channel.
+        logger.debug(
+            "an earlier open on %s is still going. waiting for channel %d",
+            address,
+            number,
+        )
+
+
 async def _open_reported(device: _Device, number: int, address: str) -> Channel:
     """
     Open a channel, asking again if the framework never says whether it did.
@@ -1671,6 +1804,10 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
     Asking again costs nothing on the air: an open that did land leaves the
     channel where the framework finds it and hands it straight back, and one
     that did not never reached the peer.
+
+    An ask is never given up on while bluetoothd is still working on it. One
+    given up on can land later on the next open, as another channel, and
+    that one is closed rather than returned.
 
     Args:
         device: The ``IOBluetoothDevice``.
@@ -1687,56 +1824,54 @@ async def _open_reported(device: _Device, number: int, address: str) -> Channel:
             framework never reported one open.
     """
     key = (_normalize(address), number)
-    for _attempt in range(_OPEN_REPORT_ATTEMPTS):
+    unreported = 0
+    while unreported < _OPEN_REPORT_ATTEMPTS:
         _open_results.pop(key, None)
         opening = await _request(device, number, address)
         try:
-            async with asyncio.timeout(_OPEN_REPORT_SECONDS):
-                await opening.wait_until_open()
+            reported = await _wait_for_report(opening, number, address)
         except MachError as error:
             await opening.close()
             raise ConnectionFailedError(
                 f"could not open channel {number} on {address}: {error}"
             ) from error
-        except TimeoutError:
+        except RfcommError:
             opening.release()
-            result = _open_results.get(key)
-            # Only silence is worth asking again about. Every other result
-            # bluetoothd gave over four days of opens on macOS 26.6.2 (911,
-            # 913, 927 and 1902) was a definite failure.
-            match result:
-                case None | 0:
-                    logger.debug(
-                        "channel %d to %s was never reported open "
-                        "(bluetoothd: %s). asking again",
-                        number,
-                        address,
-                        result,
-                    )
-                    continue
-                case OIStatus.RFCOMM_DLCI_EXISTS:
-                    raise ConnectionFailedError(
-                        f"channel {number} on {address} is already open or "
-                        "opening, perhaps in another program on this computer"
-                    ) from None
-                case OIStatus.RFCOMM_REMOTE_REJECT:
-                    raise ServiceNotFoundError(
-                        f"{address} refused channel {number}. Usually nothing "
-                        "there is listening on it"
-                    ) from None
-                case OIStatus.RFCOMM_REMOTE_DEVICE_DISCONNECTED:
-                    raise ConnectionFailedError(
-                        f"{address} hung up as channel {number} opened"
-                    ) from None
-                case _:
-                    raise ConnectionFailedError(
-                        f"could not open channel {number} on {address} "
-                        f"(bluetoothd said {result}: {_describe_result(result)})"
-                    ) from None
+            raise
         except BaseException:
             await opening.close()
             raise
-        return opening
+
+        if not reported:
+            opening.release()
+            unreported += 1
+            logger.debug(
+                "channel %d to %s was never reported open. asking again",
+                number,
+                address,
+            )
+            continue
+
+        connected = opening.connected_number()
+        if connected is None or connected == number:
+            return opening
+
+        # An open given up on earlier has landed on this one. The device's
+        # peer keeps one callback for opens, which the newest replaces, and
+        # nothing on the way compares channel numbers (macOS 26.6.2
+        # disassembly). Measured there against BlueZ 5.85: asked for 25, told
+        # it opened, and holding the channel to 22. Nobody asked for that one
+        # any more, so it is closed rather than handed out.
+        logger.debug(
+            "channel %d to %s came back as channel %d. closing that one",
+            number,
+            address,
+            connected,
+        )
+        await opening.close()
+        failure = _failure(_open_results.get(key), number, address)
+        if failure is not None:
+            raise failure
 
     raise ConnectionFailedError(
         f"the framework never reported channel {number} on {address} open, "
@@ -1757,7 +1892,8 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
     what is written goes to whoever still holds the channel. It is the previous
     channel to this device on this number, which the framework keeps handing
     over until it has finished tearing that one down, so the thing to do is
-    wait and ask again.
+    wait and ask again. One that never goes is an earlier open that landed
+    after it was given up on, and is closed.
 
     Waiting and asking again is cruder than waiting for the framework to say
     the old channel is gone, but nothing says so. ``rfcommChannelClosed:``
@@ -1785,7 +1921,7 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
         ConnectionFailedError: The channel could not be requested, or the
             previous one never finished closing.
     """
-    for _attempt in range(_OPEN_ATTEMPTS):
+    for attempt in range(_OPEN_ATTEMPTS):
         delegate = _ChannelDelegate.alloc().init()
         handle = objc_id()
         try:
@@ -1803,16 +1939,33 @@ async def _request(device: _Device, number: int, address: str) -> Channel:
         if not opened.isOpen():
             return Channel(opened, delegate, device)
 
+        earlier = Channel(opened, delegate, device)
+        del opened, delegate
+        if attempt == _OPEN_ATTEMPTS // 2:
+            # Still there, so not the previous channel on its way out but one
+            # nobody holds: an open given up on that landed after all, with no
+            # channel waiting to be told. Nothing else in this program can be
+            # using it, since the device is claimed. Closed halfway, so the
+            # rest of the wait covers its going. Measured on macOS 26.6.2
+            # against BlueZ 5.85: one stayed open for 22 s until something
+            # else closed it. Closed here, 15 went from the air at once or
+            # within 5 s.
+            logger.debug(
+                "channel %d on %s is open and nobody holds it. Closing it",
+                number,
+                address,
+            )
+            await earlier.close()
+            continue
+
         logger.debug(
             "channel %d on %s is still open from an earlier use. Waiting",
             number,
             address,
         )
-        # Let go of inside a pool for the same reason Channel.close does it,
-        # and without closing it: this is the previous channel, already on its
-        # way out under its own steam.
-        with autoreleasepool():
-            del opened, delegate
+        # Let go of without closing it: this is the previous channel, already
+        # on its way out under its own steam.
+        earlier.release()
         await asyncio.sleep(_SETTLE_SECONDS)
 
     raise ConnectionFailedError(
