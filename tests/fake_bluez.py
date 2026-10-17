@@ -16,11 +16,12 @@ kernel 7.0.0-38).
 # Do not add ``from __future__ import annotations`` to this module. dbus-fast
 # reads the annotations on D-Bus methods and properties at runtime.
 
+import asyncio
 import shutil
 import socket
 import subprocess
 import sys
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -319,6 +320,14 @@ class FakeBlueZ:
         """
         Who sent the method call being handled.
         """
+        self.calls: list[str] = []
+        """
+        The name of every method called on BlueZ, in order.
+        """
+        self.after_reading: Callable[[], None] | None = None
+        """
+        Run once, just after the reply to the next GetManagedObjects is sent.
+        """
         self._bus: MessageBus | None = None
         self._manager = FakeProfileManager(self)
 
@@ -474,10 +483,16 @@ class FakeBlueZ:
             return None
 
         self.caller = message.sender or ""
+        self.calls.append(f"{message.interface}.{message.member}")
 
         # BlueZ's object manager is on the root, which has no object of its
         # own to hang it from here.
         if (message.path, message.member) == ("/", "Introspect"):
             return Message.new_method_return(message, "s", [_ROOT])
+
+        # dbus-fast replies as soon as this returns, so this runs after that.
+        if message.member == "GetManagedObjects" and self.after_reading is not None:
+            asyncio.get_running_loop().call_soon(self.after_reading)
+            self.after_reading = None
 
         return None

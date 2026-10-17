@@ -10,6 +10,7 @@ ended. See ``tests/fake_bluez.py`` for what stands in for BlueZ.
 """
 
 import socket
+import time
 from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
@@ -115,6 +116,50 @@ async def test_switching_off_and_on_is_followed(bluez: FakeBlueZ) -> None:
         adapter.switch("off-enabling")
         adapter.switch("on")
         await _until(bluetooth, Availability.USABLE)
+
+
+async def test_changes_are_followed_without_asking_bluez(bluez: FakeBlueZ) -> None:
+    """
+    Each change comes with a signal that carries the new values.
+    """
+    (adapter,) = bluez.adapters
+
+    async with _open() as bluetooth:
+        asked = len(bluez.calls)
+
+        adapter.switch_off()
+        await _until(bluetooth, Availability.SWITCHED_OFF)
+        adapter.switch("on")
+        await _until(bluetooth, Availability.USABLE)
+
+        bluez.add_device(adapter, "00:11:22:33:44:55", "peer")
+        await bluez.flush()
+        assert len(await bluetooth.list_known_devices()) == 1
+
+        assert bluez.calls[asked:] == []
+
+
+async def test_a_change_just_after_everything_is_read_is_kept(bus: str) -> None:
+    """
+    The signal can be taken in before the task that asked for everything
+    sees the reply, which predates it.
+    """
+    fake = FakeBlueZ(bus)
+    adapter = fake.add_adapter("hci0", FREYR)
+
+    def switch_off() -> None:
+        adapter.switch_off()
+        # Holding the loop lets the reply and the signals reach our socket
+        # before it is read, so they are taken in together.
+        time.sleep(0.05)
+
+    fake.after_reading = switch_off
+    await fake.start()
+    try:
+        async with _open() as bluetooth:
+            await _until(bluetooth, Availability.SWITCHED_OFF)
+    finally:
+        await fake.stop()
 
 
 async def test_adapters_coming_and_going_are_followed(bus: str) -> None:
@@ -478,6 +523,7 @@ async def test_a_radio_going_off_ends_the_channel_with_bluetooth(
         bluetooth.open_service(_info(device), UUID(SERVICE)) as channel,
     ):
         (link,) = device.links
+        asked = len(bluez.calls)
         # Read, but not yet announced.
         adapter.power_state = "on-disabling"
         link.drop()
@@ -486,6 +532,8 @@ async def test_a_radio_going_off_ends_the_channel_with_bluetooth(
             await channel.receive()
 
         assert raised.value.reason is Availability.SWITCHED_OFF
+        # Only the adapter in use is read again.
+        assert bluez.calls[asked:] == ["org.freedesktop.DBus.Properties.GetAll"]
 
 
 async def test_a_hang_up_with_the_radio_on_is_the_connection_s_end(
