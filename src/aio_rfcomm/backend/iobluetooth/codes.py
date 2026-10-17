@@ -19,6 +19,7 @@ __all__ = [
     "CBManagerState",
     "IOReturn",
     "OIStatus",
+    "SDPDataElementType",
 ]
 
 
@@ -126,6 +127,23 @@ class CBError(enum.IntEnum):
     PEER_REMOVED_PAIRING_INFORMATION = 14
     ENCRYPTION_TIMED_OUT = 15
     TOO_MANY_LE_PAIRED_DEVICES = 16
+
+
+class SDPDataElementType(enum.IntEnum):
+    """
+    The ``kBluetoothSDPDataElementType`` values from ``Bluetooth.h``: what an
+    ``IOBluetoothSDPDataElement`` holds.
+    """
+
+    NIL = 0
+    UNSIGNED_INT = 1
+    SIGNED_INT = 2
+    UUID = 3
+    STRING = 4
+    BOOLEAN = 5
+    DATA_ELEMENT_SEQUENCE = 6
+    DATA_ELEMENT_ALTERNATIVE = 7
+    URL = 8
 
 
 def _iokit_common(code: int) -> int:

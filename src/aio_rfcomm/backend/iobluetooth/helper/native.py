@@ -42,8 +42,9 @@ from rubicon.objc import (
     ObjCProtocol,
     ns_from_py,
     objc_method,
+    py_from_ns,
 )
-from rubicon.objc.api import NSString
+from rubicon.objc.api import NSData, NSString
 from rubicon.objc.runtime import autoreleasepool, libc, load_library, objc_id
 from typing_extensions import override
 
@@ -54,6 +55,7 @@ from aio_rfcomm.backend.iobluetooth.codes import (
     CBManagerState,
     IOReturn,
     OIStatus,
+    SDPDataElementType,
 )
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
@@ -105,18 +107,22 @@ load_library("CoreBluetooth")
 
 class _UUID(Protocol):
     """
-    An ``IOBluetoothSDPUUID``.
-
-    Nothing is ever called on one: it is built from a Python UUID and handed
-    straight back to the framework. Naming the type says that much at the
-    signatures it appears in, which ``Any`` does not -- though, having no
-    members, it cannot check that what arrives really is one.
+    An ``IOBluetoothSDPUUID``, which is an ``NSData`` of 2, 4 or 16 bytes.
     """
+
+    def getUUIDWithLength(self, length: int, /) -> "_UUID": ...
+
+
+class _DataElement(Protocol):
+    def getTypeDescriptor(self) -> int: ...
+    def getUUIDValue(self) -> _UUID: ...
+    def getArrayValue(self) -> "Iterable[_DataElement] | None": ...
 
 
 class _Record(Protocol):
     # A ``ctypes.byref`` result, whose type ctypes keeps private. Same below.
     def getRFCOMMChannelID(self, out: Any, /) -> int: ...
+    def getAttributeDataElement(self, attribute: int, /) -> _DataElement | None: ...
 
 
 class _Channel(Protocol):
@@ -145,11 +151,11 @@ class _Device(Protocol):
     def addressString(self) -> NSString: ...
     @property
     def name(self) -> NSString | None: ...
+    # The services macOS stored for the device, as records.
+    @property
+    def services(self) -> Iterable[_Record] | None: ...
     def isConnected(self) -> bool: ...
     def openConnection(self, target: "_ConnectionComplete", /) -> int: ...
-    def closeConnection(self) -> int: ...
-    def performSDPQuery(self, target: "_QueryComplete", /) -> int: ...
-    def getServiceRecordForUUID(self, uuid: _UUID, /) -> _Record | None: ...
     def openRFCOMMChannelAsync(
         self, channel: Any, /, *, withChannelID: int, delegate: "_ChannelDelegate"
     ) -> int: ...
@@ -750,31 +756,6 @@ class _ConnectionComplete(NSObject):
             self.future.set_result(None)
 
 
-class _QueryComplete(NSObject):
-    """
-    Completion for an SDP query.
-    """
-
-    future: asyncio.Future[None]
-    token: int
-
-    @objc_method
-    def init(self):
-        self.future = asyncio.get_running_loop().create_future()
-        self.token = next(_completion_tokens)
-        return self
-
-    @objc_method
-    def sdpQueryComplete_status_(self, _device: ObjCInstance, status: int) -> None:
-        _awaiting_completion.pop(self.token, None)
-        if self.future.done():
-            return
-        if status:
-            self.future.set_exception(MachError(status))
-        else:
-            self.future.set_result(None)
-
-
 # Bytes read out of a closing channel's stream, by the address of its
 # IOBluetoothRFCOMMChannel. Written on a framework thread and taken on the main
 # thread, in the delegate's rfcommChannelClosed:.
@@ -915,28 +896,98 @@ def read_power_state() -> bool:
     return controller is not None and controller.powerState == _POWER_ON
 
 
+# The SDP attribute naming a record's service classes.
+_SERVICE_CLASS_ID_LIST = 0x0001
+
+
+def _python_uuid(uuid: _UUID) -> UUID:
+    """
+    Turn the framework's UUID into a Python one.
+
+    Args:
+        uuid: A UUID of any length.
+
+    Returns:
+        The full 128-bit UUID.
+    """
+    widened = cast(NSData, uuid.getUUIDWithLength(16))
+    return UUID(bytes=py_from_ns(widened))
+
+
+def _service_classes(record: _Record) -> set[UUID]:
+    """
+    Read the service classes a stored record names.
+
+    Args:
+        record: The record.
+
+    Returns:
+        The UUIDs in its Service Class ID List.
+    """
+    listed = record.getAttributeDataElement(_SERVICE_CLASS_ID_LIST)
+    if listed is None:
+        return set()
+
+    # macOS 26.6.2 stores a record once per class, each copy holding its one
+    # class as a bare UUID rather than as a list.
+    match listed.getTypeDescriptor():
+        case SDPDataElementType.UUID:
+            elements = [listed]
+        case SDPDataElementType.DATA_ELEMENT_SEQUENCE:
+            elements = list(listed.getArrayValue() or [])
+        case _:
+            return set()
+
+    return {
+        _python_uuid(element.getUUIDValue())
+        for element in elements
+        if element.getTypeDescriptor() == SDPDataElementType.UUID
+    }
+
+
+def _offering(device: _Device, services: Collection[UUID]) -> _Record | None:
+    """
+    Find a stored record whose service class is one of these.
+
+    Args:
+        device: The device.
+        services: The service classes to look for.
+
+    Returns:
+        The first such record, or ``None``.
+    """
+    # Not getServiceRecordForUUID, which matches a UUID anywhere in a record:
+    # on macOS 26.6.2 a Pybricks EV3, whose record names Serial Port only as a
+    # profile it follows, was found offering Serial Port.
+    for record in device.services or []:
+        if not _service_classes(record).isdisjoint(services):
+            return record
+
+    return None
+
+
 def list_known_devices(
     service: UUID | Collection[UUID] | None = None,
 ) -> list[RfcommDeviceInfo]:
     """
     List the devices macOS has paired with.
 
-    Filtering happens against the cached SDP records, which is all that is
+    Filtering happens against the stored SDP records, which is all that is
     available without connecting to each device in turn.
 
     Args:
-        service: Return only devices offering this service, or any of these
-            services. ``None`` returns every paired device.
+        service: Return only devices with a record whose service class is
+            this, or any of these. ``None`` returns every paired device.
 
     Returns:
         The matching devices.
     """
-    wanted = [_sdp_uuid(u) for u in _each(service)]
+    wanted = _each(service)
 
     found: list[RfcommDeviceInfo] = []
     seen: set[str] = set()
     for device in IOBluetoothDevice.pairedDevices() or []:
-        if wanted and not any(device.getServiceRecordForUUID(u) for u in wanted):
+        if wanted and _offering(device, wanted) is None:
             continue
         address = _normalize(str(device.addressString))
         # macOS 26.6.2 lists some devices twice. Measured rather than guessed
@@ -1129,8 +1180,7 @@ async def open_channel(
     Open an RFCOMM channel to a device.
 
     Exactly one of ``service`` and ``channel`` says which channel to open. A
-    service is looked up in the device's SDP records, querying the device if
-    they are not already cached.
+    service is looked up in the SDP records macOS stored for the device.
 
     Args:
         address: The device's Bluetooth address.
@@ -1199,7 +1249,7 @@ async def open_channel(
             number = channel
         else:
             # Guaranteed by the check above, which the type checker cannot see.
-            number = await _look_up(device, address, cast(UUID, service))
+            number = _look_up(device, address, cast(UUID, service))
 
         opening = await _open_reported(device, number, address)
 
@@ -1776,13 +1826,9 @@ async def _connect(device: _Device, address: str) -> None:
         raise _translate(error, address) from error
 
 
-async def _look_up(device: _Device, address: str, service: UUID) -> int:
+def _look_up(device: _Device, address: str, service: UUID) -> int:
     """
-    Find which RFCOMM channel a service is on.
-
-    The cached record is tried first. macOS 26.6.2 fills its cache from a real
-    SDP query rather than from advertising data, so a hit here is trustworthy.
-    A miss is worth one query before giving up.
+    Find which RFCOMM channel a service is on, in the stored records.
 
     Args:
         device: The connected ``IOBluetoothDevice``.
@@ -1795,22 +1841,11 @@ async def _look_up(device: _Device, address: str, service: UUID) -> int:
     Raises:
         ServiceNotFoundError: The device does not offer that service.
     """
-    uuid = _sdp_uuid(service)
-    record = device.getServiceRecordForUUID(uuid)
-    if not record:
-        complete = _QueryComplete.alloc().init()
-        _hold(complete)
-        try:
-            _check(device.performSDPQuery(complete))
-            await complete.future
-        except MachError as error:
-            _release(complete)
-            raise ServiceNotFoundError(
-                f"could not read {address}'s services: {error}"
-            ) from error
-        record = device.getServiceRecordForUUID(uuid)
-
-    if not record:
+    # Never performSDPQuery:. On macOS 26.6.2, with the link up, it answers
+    # from the same stored records within milliseconds, without asking the
+    # device.
+    record = _offering(device, [service])
+    if record is None:
         raise ServiceNotFoundError(f"{address} does not offer {service}")
 
     # A channel number is one byte, and the framework declares the
