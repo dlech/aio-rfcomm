@@ -51,4 +51,19 @@ connect to the device first, and not when Windows was already connected to
 it. Seen on Windows 10.0.26200.9457 with a Mac, and on 10.0.26200.9711 with a
 Linux computer.
 
+### A channel to a device can stop opening
+
+A channel to a device can stop opening. Each open waits about four minutes
+and then fails with `DeviceNotFoundError`. Other channels to the same device
+still open, and other computers can still open that channel. New programs are
+stuck too. Disconnecting the device ends it.
+
+It happened twice in two hours of tests that kept the device busy, each time
+just after an open of that channel was canceled about half a second in. Once
+it lasted an hour, and disconnecting the device ended it. The other time it
+lasted about an hour and was gone after every program had stopped using the
+device for a few minutes. With less going on, 56 canceled opens did not bring
+it on. Seen on Windows 10.0.26200.9711, with a Linux computer running BlueZ
+5.85.
+
 **Next:** [API reference](reference/index.md), for every public name.
