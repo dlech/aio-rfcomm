@@ -14,17 +14,20 @@ from typing import TypeVar, cast
 from dbus_fast import BusType, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.aio.proxy_object import ProxyInterface
+from dbus_fast.introspection import Node
 
 __all__ = [
     "ADAPTER",
     "DEVICE",
     "OBJECT_MANAGER",
     "PROFILE_MANAGER",
+    "PROPERTIES",
     "SERVICE",
     "DeviceProxy",
     "Interface",
     "ObjectManagerProxy",
     "ProfileManagerProxy",
+    "PropertiesProxy",
     "add_match",
     "get_interface",
     "optional_string",
@@ -39,6 +42,11 @@ ADAPTER = "org.bluez.Adapter1"
 DEVICE = "org.bluez.Device1"
 PROFILE_MANAGER = "org.bluez.ProfileManager1"
 OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
+PROPERTIES = "org.freedesktop.DBus.Properties"
+
+# Interfaces dbus-fast already knows, so introspecting for them would cost a
+# round trip for nothing.
+_STANDARD = frozenset({OBJECT_MANAGER, PROPERTIES})
 
 Interface = TypeVar("Interface", bound=ProxyInterface)
 
@@ -55,6 +63,10 @@ _ManagedObjects = dict[str, dict[str, dict[str, Variant]]]
 
 class ObjectManagerProxy(ProxyInterface):
     async def call_get_managed_objects(self) -> _ManagedObjects: ...
+
+
+class PropertiesProxy(ProxyInterface):
+    async def call_get_all(self, interface: str) -> dict[str, Variant]: ...
 
 
 class ProfileManagerProxy(ProxyInterface):
@@ -112,7 +124,9 @@ async def get_interface(
     Returns:
         The interface.
     """
-    introspection = await bus.introspect(SERVICE, path)
+    introspection = (
+        Node.default(path) if name in _STANDARD else await bus.introspect(SERVICE, path)
+    )
     proxy = bus.get_proxy_object(SERVICE, path, introspection)
     return cast(Interface, proxy.get_interface(name))
 

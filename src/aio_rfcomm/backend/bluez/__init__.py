@@ -36,8 +36,7 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.bluez.availability import (
     WATCHED,
     follow_availability,
-    may_change_availability,
-    read_availability,
+    refresh_availability,
 )
 from aio_rfcomm.backend.bluez.connection import (
     BlueZChannel,
@@ -45,10 +44,8 @@ from aio_rfcomm.backend.bluez.connection import (
 )
 from aio_rfcomm.backend.bluez.dbus import (
     DEVICE,
-    OBJECT_MANAGER,
     PROFILE_MANAGER,
     DeviceProxy,
-    ObjectManagerProxy,
     ProfileManagerProxy,
     add_match,
     get_interface,
@@ -59,6 +56,7 @@ from aio_rfcomm.backend.bluez.errors import (
     translate_registration,
     translate_socket_connect,
 )
+from aio_rfcomm.backend.bluez.objects import BlueZObjects
 from aio_rfcomm.backend.bluez.profile import Profiles, ServerProfile, profile_paths
 from aio_rfcomm.backend.provider import (
     AvailabilityState,
@@ -117,6 +115,11 @@ class BlueZBluetooth(BackendBluetooth):
         self._profiles = profiles
         self._claimed: set[int] = set()
 
+        self.objects = BlueZObjects()
+        """
+        BlueZ's adapters and devices, kept up to date from its signals.
+        """
+
         self.path = ""
         """
         The adapter's object path, kept up to date as adapters come and go.
@@ -138,22 +141,9 @@ class BlueZBluetooth(BackendBluetooth):
         self, *, service: UUID | Collection[UUID] | None = None
     ) -> list[RfcommDeviceInfo]:
         wanted = _wanted(service)
-        # REVISIT: GetManagedObjects walks every object BlueZ knows and is
-        # expensive to call repeatedly. bleak keeps one manager running and
-        # follows change signals instead. Worth doing here if listing turns
-        # out to be called often.
-        manager = await get_interface(
-            self._bus, "/", OBJECT_MANAGER, ObjectManagerProxy
-        )
-        objects = await manager.call_get_managed_objects()
 
         found: list[RfcommDeviceInfo] = []
-        for path, interfaces in sorted(objects.items()):
-            properties = interfaces.get(DEVICE)
-
-            if properties is None:
-                continue
-
+        for path, properties in sorted(self.objects.devices.items()):
             # Ask the device which adapter it belongs to rather than inferring
             # it from the shape of the object path. Address, Alias and Adapter
             # are always there. UUIDs is documented as optional (BlueZ 5.85,
@@ -503,10 +493,10 @@ class BlueZBackend(BackendProvider):
             changed = asyncio.Event()
 
             def notice(message: Message) -> None:
-                if may_change_availability(message):
+                if bluetooth.objects.hear(message):
                     changed.set()
 
-            bluetooth.refresh = lambda: read_availability(bus, bluetooth, state)
+            bluetooth.refresh = lambda: refresh_availability(bus, bluetooth, state)
             bus.add_message_handler(notice)
             stack.callback(bus.remove_message_handler, notice)
             for rule in WATCHED:

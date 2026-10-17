@@ -11,19 +11,12 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, NamedTuple
 
-from dbus_fast import Message, MessageType
 from dbus_fast.aio import MessageBus
 from dbus_fast.errors import DBusError
 
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.bluez.dbus import (
-    ADAPTER,
-    OBJECT_MANAGER,
-    SERVICE,
-    ObjectManagerProxy,
-    get_interface,
-    optional_string,
-)
+from aio_rfcomm.backend.bluez.dbus import optional_string
+from aio_rfcomm.backend.bluez.objects import BlueZObjects
 from aio_rfcomm.backend.provider import (
     AvailabilityState,
 )
@@ -35,29 +28,28 @@ if TYPE_CHECKING:
 __all__ = [
     "WATCHED",
     "follow_availability",
-    "may_change_availability",
-    "read_availability",
+    "refresh_availability",
+    "report_availability",
 ]
 
 logger = logging.getLogger(__name__)
 
 
-# What the bus answers when nothing owns the name asked for: BlueZ is not
-# running, and nothing has started it.
-_NOBODY_THERE = (
-    "org.freedesktop.DBus.Error.ServiceUnknown",
-    "org.freedesktop.DBus.Error.NameHasNoOwner",
-)
-
 # What can change whether Bluetooth is usable: an adapter's properties (which
 # include whether it is powered), adapters arriving and leaving, and BlueZ
 # itself starting and stopping. The first was measured against a radio being
-# switched off and on (BlueZ 5.85). The others are only documented.
+# switched off and on (BlueZ 5.85). The others are only documented. Devices'
+# properties are followed for listing them.
 WATCHED = (
     (
         "type='signal',sender='org.bluez',"
         "interface='org.freedesktop.DBus.Properties',"
         "member='PropertiesChanged',arg0='org.bluez.Adapter1'"
+    ),
+    (
+        "type='signal',sender='org.bluez',"
+        "interface='org.freedesktop.DBus.Properties',"
+        "member='PropertiesChanged',arg0='org.bluez.Device1'"
     ),
     "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager'",
     (
@@ -66,46 +58,6 @@ WATCHED = (
         "member='NameOwnerChanged',arg0='org.bluez'"
     ),
 )
-
-
-# The adapter properties that say whether it is powered.
-_POWER = frozenset({"Powered", "PowerState"})
-
-
-def may_change_availability(message: Message) -> bool:
-    """
-    Tell whether a signal could change whether Bluetooth is usable.
-
-    Args:
-        message: A message the bus delivered.
-
-    Returns:
-        Whether availability needs reading again.
-    """
-    # WATCHED delivers far more than this. Measured on BlueZ 5.85 during a 12 s
-    # scan: 10 signals, every one a device coming or going or the adapter's
-    # Discovering flag, and each would have read every object BlueZ has.
-    if message.message_type is not MessageType.SIGNAL:
-        return False
-
-    match (message.interface, message.member):
-        case ("org.freedesktop.DBus.Properties", "PropertiesChanged"):
-            # Any adapter's, not only the one in use: a new adapter can power
-            # up while the read that will choose it is still in progress.
-            interface, changed, invalidated = message.body
-            return interface == ADAPTER and not _POWER.isdisjoint(
-                [*changed, *invalidated]
-            )
-        case (
-            "org.freedesktop.DBus.ObjectManager",
-            "InterfacesAdded" | "InterfacesRemoved",
-        ):
-            return ADAPTER in message.body[1]
-        case ("org.freedesktop.DBus", "NameOwnerChanged"):
-            # The handler sees every message on the bus, not only WATCHED's.
-            return message.body[0] == SERVICE
-        case _:
-            return False
 
 
 class _Adapter(NamedTuple):
@@ -149,52 +101,46 @@ def _powered(adapter: _Adapter) -> tuple[Availability, str | None]:
             )
 
 
-async def _list_adapters(bus: MessageBus) -> list[_Adapter]:
+def _list_adapters(objects: BlueZObjects) -> list[_Adapter]:
     """
-    Read every adapter BlueZ knows about.
+    List the adapters BlueZ has.
 
     Args:
-        bus: A connected system bus.
+        objects: What BlueZ has, as last heard.
 
     Returns:
         The adapters, in object path order.
     """
-    manager = await get_interface(bus, "/", OBJECT_MANAGER, ObjectManagerProxy)
-    objects = await manager.call_get_managed_objects()
-
     # Address, Alias and Powered are always there. PowerState is documented
     # as experimental, so it may not be (BlueZ 5.85, doc/org.bluez.Adapter.rst).
     return [
         _Adapter(
             path,
-            interfaces[ADAPTER]["Address"].value,
-            interfaces[ADAPTER]["Alias"].value,
-            interfaces[ADAPTER]["Powered"].value,
-            optional_string(interfaces[ADAPTER].get("PowerState")),
+            properties["Address"].value,
+            properties["Alias"].value,
+            properties["Powered"].value,
+            optional_string(properties.get("PowerState")),
         )
-        for path, interfaces in sorted(objects.items())
-        if ADAPTER in interfaces
+        for path, properties in sorted(objects.adapters.items())
     ]
 
 
-async def read_availability(
-    bus: MessageBus, bluetooth: BlueZBluetooth, state: AvailabilityState
-) -> None:
+def report_availability(bluetooth: BlueZBluetooth, state: AvailabilityState) -> None:
     """
-    Read whether Bluetooth is usable, and which adapter to use.
+    Report whether Bluetooth is usable, from what BlueZ last said, and settle
+    which adapter to use.
 
     Args:
-        bus: A connected system bus.
         bluetooth: Where the adapter in use is kept.
         state: Where to report availability.
     """
-    try:
-        adapters = await _list_adapters(bus)
-    except DBusError as error:
-        if error.type not in _NOBODY_THERE:
-            raise
-        state.set(Availability.SERVICE_UNAVAILABLE, f"BlueZ is not running: {error}")
+    objects = bluetooth.objects
+
+    if not objects.running:
+        state.set(Availability.SERVICE_UNAVAILABLE, "BlueZ is not running")
         return
+
+    adapters = _list_adapters(objects)
 
     if not adapters:
         state.set(Availability.NO_ADAPTER)
@@ -209,6 +155,32 @@ async def read_availability(
     state.set(*_powered(chosen))
 
 
+async def refresh_availability(
+    bus: MessageBus, bluetooth: BlueZBluetooth, state: AvailabilityState
+) -> None:
+    """
+    Read whether the adapter in use is on, for when the signal saying it is
+    not may still be on its way, and report it.
+
+    Args:
+        bus: A connected system bus.
+        bluetooth: Where the adapter in use is kept.
+        state: Where to report availability.
+    """
+    objects = bluetooth.objects
+
+    if objects.stale or bluetooth.path not in objects.adapters:
+        await objects.read(bus)
+    else:
+        try:
+            await objects.read_adapter(bus, bluetooth.path)
+        except DBusError:
+            # The adapter or BlueZ has gone, which reading everything finds out.
+            await objects.read(bus)
+
+    report_availability(bluetooth, state)
+
+
 async def follow_availability(
     bus: MessageBus,
     bluetooth: BlueZBluetooth,
@@ -216,12 +188,11 @@ async def follow_availability(
     changed: asyncio.Event,
 ) -> None:
     """
-    Read whether Bluetooth is usable, and again after anything that may have
+    Report whether Bluetooth is usable, and again after anything that may have
     changed it.
 
-    Everything is read afresh each time rather than worked out from what the
-    signal said, so that a signal missed or misread costs nothing beyond its
-    own moment.
+    Everything is read when BlueZ starts, and again only after a read failed.
+    Otherwise the signals say what changed.
 
     Args:
         bus: A connected system bus.
@@ -232,7 +203,10 @@ async def follow_availability(
     while True:
         changed.clear()
         try:
-            await read_availability(bus, bluetooth, state)
+            if bluetooth.objects.stale:
+                await bluetooth.objects.read(bus)
+
+            report_availability(bluetooth, state)
         except Exception as error:
             # A failed read says nothing about Bluetooth, so what was last
             # known stands until the next signal. With nothing known yet,

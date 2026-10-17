@@ -25,17 +25,14 @@ from dbus_fast import DBusError, Message, MessageType, Variant
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.bluez import BlueZBluetooth, _wanted
-from aio_rfcomm.backend.bluez.availability import (
-    _Adapter,
-    _powered,
-    may_change_availability,
-)
+from aio_rfcomm.backend.bluez.availability import _Adapter, _powered
 from aio_rfcomm.backend.bluez.connection import _Request, _take_connection
 from aio_rfcomm.backend.bluez.errors import (
     translate_connect,
     translate_registration,
     translate_socket_connect,
 )
+from aio_rfcomm.backend.bluez.objects import BlueZObjects
 from aio_rfcomm.backend.bluez.profile import Profiles, _Profile
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
@@ -484,7 +481,7 @@ def test_a_blocked_radio_says_how_to_unblock_it() -> None:
 
 
 # --------------------------------------------------------------------------
-# Which signals are worth reading availability again for
+# Which signals may change whether Bluetooth is usable
 #
 # The ones below are what BlueZ 5.85 sent during a scan, plus the ones that
 # do matter: the adapter's power changing, an adapter arriving, and BlueZ
@@ -539,21 +536,21 @@ def test_the_power_of_the_adapter_in_use_matters() -> None:
     message = _properties_changed(
         ADAPTER_PATH, "org.bluez.Adapter1", {"Powered": Variant("b", False)}
     )
-    assert may_change_availability(message)
+    assert BlueZObjects().hear(message)
 
 
 def test_its_power_state_matters_too() -> None:
     message = _properties_changed(
         ADAPTER_PATH, "org.bluez.Adapter1", {"PowerState": Variant("s", "off-enabling")}
     )
-    assert may_change_availability(message)
+    assert BlueZObjects().hear(message)
 
 
 def test_the_adapter_discovering_does_not() -> None:
     message = _properties_changed(
         ADAPTER_PATH, "org.bluez.Adapter1", {"Discovering": Variant("b", True)}
     )
-    assert not may_change_availability(message)
+    assert not BlueZObjects().hear(message)
 
 
 def test_another_adapter_s_power_does_too() -> None:
@@ -564,19 +561,19 @@ def test_another_adapter_s_power_does_too() -> None:
     message = _properties_changed(
         "/org/bluez/hci1", "org.bluez.Adapter1", {"Powered": Variant("b", True)}
     )
-    assert may_change_availability(message)
+    assert BlueZObjects().hear(message)
 
 
 @pytest.mark.parametrize("member", ["InterfacesAdded", "InterfacesRemoved"])
 def test_a_device_coming_or_going_does_not(member: str) -> None:
     message = _interfaces(member, ["org.bluez.Device1", "org.bluez.LE1"])
-    assert not may_change_availability(message)
+    assert not BlueZObjects().hear(message)
 
 
 @pytest.mark.parametrize("member", ["InterfacesAdded", "InterfacesRemoved"])
 def test_an_adapter_coming_or_going_does(member: str) -> None:
     message = _interfaces(member, ["org.bluez.Adapter1"])
-    assert may_change_availability(message)
+    assert BlueZObjects().hear(message)
 
 
 def test_another_name_on_the_bus_coming_or_going_does_not() -> None:
@@ -587,7 +584,7 @@ def test_another_name_on_the_bus_coming_or_going_does_not() -> None:
         "sss",
         [":1.42", "", ":1.42"],
     )
-    assert not may_change_availability(message)
+    assert not BlueZObjects().hear(message)
 
 
 def test_bluez_starting_or_stopping_does() -> None:
@@ -598,4 +595,4 @@ def test_bluez_starting_or_stopping_does() -> None:
         "sss",
         ["org.bluez", ":1.5", ""],
     )
-    assert may_change_availability(message)
+    assert BlueZObjects().hear(message)
