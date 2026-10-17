@@ -365,16 +365,14 @@ async def test_giving_up_on_a_request_tells_the_helper_to_stop() -> None:
     async with _helper() as (helper, there):
         asking = asyncio.create_task(helper.ask("open", address="00:11"))
         request = await _next(there)
+        number = request["id"]
+        assert isinstance(number, int)
 
         asking.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asking
 
-        assert await _next(there) == {
-            "id": pytest.approx(request["id"] + 1),
-            "op": "abandon",
-            "of": request["id"],
-        }
+        assert await _next(there) == {"id": number + 1, "op": "abandon", "of": number}
 
 
 # --------------------------------------------------------------------------
