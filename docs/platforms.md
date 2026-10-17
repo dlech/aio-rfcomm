@@ -86,15 +86,25 @@ wait until they time out, turn Bluetooth off and on again.
 
 ### When a device's services change
 
-macOS keeps a stored copy of each device's services, and does not always
-refresh it. Most devices never change their services, so this rarely matters.
-It matters when a device's services change after pairing, for example when the
-device is running an aio-rfcomm server of its own. Then
+macOS keeps a stored copy of each device's services, and reads them again
+only when it connects to the device. While the device stays connected, the
+copy can be out of date. Most devices never change their services, so this
+rarely matters. It matters when a device's services change, for example when
+the device runs an aio-rfcomm server that restarts on a new channel. Then
 [`open_service`][aio_rfcomm.Bluetooth.open_service] can raise
 [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] even though
-the service is there.
+the service is there. The error then says the copy may be out of date.
 
-To refresh it, remove the device in the system settings and pair it again.
+To refresh it, disconnect the device, then open the service again. The library
+connects to the device, and macOS reads its services as it does. From a Linux
+device, give the Mac's address:
+
+```sh
+bluetoothctl disconnect F8:4D:89:62:C2:5D
+```
+
+A server that always serves on the same channel avoids the problem. Seen on
+macOS 26.6.2, with a peer running BlueZ 5.85.
 
 ## Linux
 

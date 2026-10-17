@@ -24,6 +24,15 @@ and, 10 s later, `Bluetooth error - restarting`. Once that wait is over,
 switching off works cleanly. Seen on macOS 26.6.2, with a peer running BlueZ
 5.85.
 
+### Asking a device for its services does not ask it
+
+IOBluetooth's `performSDPQuery:` answers from macOS's stored copy of the
+device's services, without sending anything to the device. macOS reads the
+services again only when it connects to the device. So a service that moves to
+another channel while the device stays connected stays stored on the old
+channel, and opening it fails. [Platforms](platforms.md) says what to do. Seen
+on macOS 26.6.2, with a peer running BlueZ 5.85.
+
 ### A paired device with no stored services
 
 Sometimes macOS has no stored services at all for a paired device. Then

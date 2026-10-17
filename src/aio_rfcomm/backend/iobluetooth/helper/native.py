@@ -1240,18 +1240,31 @@ async def open_channel(
     try:
         await _wait_for_relink(key)
 
-        # Both paths need the baseband link: an SDP query runs over it, and so
-        # does the channel itself.
-        if not device.isConnected():
+        # A link brought up here also refreshes the stored records. On macOS
+        # 26.6.2 bluetoothd reads the device's services again as it connects,
+        # if they changed, before it reports the link up. Nothing else does.
+        linked_here = not device.isConnected()
+        if linked_here:
             await _connect(device, address)
 
         if channel is not None:
             number = channel
+            opening = await _open_reported(device, number, address)
         else:
-            # Guaranteed by the check above, which the type checker cannot see.
-            number = _look_up(device, address, cast(UUID, service))
+            try:
+                # Guaranteed by the check above, which the type checker cannot
+                # see.
+                number = _look_up(device, address, cast(UUID, service))
+                opening = await _open_reported(device, number, address)
+            except ServiceNotFoundError as error:
+                if linked_here:
+                    raise
 
-        opening = await _open_reported(device, number, address)
+                raise ServiceNotFoundError(
+                    f"{error}. macOS's copy of {address}'s services may be out "
+                    "of date. It reads them again only when it connects to the "
+                    "device. Disconnect the device and try again"
+                ) from error
 
         logger.debug("channel %d to %s is open", number, address)
         try:
