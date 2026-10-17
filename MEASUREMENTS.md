@@ -42,6 +42,13 @@ since claims in the code refer to it.
   Windows.Devices.Bluetooth.dll 10.0.26100.9278.
 - Adapter: Qualcomm FastConnect 7800.
 
+## Windows 10.0.26200.9711
+
+- Windows 11 Home 25H2, the same machine as above, after servicing.
+- rfcomm.sys 10.0.26100.9549.
+- Windows.Devices.Bluetooth.dll 10.0.26100.3037.
+- The other Bluetooth files were not recorded.
+
 ## Recording a new one
 
 - macOS: `sw_vers`, and the controller's firmware from

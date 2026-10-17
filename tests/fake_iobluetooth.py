@@ -21,13 +21,17 @@ import threading
 from collections.abc import Generator
 from ctypes import c_int, c_void_p
 from typing import Any, ClassVar, cast
+from uuid import UUID
 
 import pytest
 from rubicon.objc import (
     SEL,
+    NSMutableDictionary,
     NSObject,
     NSUInteger,
+    ObjCClass,
     ObjCInstance,
+    ns_from_py,
     objc_id,
     objc_method,
     objc_property,
@@ -251,6 +255,71 @@ class FakeChannel:
         self.delegate.rfcommChannelClosed_(None)  # pyright: ignore[reportAttributeAccessIssue]
 
 
+def stored_record(
+    classes: UUID | list[UUID], channel: int | None = None, profile: int | None = None
+) -> ObjCInstance:
+    """
+    Make a real ``IOBluetoothSDPServiceRecord``, as macOS stores one for a
+    paired device. Making one does not touch the radio.
+
+    Args:
+        classes: The service class, stored as a bare UUID the way macOS 26.6.2
+            stores each of a device's records, or a list of them.
+        channel: The RFCOMM channel, or ``None`` for a service not on RFCOMM.
+        profile: A 16-bit profile the record follows.
+
+    Returns:
+        The record.
+    """
+    # Untyped, as rubicon hands back every class.
+    sdp_uuid: Any = ObjCClass("IOBluetoothSDPUUID")
+    element: Any = ObjCClass("IOBluetoothSDPDataElement")
+    number: Any = ObjCClass("NSNumber")
+    record: Any = ObjCClass("IOBluetoothSDPServiceRecord")
+
+    def value(thing: object) -> ObjCInstance:
+        return element.withElementValue_(thing)
+
+    def listed(*things: ObjCInstance) -> ObjCInstance:
+        return value(ns_from_py(list(things)))
+
+    def class_uuid(service: UUID) -> ObjCInstance:
+        return value(sdp_uuid.uuidWithData_(service.bytes))
+
+    attributes = NSMutableDictionary.new()
+    attributes.setObject_forKey_(
+        class_uuid(classes)
+        if isinstance(classes, UUID)
+        else listed(*map(class_uuid, classes)),
+        number.numberWithUnsignedShort_(0x0001),
+    )
+
+    if channel is not None:
+        attributes.setObject_forKey_(
+            listed(
+                listed(value(sdp_uuid.uuid16_(0x0100))),
+                listed(
+                    value(sdp_uuid.uuid16_(0x0003)),
+                    value(number.numberWithUnsignedChar_(channel)),
+                ),
+            ),
+            number.numberWithUnsignedShort_(0x0004),
+        )
+
+    if profile is not None:
+        attributes.setObject_forKey_(
+            listed(
+                listed(
+                    value(sdp_uuid.uuid16_(profile)),
+                    value(number.numberWithUnsignedShort_(0x0102)),
+                )
+            ),
+            number.numberWithUnsignedShort_(0x0009),
+        )
+
+    return record.withServiceDictionary_device_(attributes, None)
+
+
 class FakeDevice:
     """
     An ``IOBluetoothDevice``, one per address for the life of the process.
@@ -261,9 +330,13 @@ class FakeDevice:
 
     def __init__(self, address: str, connected: bool, answers: bool) -> None:
         self.address = address
+        self.addressString = address.replace(":", "-").lower()
+        self.name = None
         self.connected = connected
         self.answers = answers
         self.channels: list[FakeChannel] = []
+        #: The records macOS stored for the device, from :func:`stored_record`.
+        self.services: list[ObjCInstance] = []
 
     def isConnected(self) -> bool:
         return self.connected
@@ -305,6 +378,8 @@ class FakeDeviceClass:
     connected = True
     #: Every device handed out, by address.
     made: ClassVar[dict[str, FakeDevice]] = {}
+    #: The addresses of the paired devices.
+    paired: ClassVar[list[str]] = []
 
     @classmethod
     def deviceWithAddressString(cls, address: str, /) -> FakeDevice | None:
@@ -313,6 +388,10 @@ class FakeDeviceClass:
         if address not in cls.made:
             cls.made[address] = FakeDevice(address, cls.connected, cls.answers)
         return cls.made[address]
+
+    @classmethod
+    def pairedDevices(cls) -> list[FakeDevice]:
+        return [d for a in cls.paired if (d := cls.deviceWithAddressString(a))]
 
 
 #: Every channel asked for, in order.

@@ -37,6 +37,12 @@ Pass a service UUID to list only the devices that offer that service:
 serial_devices = await bluetooth.list_known_devices(service=SERIAL_PORT)
 ```
 
+A device offers a service when one of its service records has that UUID as
+its service class. A UUID the record only mentions, such as a profile it
+follows, does not count. A record can name more than one class. Linux and
+Windows count only the first, and macOS counts each of them (seen with BlueZ
+5.85, Windows 10.0.26200.9711 and macOS 26.6.2).
+
 !!! warning "To find a particular device, use its address"
 
     Look for a device by its `address`, not by its

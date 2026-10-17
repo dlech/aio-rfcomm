@@ -182,8 +182,10 @@ class Bluetooth:
         Pair devices in the system's own settings.
 
         Args:
-            service: List only the devices that offer this service, or any of these
-                services. ``None`` lists every known device.
+            service: List only the devices with a service record of this service
+                class, or of any of these. A UUID the record only mentions, such
+                as a profile it follows, does not count. ``None`` lists every
+                known device.
 
         Returns:
             The matching devices.

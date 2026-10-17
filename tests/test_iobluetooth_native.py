@@ -45,6 +45,7 @@ from aio_rfcomm.errors import (
 from tests.fake_iobluetooth import (
     FakeAuthorization,
     FakeCoordinatorClass,
+    FakeDevice,
     FakeDeviceClass,
     FakeLocalRecord,
     FakeManager,
@@ -53,6 +54,7 @@ from tests.fake_iobluetooth import (
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
     fake_framework_parts,
     is_observed,
+    stored_record,
     until_observed,
     wrap_channel,
 )
@@ -1036,6 +1038,70 @@ async def test_a_radio_switched_off_does_not_strand_the_device_claim(
             pass
     assert raised.value.reason is Availability.SWITCHED_OFF
     assert native._in_use == set()
+
+
+# --------------------------------------------------------------------------
+# Finding a service in the stored records
+# --------------------------------------------------------------------------
+
+SERIAL_PORT = UUID("00001101-0000-1000-8000-00805f9b34fb")
+GENERIC_AUDIO = UUID("00001203-0000-1000-8000-00805f9b34fb")
+HANDSFREE_GATEWAY = UUID("0000111f-0000-1000-8000-00805f9b34fb")
+PYBRICKS = UUID("c5f50101-8280-46da-89f4-6d8051e4aeef")
+
+
+@pytest.fixture
+def stored(monkeypatch: pytest.MonkeyPatch) -> FakeDevice:
+    """
+    A paired device whose stored record is a Pybricks EV3's: its own service
+    class on channel 1, naming Serial Port only as the profile it follows.
+
+    Returns:
+        The device, connected.
+    """
+    fake_framework_parts(monkeypatch)
+    monkeypatch.setattr(native, "_OPEN_REPORT_SECONDS", 0.05)
+    monkeypatch.setattr(native, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(native, "_open_results", {})
+    monkeypatch.setattr(FakeDeviceClass, "paired", [ADDRESS])
+    device = cast(FakeDevice, FakeDeviceClass.deviceWithAddressString(ADDRESS))
+    device.services = [stored_record(PYBRICKS, channel=1, profile=0x1101)]
+    return device
+
+
+def test_a_service_named_only_as_a_profile_is_not_offered(stored: FakeDevice) -> None:
+    """
+    The framework's own getServiceRecordForUUID finds the EV3 offering Serial
+    Port, because it matches a UUID anywhere in the record.
+    """
+    assert native.list_known_devices(SERIAL_PORT) == []
+
+
+def test_a_device_is_listed_by_its_service_class(stored: FakeDevice) -> None:
+    [found] = native.list_known_devices([SERIAL_PORT, PYBRICKS])
+    assert found.address == ADDRESS
+
+
+def test_every_class_of_a_record_naming_several_is_offered(
+    stored: FakeDevice,
+) -> None:
+    stored.services = [stored_record([HANDSFREE_GATEWAY, GENERIC_AUDIO], channel=13)]
+    assert native.list_known_devices(GENERIC_AUDIO) != []
+
+
+async def test_a_service_opens_on_the_channel_its_class_names(
+    stored: FakeDevice,
+) -> None:
+    async with native.open_channel(ADDRESS, service=PYBRICKS):
+        assert stored.channels[-1].number == 1
+
+
+async def test_a_service_named_only_as_a_profile_cannot_be_opened(
+    stored: FakeDevice,
+) -> None:
+    with pytest.raises(ServiceNotFoundError, match="does not offer"):
+        async with native.open_channel(ADDRESS, service=SERIAL_PORT):
+            pass
 
 
 # --------------------------------------------------------------------------
