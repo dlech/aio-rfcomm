@@ -43,7 +43,7 @@ runs:
 - Keep `--level debug`. Without it, the useful lines are missing.
 - Your program's lines come from the library's helper process, not from your
   program. With python.org's Python it is called `Python`. In an app bundled
-  with PyInstaller it is called `helper`.
+  with PyInstaller or py2app it is called `helper`.
 
 If the problem has already happened, `/usr/bin/log show` finds the last few
 minutes:
