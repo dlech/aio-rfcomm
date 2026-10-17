@@ -20,7 +20,6 @@ from aio_rfcomm.errors import (
     BluetoothAlreadyOpenError,
     BluetoothUnavailableError,
     ChannelClosedError,
-    CloseReason,
     ScopeClosedError,
 )
 from tests.fake import DEVICE, FakeChannel, FakeProvider
@@ -249,11 +248,10 @@ async def test_an_end_heard_while_bluetooth_is_usable_is_the_connection_s(
     opened: tuple[RfcommChannel, FakeChannel],
 ) -> None:
     channel, fake = opened
-    fake.go_away(CloseReason.LINK_LOST)
+    fake.go_away()
 
-    with pytest.raises(ChannelClosedError) as caught:
+    with pytest.raises(ChannelClosedError):
         await channel.receive()
-    assert caught.value.reason is CloseReason.LINK_LOST
 
 
 async def test_an_open_in_progress_ends_when_bluetooth_goes(
@@ -405,12 +403,11 @@ async def test_an_end_already_explained_is_kept(
     end that channel.
     """
     channel, fake = opened
-    fake.go_away(CloseReason.PEER_CLOSED)
+    fake.go_away()
     provider.report(Availability.SWITCHED_OFF)
 
-    with pytest.raises(ChannelClosedError) as caught:
+    with pytest.raises(ChannelClosedError):
         await channel.receive()
-    assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
 async def test_an_open_made_but_entered_after_the_block_refuses(

@@ -26,7 +26,7 @@ from aio_rfcomm.backend.provider import (
     BackendService,
 )
 from aio_rfcomm.discovery import RfcommDeviceInfo
-from aio_rfcomm.errors import ChannelClosedError, ChannelInUseError, CloseReason
+from aio_rfcomm.errors import ChannelClosedError, ChannelInUseError
 
 DEVICE = RfcommDeviceInfo("00:11:22:33:44:55", "fake device")
 
@@ -51,24 +51,24 @@ class FakeChannel(BackendChannel):
     @override
     def abort(self) -> None:
         self.aborted = True
-        self.go_away(CloseReason.LINK_LOST)
+        self.go_away()
 
     @override
     async def send(self, data: bytes) -> None:
-        if self.reason is not None:
-            raise ChannelClosedError(self.reason)
+        if self.gone:
+            raise ChannelClosedError()
         if self.send_blocks:
             self._changed.clear()
             await self._changed.wait()
-            if self.reason is not None:
-                raise ChannelClosedError(self.reason)
+            if self.gone:
+                raise ChannelClosedError()
         self.sent += data
 
     @override
     async def receive(self, max_bytes: int | None = None) -> bytes:
         while not self._incoming:
-            if self.reason is not None:
-                raise ChannelClosedError(self.reason)
+            if self.gone:
+                raise ChannelClosedError()
             self._changed.clear()
             await self._changed.wait()
         count = len(self._incoming) if max_bytes is None else max_bytes
@@ -92,11 +92,11 @@ class FakeChannel(BackendChannel):
         self._incoming += data
         self._changed.set()
 
-    def go_away(self, reason: CloseReason = CloseReason.PEER_CLOSED) -> None:
+    def go_away(self) -> None:
         """
         End the channel, as the backend would on noticing it had gone.
         """
-        self._mark_gone(reason)
+        self._mark_gone()
         self._changed.set()
 
 

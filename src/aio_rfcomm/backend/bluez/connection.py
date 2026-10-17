@@ -27,9 +27,6 @@ from aio_rfcomm.backend.stream import (
     open_stream,
 )
 from aio_rfcomm.discovery import RfcommDeviceInfo
-from aio_rfcomm.errors import (
-    CloseReason,
-)
 
 __all__ = ["BlueZChannel", "BlueZService"]
 
@@ -57,26 +54,22 @@ class BlueZChannel(StreamChannel):
         self._refresh = refresh
 
     @override
-    async def explain_end(self) -> CloseReason:
+    async def settle_end(self) -> None:
         """
         Make sure a radio going off is known before the end is put down to
-        the peer.
+        the connection.
 
         Measured on BlueZ 5.85: switching the radio off ends the channel about
         50 ms before the adapter is reported off, while its power state
         already reads as going off. So the adapter is read again here, and if
         Bluetooth is no longer usable that is reported first, and becomes why
         the channel ended.
-
-        Returns:
-            Why the channel went away, as far as the socket can tell.
         """
         try:
             await self._refresh()
         except Exception:
-            # The end still has to be explained. The reason is only less sure.
+            # The end is still settled, only without the latest reading.
             logger.debug("could not read whether Bluetooth is usable", exc_info=True)
-        return await super().explain_end()
 
 
 def _peer_from_path(device_path: str) -> RfcommDeviceInfo:

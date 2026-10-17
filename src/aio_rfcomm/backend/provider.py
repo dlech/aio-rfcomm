@@ -26,7 +26,7 @@ from typing_extensions import override
 
 from aio_rfcomm.availability import Availability, UnavailableReason
 from aio_rfcomm.discovery import RfcommDeviceInfo
-from aio_rfcomm.errors import CloseReason, UnsupportedOperationError
+from aio_rfcomm.errors import UnsupportedOperationError
 
 __all__ = [
     "FIRST_CHANNEL",
@@ -336,39 +336,34 @@ class BackendChannel(ABC):
 
     Every ending is raised: once the channel is over, ``receive`` -- after
     handing over whatever arrived before the end -- and ``send`` raise
-    ``ChannelClosedError``, with the same reason
-    every time.
+    ``ChannelClosedError`` every time.
 
     Subclasses must call ``super().__init__()``, and record the end with
-    ``_mark_gone`` once they know why.
+    ``_mark_gone`` once it is settled.
     """
 
     def __init__(self) -> None:
-        self._reason: CloseReason | None = None
+        self._gone = False
 
-    def _mark_gone(self, reason: CloseReason) -> None:
+    def _mark_gone(self) -> None:
         """
-        Record why the channel ended. Only the first call counts.
-
-        Args:
-            reason: Why the channel is gone.
+        Record that the channel's end is settled.
         """
-        if self._reason is None:
-            self._reason = reason
+        self._gone = True
 
     @property
-    def reason(self) -> CloseReason | None:
+    def gone(self) -> bool:
         """
-        Why the channel ended, once that is known.
+        Whether the channel's end is settled, and put down to the connection.
         """
-        return self._reason
+        return self._gone
 
     @property
     def ended(self) -> bool:
         """
-        Whether the channel is over, which may be known before why it is.
+        Whether the channel is over, which may be known before it is settled.
         """
-        return self._reason is not None
+        return self._gone
 
     @abstractmethod
     def abort(self) -> None:

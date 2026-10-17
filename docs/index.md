@@ -25,7 +25,7 @@ async def main() -> None:
             while True:
                 print((await channel.receive()).decode(), end="")
         except ChannelClosedError:
-            print("the other end hung up")
+            print("the connection ended")
 
 
 asyncio.run(main())

@@ -34,18 +34,10 @@ what each reason means and what the user can do about it.
 ## While connected
 
 [`ChannelClosedError`][aio_rfcomm.errors.ChannelClosedError] means the
-connection has ended. Its [`reason`][aio_rfcomm.errors.CloseReason] says how:
-
-```python
-except ChannelClosedError as error:
-    match error.reason:
-        case CloseReason.PEER_CLOSED:
-            print("the other end hung up")
-        case CloseReason.LINK_LOST:
-            print("lost the connection")
-        case _:
-            assert_never(error.reason)
-```
+connection has ended: the other device hung up, or the connection to it was
+lost. To find out whether the device is still there, open a channel again.
+[`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError] then means it
+is switched off or out of range.
 
 Once a connection has ended, and any bytes that arrived before the end have
 been received, every call to [`receive`][aio_rfcomm.RfcommChannel.receive]

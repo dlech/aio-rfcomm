@@ -17,7 +17,6 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     BusyResourceError,
     ChannelClosedError,
-    CloseReason,
     DelimiterNotFoundError,
 )
 from tests.fake import FakeChannel, FakeProvider
@@ -37,12 +36,11 @@ async def test_the_end_is_raised_rather_than_returned(
 ) -> None:
     channel, fake = opened
     fake.deliver(b"bye")
-    fake.go_away(CloseReason.PEER_CLOSED)
+    fake.go_away()
 
     assert await channel.receive() == b"bye"
-    with pytest.raises(ChannelClosedError) as caught:
+    with pytest.raises(ChannelClosedError):
         await channel.receive()
-    assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
 # --------------------------------------------------------------------------
@@ -86,7 +84,7 @@ async def test_an_end_part_way_leaves_what_arrived_for_receive(
 ) -> None:
     channel, fake = opened
     fake.deliver(b"abc")
-    fake.go_away(CloseReason.PEER_CLOSED)
+    fake.go_away()
 
     with pytest.raises(ChannelClosedError):
         await channel.receive_exactly(5)
@@ -126,7 +124,7 @@ async def test_an_end_before_the_delimiter_leaves_the_partial_line_for_receive(
 ) -> None:
     channel, fake = opened
     fake.deliver(b"no newline")
-    fake.go_away(CloseReason.PEER_CLOSED)
+    fake.go_away()
 
     with pytest.raises(ChannelClosedError):
         await channel.receive_until(b"\n", max_bytes=100)

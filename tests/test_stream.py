@@ -19,7 +19,7 @@ import pytest
 from typing_extensions import override
 
 from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
-from aio_rfcomm.errors import ChannelClosedError, CloseReason
+from aio_rfcomm.errors import ChannelClosedError
 
 # On Windows the socket pair is two TCP sockets over loopback, which take a
 # write after the far end has closed and swallow 4 MiB at once. Measured on
@@ -119,23 +119,20 @@ async def test_what_arrived_before_a_hang_up_comes_out_first() -> None:
         peer.close()
         async with asyncio.timeout(1):
             assert await channel.receive() == b"last words"
-            with pytest.raises(ChannelClosedError) as caught:
+            with pytest.raises(ChannelClosedError):
                 await channel.receive()
-        assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
-async def test_the_end_is_the_same_every_time_it_is_asked() -> None:
+async def test_the_end_is_raised_every_time_it_is_asked() -> None:
     async with _channel() as (channel, peer):
         peer.close()
         async with asyncio.timeout(1):
-            with pytest.raises(ChannelClosedError) as first:
+            with pytest.raises(ChannelClosedError):
                 await channel.receive()
-            with pytest.raises(ChannelClosedError) as second:
+            with pytest.raises(ChannelClosedError):
                 await channel.receive()
-            with pytest.raises(ChannelClosedError) as sending:
+            with pytest.raises(ChannelClosedError):
                 await channel.send(b"too late")
-
-        assert first.value.reason is second.value.reason is sending.value.reason
 
 
 @_TCP_PAIR
@@ -192,27 +189,25 @@ async def test_a_reset_does_not_take_what_had_already_arrived() -> None:
         await channel.receive()
 
 
-async def test_the_reason_is_asked_for_once() -> None:
+async def test_the_end_is_settled_once() -> None:
     """
-    A backend may have to wait to learn why a channel ended -- macOS waits for
-    its helper -- and a sender and a receiver noticing at once must not get
-    different answers.
+    A backend may have to wait before the end is settled -- macOS waits for
+    its helper -- and a sender and a receiver noticing at once must not settle
+    it twice.
     """
-    asked: list[CloseReason] = []
+    settled: list[None] = []
     answer = asyncio.Event()
 
-    class Explaining(StreamChannel):
+    class Settling(StreamChannel):
         @override
-        async def explain_end(self) -> CloseReason:
-            reason = CloseReason.PEER_CLOSED if asked else CloseReason.LINK_LOST
-            asked.append(reason)
+        async def settle_end(self) -> None:
+            settled.append(None)
             await answer.wait()
-            return reason
 
     transport = _Transport()
     protocol = StreamProtocol()
     protocol.connection_made(transport)
-    channel = Explaining(transport, protocol)
+    channel = Settling(transport, protocol)
     protocol.connection_lost(None)
 
     receiving = asyncio.ensure_future(channel.receive())
@@ -223,8 +218,7 @@ async def test_the_reason_is_asked_for_once() -> None:
     first, second = await asyncio.gather(receiving, sending, return_exceptions=True)
     assert isinstance(first, ChannelClosedError)
     assert isinstance(second, ChannelClosedError)
-    assert asked == [CloseReason.LINK_LOST]
-    assert first.reason is second.reason is CloseReason.LINK_LOST
+    assert len(settled) == 1
 
 
 async def test_a_canceled_receive_loses_nothing() -> None:
@@ -306,9 +300,8 @@ async def test_an_aborted_channel_still_hands_over_what_arrived() -> None:
     channel.abort()
 
     assert await channel.receive() == b"before the radio went"
-    with pytest.raises(ChannelClosedError) as caught:
+    with pytest.raises(ChannelClosedError):
         await channel.receive()
-    assert caught.value.reason is CloseReason.LINK_LOST
 
 
 async def test_an_abort_wakes_a_waiting_receive() -> None:

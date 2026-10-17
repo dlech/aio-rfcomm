@@ -10,7 +10,7 @@ async with (
 ):
     await channel.send(b"hello\n")
 
-    while True:  # until the device hangs up, raising ChannelClosedError
+    while True:  # until the connection ends, raising ChannelClosedError
         print((await channel.receive()).decode(), end="")
 ```
 

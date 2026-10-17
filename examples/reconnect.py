@@ -9,10 +9,9 @@ Run the other end with ``python examples/chat.py serve``, then::
     python examples/reconnect.py AA:BB:CC:DD:EE:FF
 
 Switch Bluetooth off and on, or restart the Bluetooth service: it says what
-it is waiting for, and connects again by itself once it can. A dropped link
-is retried at once. A server that hangs up, turns it away or is not there is
-not: knocking straight away would only be turned away again, so it asks
-first.
+it is waiting for, and connects again by itself once it can. When the
+connection ends, it asks before connecting again: a server that hung up or
+turned it away would only turn it away again.
 """
 
 from __future__ import annotations
@@ -32,7 +31,6 @@ from aio_rfcomm import Availability, UnavailableReason
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelClosedError,
-    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     RfcommError,
@@ -133,7 +131,7 @@ async def stay_connected(
     bluetooth: aio_rfcomm.Bluetooth, server: aio_rfcomm.RfcommDeviceInfo
 ) -> int:
     """
-    Connect, talk, and connect again whenever the connection is lost.
+    Connect, talk, and connect again after the connection ends.
 
     Args:
         bluetooth: The open Bluetooth object.
@@ -148,18 +146,11 @@ async def stay_connected(
             async with bluetooth.open_service(server, CHAT) as channel:
                 print(f"[chat] connected to {server.name or server.address}")
                 await talk(channel)
-        except ChannelClosedError as lost:
-            match lost.reason:
-                case CloseReason.LINK_LOST:
-                    print("[chat] lost the connection. Reconnecting")
-                case CloseReason.PEER_CLOSED:
-                    # Hung up on, or turned away while the server was busy.
-                    print("[chat] the server hung up")
+        except ChannelClosedError:
+            print("[chat] the connection ended")
 
-                    if not await wait_for_retry():
-                        return 0
-                case _:
-                    assert_never(lost.reason)
+            if not await wait_for_retry():
+                return 0
         except BluetoothUnavailableError:
             # Whether it went before the open or mid-conversation, the wait
             # at the top says why, for as long as it lasts.

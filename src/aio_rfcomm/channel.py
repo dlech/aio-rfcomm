@@ -233,7 +233,7 @@ class RfcommChannel:
         Bluetooth going away is recorded by [`_end`][_end] as it happens, which
         is before the channel hears its link drop -- measured on macOS 26.6.2, where
         the radio is reported off a millisecond earlier -- so by then this
-        keeps Bluetooth's reason rather than the connection's.
+        keeps Bluetooth's error rather than the connection's.
 
         Args:
             closed: What the backend reported.
@@ -255,8 +255,8 @@ class RfcommChannel:
         Args:
             error: What every later call raises.
         """
-        # An end the backend has already explained came first, and stays.
-        if self._ending is None and self._backend.reason is None:
+        # An end the backend has already settled came first, and stays.
+        if self._ending is None and not self._backend.gone:
             self._ending = error
         self._backend.abort()
 

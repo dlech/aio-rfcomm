@@ -49,7 +49,6 @@ from aio_rfcomm.backend.stream import StreamChannel, StreamProtocol, open_stream
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
-    CloseReason,
     ConnectionFailedError,
     RfcommError,
     UnsupportedOperationError,
@@ -81,26 +80,22 @@ class IOBluetoothChannel(StreamChannel):
         self._ending = ending
 
     @override
-    async def explain_end(self) -> CloseReason:
+    async def settle_end(self) -> None:
         """
-        Say why the channel ended, as the helper saw it.
+        Wait for the helper's report of the end.
 
-        macOS can tell a peer closing one channel from the whole link
-        dropping, by looking at whether the baseband connection is still up.
-        The helper sends that reason before it closes the socket, so by the
-        time the stream here reads empty the answer is already on its way and
-        this waits for it rather than guessing.
-
-        Returns:
-            Why the channel went away.
+        The helper reports the end on the same link as Bluetooth's state, and
+        before it closes the socket. So once the report is here, any state
+        change that came before it is here too, and a radio switched off on
+        this side is known before the end is put down to the connection.
         """
-        return _reason(await self._ending.wait())
+        await self._ending.wait()
 
     @override
     def abort(self) -> None:
-        # The helper says why a channel ended only when the device ended it.
-        # Ended from this side, nothing would ever answer explain_end.
-        self._ending.say(CloseReason.LINK_LOST.name)
+        # The helper reports an end only when the device ended the channel.
+        # Ended from this side, nothing would ever answer settle_end.
+        self._ending.say()
         super().abort()
 
 
@@ -673,20 +668,3 @@ def _wanted(service: UUID | Collection[UUID] | None) -> list[str]:
     if isinstance(service, UUID):
         return [str(service)]
     return [str(u) for u in service]
-
-
-def _reason(name: str) -> CloseReason:
-    """
-    Turn the helper's word for a close back into one of ours.
-
-    Args:
-        name: The reason's name, as the helper sent it.
-
-    Returns:
-        Why the channel went away, or a lost link if the name is not one we
-        know -- which can only mean the helper is a different version.
-    """
-    try:
-        return CloseReason[name]
-    except KeyError:
-        return CloseReason.LINK_LOST

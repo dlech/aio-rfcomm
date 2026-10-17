@@ -9,9 +9,9 @@ over D-Bus, macOS passes one back from its helper, Windows connects one -- but
 once there is one, reading and writing it is the same work everywhere, so it
 is written once here.
 
-What does differ is how the end of the stream is explained. The socket says
-the stream is over but not why, and a platform that can tell a peer hanging up
-from a link dropping says so by overriding ``StreamChannel.explain_end``.
+What does differ is what has to be known before the end is put down to the
+connection: whether Bluetooth itself went away. A platform that learns that
+late catches up by overriding ``StreamChannel.settle_end``.
 
 The channel keeps its own receive buffer rather than using asyncio's
 ``StreamReader``, which discards what it holds as soon as the transport
@@ -29,7 +29,7 @@ from typing import cast
 from typing_extensions import override
 
 from aio_rfcomm.backend.provider import BackendChannel
-from aio_rfcomm.errors import ChannelClosedError, CloseReason
+from aio_rfcomm.errors import ChannelClosedError
 
 __all__ = ["StreamChannel", "StreamProtocol", "hang_up", "open_stream"]
 
@@ -205,7 +205,7 @@ class StreamChannel(BackendChannel):
         super().__init__()
         self._transport = transport
         self._protocol = protocol
-        self._explaining = asyncio.Lock()
+        self._settling = asyncio.Lock()
 
     @property
     @override
@@ -214,9 +214,9 @@ class StreamChannel(BackendChannel):
 
     @override
     def abort(self) -> None:
-        # Whoever ended it has said why, and there is no use asking a platform
+        # Whoever ended it knows why, and there is no use asking a platform
         # that may itself be gone.
-        self._mark_gone(CloseReason.LINK_LOST)
+        self._mark_gone()
         self._transport.abort()
 
     @override
@@ -237,18 +237,13 @@ class StreamChannel(BackendChannel):
             raise await self._end_error()
         return self._protocol.take(max_bytes)
 
-    async def explain_end(self) -> CloseReason:
+    async def settle_end(self) -> None:
         """
-        Say why the stream ended.
+        Catch up on anything to know before the end is put down to the
+        connection. Called once, when the stream ends.
 
-        The socket itself cannot tell an orderly hang-up from a lost link, so
-        this assumes the kinder of the two. Backends that know better override
-        it.
-
-        Returns:
-            Why the channel went away.
+        Backends that learn late that Bluetooth went away override it.
         """
-        return CloseReason.PEER_CLOSED
 
     async def close(self) -> None:
         """
@@ -269,14 +264,14 @@ class StreamChannel(BackendChannel):
         """
         Build the error every call raises once the stream is over.
 
-        The backend is asked why only once, even by a sender and a receiver
-        that notice the end together, and every call reports that answer.
+        The end is settled only once, even when a sender and a receiver notice
+        it together.
 
         Returns:
             The error to raise.
         """
-        async with self._explaining:
-            if self.reason is None:
-                self._mark_gone(await self.explain_end())
-        assert self.reason is not None
-        return ChannelClosedError(self.reason)
+        async with self._settling:
+            if not self.gone:
+                await self.settle_end()
+                self._mark_gone()
+        return ChannelClosedError()

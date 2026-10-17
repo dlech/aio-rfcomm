@@ -13,7 +13,7 @@ async def talk(request: aio_rfcomm.RfcommConnectionRequest) -> None:
             while True:
                 print(f"{request.info.address}: {await channel.receive()!r}")
     except ChannelClosedError:
-        print(f"{request.info.address} hung up")
+        print(f"{request.info.address}: the connection ended")
 
 
 async with bluetooth.serve(CHAT, name="my thing") as service:

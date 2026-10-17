@@ -36,7 +36,6 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelClosedError,
     ChannelInUseError,
-    CloseReason,
     DeviceNotFoundError,
 )
 from aio_rfcomm.service import RfcommConnectionRequest, RfcommService
@@ -137,9 +136,8 @@ async def test_a_peer_that_hangs_up_ends_the_stream(
     async with _stack() as bluetooth, bluetooth.open_channel(DEVICE, 5) as channel:
         opened[-1].hang_up()
         async with asyncio.timeout(1):
-            with pytest.raises(ChannelClosedError) as caught:
+            with pytest.raises(ChannelClosedError):
                 await channel.receive()
-        assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
 async def test_what_arrives_as_the_peer_hangs_up_is_kept(
@@ -168,7 +166,7 @@ async def test_what_arrives_as_the_peer_hangs_up_is_kept(
         assert received.endswith(b"tail")
 
 
-async def test_a_lost_link_is_not_mistaken_for_a_hang_up(
+async def test_a_lost_link_ends_the_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_framework(monkeypatch)
@@ -177,9 +175,8 @@ async def test_a_lost_link_is_not_mistaken_for_a_hang_up(
         fake.device.connected = False
         fake.hang_up()
         async with asyncio.timeout(1):
-            with pytest.raises(ChannelClosedError) as caught:
+            with pytest.raises(ChannelClosedError):
                 await channel.receive()
-        assert caught.value.reason is CloseReason.LINK_LOST
 
 
 async def test_a_closed_channel_leaves_the_device_free(
@@ -444,10 +441,9 @@ async def test_a_peer_that_connects_is_talked_to(
             assert bytes(fake.written) == b"echo\n"
 
             fake.hang_up()
-            with pytest.raises(ChannelClosedError) as caught:
+            with pytest.raises(ChannelClosedError):
                 async with asyncio.timeout(1):
                     await channel.receive()
-            assert caught.value.reason is CloseReason.PEER_CLOSED
 
 
 async def test_a_declined_peer_is_hung_up_on(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -59,7 +59,6 @@ from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelInUseError,
-    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     RfcommError,
@@ -979,8 +978,7 @@ class Channel:
             channel: The ``IOBluetoothRFCOMMChannel``, which may not be open
                 yet.
             delegate: Its delegate, held here because the channel does not.
-            device: The device it runs over, for telling a hang-up apart from
-                a lost link.
+            device: The device it runs over.
         """
         self._channel = channel
         self._delegate = delegate
@@ -1055,19 +1053,11 @@ class Channel:
             raise
         await future
 
-    async def wait_until_ended(self) -> CloseReason:
+    async def wait_until_ended(self) -> None:
         """
-        Wait for the far end to close the channel.
-
-        Returns:
-            Why it closed. The baseband link tells the two cases apart: if it
-            is still up, the peer closed just this channel. If it is gone, the
-            whole link went away.
+        Wait for the far end to close the channel, or the link under it to go.
         """
         await self._delegate.ended.wait()
-        if self._device.isConnected():
-            return CloseReason.PEER_CLOSED
-        return CloseReason.LINK_LOST
 
     def release(self) -> None:
         """

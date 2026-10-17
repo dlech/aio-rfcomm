@@ -35,7 +35,6 @@ from aio_rfcomm.backend.iobluetooth import (
     IOBluetoothChannel,
     _availability,
     _not_allowed,
-    _reason,
     _wanted,
 )
 from aio_rfcomm.backend.iobluetooth.bundle import _identifier, _key
@@ -51,7 +50,6 @@ from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelClosedError,
-    CloseReason,
     ConnectionFailedError,
     DeviceNotFoundError,
     ServiceNotFoundError,
@@ -264,15 +262,16 @@ async def test_the_end_of_a_channel_reaches_that_channel() -> None:
     async with _helper() as (_helper_, there):
         helper = _helper_
         ending = helper.expect(3)
-        there.send({"event": "gone", "handle": 3, "reason": "PEER_CLOSED"})
+        there.send({"event": "gone", "handle": 3})
 
-        assert await ending.wait() == "PEER_CLOSED"
+        async with asyncio.timeout(1):
+            await ending.wait()
 
 
 async def test_another_channels_ending_is_not_mistaken_for_this_one() -> None:
     async with _helper() as (helper, there):
         ending = helper.expect(3)
-        there.send({"event": "gone", "handle": 4, "reason": "PEER_CLOSED"})
+        there.send({"event": "gone", "handle": 4})
         await asyncio.sleep(0)
 
         assert not ending.said()
@@ -280,14 +279,14 @@ async def test_another_channels_ending_is_not_mistaken_for_this_one() -> None:
 
 async def test_a_helper_that_dies_ends_every_channel() -> None:
     """
-    From out here a helper that stopped and a link that dropped look the same,
-    and either way a reader waiting on the channel has to be let go.
+    A reader waiting on a channel of a helper that stopped has to be let go.
     """
     async with _helper() as (helper, there):
         ending = helper.expect(3)
         there.close()
 
-        assert await ending.wait() == "LINK_LOST"
+        async with asyncio.timeout(1):
+            await ending.wait()
 
 
 DEVICE = RfcommDeviceInfo("00:11:22:33:44:55")
@@ -336,9 +335,9 @@ async def _channel(
 
 async def test_a_reader_giving_up_leaves_the_others_their_answer() -> None:
     """
-    The stream and the reason for its end come over different sockets, so a
-    reader can see the end first and wait for the reason. Canceling a task
-    that awaits a future cancels the future, so a reason shared that way was
+    The stream and the report of its end come over different sockets, so a
+    reader can see the end first and wait for the report. Canceling a task
+    that awaits a future cancels the future, so a report shared that way was
     lost to everyone else the moment that reader gave up.
     """
     async with (
@@ -348,15 +347,14 @@ async def test_a_reader_giving_up_leaves_the_others_their_answer() -> None:
         far.close()
         reading = asyncio.ensure_future(channel.receive())
         await asyncio.sleep(0.01)
-        assert not reading.done(), "the reader should be waiting for the reason"
+        assert not reading.done(), "the reader should wait for the helper's report"
         reading.cancel()
         await asyncio.gather(reading, return_exceptions=True)
 
-        there.send({"event": "gone", "handle": 7, "reason": "LINK_LOST"})
+        there.send({"event": "gone", "handle": 7})
         async with asyncio.timeout(1):
-            with pytest.raises(ChannelClosedError) as caught:
+            with pytest.raises(ChannelClosedError):
                 await channel.receive()
-        assert caught.value.reason is CloseReason.LINK_LOST
 
 
 async def test_giving_up_on_a_request_tells_the_helper_to_stop() -> None:
@@ -436,21 +434,13 @@ def test_an_error_that_takes_a_reason_does_not_break_the_rebuild() -> None:
 
 def test_something_that_is_not_an_error_at_all_is_not_raised() -> None:
     assert isinstance(
-        _rebuild("CloseReason", "not an exception"), ConnectionFailedError
+        _rebuild("Availability", "not an exception"), ConnectionFailedError
     )
 
 
 # --------------------------------------------------------------------------
 # Odds and ends
 # --------------------------------------------------------------------------
-
-
-def test_a_close_reason_survives_the_trip() -> None:
-    assert _reason("PEER_CLOSED") is CloseReason.PEER_CLOSED
-
-
-def test_a_reason_we_do_not_know_is_treated_as_a_lost_link() -> None:
-    assert _reason("SOMETHING_NEW") is CloseReason.LINK_LOST
 
 
 def test_no_filter_matches_everything() -> None:

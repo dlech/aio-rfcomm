@@ -18,7 +18,6 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     BusyResourceError,
     ChannelClosedError,
-    CloseReason,
     RfcommError,
     ScopeClosedError,
 )
@@ -128,8 +127,8 @@ def test_an_error_copies_as_itself() -> None:
     assert copied.reason is Availability.NOT_ALLOWED
     assert str(copied) == "allow it"
 
-    closed = copy.copy(ChannelClosedError(CloseReason.LINK_LOST))
-    assert closed.reason is CloseReason.LINK_LOST
+    closed = copy.copy(ChannelClosedError())
+    assert str(closed) == "the connection has ended"
 
 
 def test_the_platform_s_own_words_are_kept() -> None:

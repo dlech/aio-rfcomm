@@ -12,7 +12,6 @@ Errors caused by mistakes in your own code derive from ``RuntimeError``
 instead, so catching [`RfcommError`][RfcommError] never hides a bug.
 """
 
-import enum
 from typing import Self
 
 from typing_extensions import override
@@ -25,7 +24,6 @@ __all__ = [
     "BusyResourceError",
     "ChannelClosedError",
     "ChannelInUseError",
-    "CloseReason",
     "ConnectionFailedError",
     "DelimiterNotFoundError",
     "DeviceNotFoundError",
@@ -111,48 +109,23 @@ class ConnectionFailedError(RfcommError):
 # --------------------------------------------------------------------------
 
 
-class CloseReason(enum.Enum):
-    """
-    How a connection ended.
-    """
-
-    PEER_CLOSED = "the other device hung up"
-    """
-    The other device hung up.
-    """
-
-    LINK_LOST = "the connection was lost"
-    """
-    The connection to the device was lost. It may have moved out of range or
-    been turned off.
-    """
-
-
 class ChannelClosedError(RfcommError):
     """
-    The connection has ended. [`reason`][reason] says how.
+    The connection has ended: the other device hung up, or the connection to
+    it was lost.
 
     Once a connection has ended, and any bytes that arrived before the end
     have been received, every call to [`receive`][aio_rfcomm.RfcommChannel.receive]
-    and [`send`][aio_rfcomm.RfcommChannel.send] raises this, with the same
-    reason.
+    and [`send`][aio_rfcomm.RfcommChannel.send] raises this.
     """
 
-    def __init__(self, reason: CloseReason) -> None:
-        """
-        Args:
-            reason: Why the channel is gone.
-        """
-        super().__init__(reason.value)
-        self.reason = reason
-        """
-        How the connection ended.
-        """
+    def __init__(self) -> None:
+        super().__init__("the connection has ended")
 
     @override
-    def __reduce__(self) -> tuple[type[Self], tuple[CloseReason]]:
-        # Rebuilt from the reason, not from the message it was turned into.
-        return type(self), (self.reason,)
+    def __reduce__(self) -> tuple[type[Self], tuple[()]]:
+        # The message is not an argument, so it is not passed back.
+        return type(self), ()
 
 
 class DelimiterNotFoundError(RfcommError):

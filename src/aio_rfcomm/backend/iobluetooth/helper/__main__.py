@@ -37,7 +37,7 @@ from rubicon.objc.eventloop import RubiconEventLoop
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
 from aio_rfcomm.backend.iobluetooth.helper import native
 from aio_rfcomm.backend.iobluetooth.protocol import Link
-from aio_rfcomm.errors import BluetoothUnavailableError, CloseReason, RfcommError
+from aio_rfcomm.errors import BluetoothUnavailableError, RfcommError
 
 logger = logging.getLogger(__name__)
 
@@ -301,11 +301,10 @@ async def _hand_over(
 
     reader, writer = await asyncio.open_connection(sock=ours)
     try:
-        reason = await _carry(channel, reader, writer)
-        if reason is not None:
-            # Sent before the socket closes, so that the parent has the reason
+        if await _carry(channel, reader, writer):
+            # Sent before the socket closes, so that the parent has the report
             # in hand by the time it reads end of file and comes looking.
-            link.send({"event": "gone", "handle": handle, "reason": reason.name})
+            link.send({"event": "gone", "handle": handle})
     finally:
         writer.close()
         try:
@@ -382,7 +381,7 @@ async def _carry(
     channel: native.Channel,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-) -> CloseReason | None:
+) -> bool:
     """
     Move bytes between the socket and the channel until one of them ends.
 
@@ -392,27 +391,25 @@ async def _carry(
         writer: Writes what the device sent.
 
     Returns:
-        Why the channel ended, or ``None`` if it did not -- the caller closed
-        its end, and there is nobody left to tell.
+        Whether the channel ended. If not, the caller closed its end, and
+        there is nobody left to tell.
     """
-    over: asyncio.Future[CloseReason | None] = (
-        asyncio.get_running_loop().create_future()
-    )
+    over: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
-    def settle(reason: CloseReason | None) -> None:
+    def settle(ended: bool) -> None:
         if not over.done():
-            over.set_result(reason)
+            over.set_result(ended)
 
     async def to_device() -> None:
         try:
             while True:
                 data = await reader.read(_PIECE_BYTES)
                 if not data:
-                    settle(None)
+                    settle(False)
                     return
                 await channel.send(data)
         except (OSError, native.MachError):
-            settle(CloseReason.LINK_LOST)
+            settle(True)
 
     async def from_device() -> None:
         try:
@@ -420,10 +417,10 @@ async def _carry(
                 writer.write(await channel.arrived.get())
                 await writer.drain()
         except OSError:
-            settle(CloseReason.LINK_LOST)
+            settle(True)
 
     async def watch_channel() -> None:
-        reason = await channel.wait_until_ended()
+        await channel.wait_until_ended()
 
         # The last bytes can arrive with the end, while from_device still
         # waits to pass on what came before. They go out before the end does.
@@ -433,10 +430,9 @@ async def _carry(
 
             await writer.drain()
         except OSError:
-            settle(CloseReason.LINK_LOST)
-            return
+            pass
 
-        settle(reason)
+        settle(True)
 
     async with asyncio.TaskGroup() as group:
         tasks = [

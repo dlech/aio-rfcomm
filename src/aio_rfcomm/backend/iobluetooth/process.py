@@ -37,7 +37,6 @@ from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
-    CloseReason,
     ConnectionFailedError,
     RfcommError,
 )
@@ -82,7 +81,7 @@ class HelperFailedError(RfcommError):
 
 class Ending:
     """
-    Why a channel ended, once the helper has said.
+    Whether a channel has ended, once the helper has said.
 
     Each waiter waits on an event of its own rather than on a shared future:
     canceling a task that awaits a future cancels the future, which would
@@ -93,34 +92,24 @@ class Ending:
 
     def __init__(self) -> None:
         self._said = asyncio.Event()
-        self._reason = ""
 
-    def say(self, reason: str) -> None:
+    def say(self) -> None:
         """
-        Record why it ended. Only the first call counts.
-
-        Args:
-            reason: The reason's name, as the helper sent it.
+        Record that the channel ended.
         """
-        if not self._said.is_set():
-            self._reason = reason
-            self._said.set()
+        self._said.set()
 
     def said(self) -> bool:
         """
-        Whether the reason has arrived.
+        Whether the end has been reported.
         """
         return self._said.is_set()
 
-    async def wait(self) -> str:
+    async def wait(self) -> None:
         """
-        Wait for the reason.
-
-        Returns:
-            The reason's name, as the helper sent it.
+        Wait for the end to be reported.
         """
         await self._said.wait()
-        return self._reason
 
 
 class Request(NamedTuple):
@@ -237,7 +226,7 @@ class Helper:
             handle: The channel's handle, from the reply that opened it.
 
         Returns:
-            Where the reason arrives once the channel ends.
+            Where the report arrives once the channel ends.
         """
         ending = Ending()
         self._channels[handle] = ending
@@ -386,7 +375,7 @@ class Helper:
             case "gone":
                 ending = self._channels.get(message["handle"])
                 if ending is not None:
-                    ending.say(message["reason"])
+                    ending.say()
             case "finished":
                 finished = self._finished.get(message["handle"])
                 if finished is not None and not finished.done():
@@ -439,11 +428,9 @@ class Helper:
                 answer.set_exception(error)
         for ending in list(self._channels.values()):
             if not ending.said():
-                # The helper is not there to say why, and from out here a
-                # helper that stopped is indistinguishable from a link that
-                # dropped. Spelled the way the helper would have spelled it,
-                # so there is only one wire format to read.
-                ending.say(CloseReason.LINK_LOST.name)
+                # The helper is not there to report it, and its channels are
+                # over all the same.
+                ending.say()
         for finished in list(self._finished.values()):
             if not finished.done():
                 # A helper that has gone is holding nothing.

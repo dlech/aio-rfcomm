@@ -34,7 +34,6 @@ from aio_rfcomm import Availability, UnavailableReason
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ChannelClosedError,
-    CloseReason,
     DelimiterNotFoundError,
     RfcommError,
 )
@@ -194,22 +193,6 @@ async def converse(channel: aio_rfcomm.RfcommChannel, who: str) -> None:
             reading.cancel()
 
 
-def report(lost: ChannelClosedError) -> None:
-    """
-    Say how a conversation ended.
-
-    Args:
-        lost: How the channel ended.
-    """
-    match lost.reason:
-        case CloseReason.PEER_CLOSED:
-            print("the other end hung up")
-        case CloseReason.LINK_LOST:
-            print("lost the connection")
-        case _:
-            assert_never(lost.reason)
-
-
 # --------------------------------------------------------------------------
 # The two ends
 # --------------------------------------------------------------------------
@@ -228,8 +211,8 @@ async def answer(request: aio_rfcomm.RfcommConnectionRequest) -> None:
     try:
         async with request.accept() as channel:
             await converse(channel, request.info.name or request.info.address)
-    except ChannelClosedError as ended:
-        report(ended)
+    except ChannelClosedError:
+        print("the connection ended")
 
 
 async def serve(bluetooth: aio_rfcomm.Bluetooth, channel: int | None) -> int:
@@ -305,8 +288,8 @@ async def connect(
     try:
         async with connection as chan:
             await converse(chan, server.name or server.address)
-    except ChannelClosedError as ended:
-        report(ended)
+    except ChannelClosedError:
+        print("the connection ended")
     except BluetoothUnavailableError as gone:
         print(explain(gone.reason))
         return 1
