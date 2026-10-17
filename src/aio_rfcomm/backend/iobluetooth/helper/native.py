@@ -1829,6 +1829,9 @@ async def _connect(device: _Device, address: str) -> None:
         DeviceNotFoundError: The device did not answer.
         ConnectionFailedError: The link could not be brought up.
     """
+    # Never closed again. On macOS 26.6.2 closeConnection makes bluetoothd
+    # disconnect everything on the device, other programs' channels and audio
+    # included. The gentler cancelPeerConnection: leaves the link up.
     complete = _ConnectionComplete.alloc().init()
     _hold(complete)
     try:
