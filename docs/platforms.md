@@ -116,4 +116,4 @@ To refresh it, connect the device, and then try again:
 bluetoothctl connect 00:1A:7D:DA:71:0C
 ```
 
-**Next:** [API reference](reference/index.md), for every public name.
+**Next:** [Troubleshooting](troubleshooting.md), for when something goes wrong.
