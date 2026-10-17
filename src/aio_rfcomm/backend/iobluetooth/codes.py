@@ -14,6 +14,7 @@ import ctypes
 import enum
 
 __all__ = [
+    "ALREADY_CONNECTING",
     "CBError",
     "CBManagerAuthorization",
     "CBManagerState",
@@ -215,3 +216,17 @@ class OIStatus(enum.IntEnum):
     channel opened. Measured on macOS 26.6.2 against a BlueZ 5.85 server
     declining it.
     """
+
+
+ALREADY_CONNECTING = 1902
+"""
+bluetoothd's result when this program already has the channel open or opening.
+
+bluetoothd sends it itself, logging "Already connected to device", rather than
+from its stack: in the stack's status table the number stands for something
+unrelated (``OI_HEADSET_AG_SERVICE_NOT_STARTED``). CoreBluetooth describes it
+as "RFCOMM channel already connected". Read from bluetoothd and CoreBluetooth
+on macOS 26.6.2 (25G83). Measured there against BlueZ 5.85: it answered only
+an open asked for again while the first ask was still going, 134 times in an
+hour. In the two cases traced, the first ask then opened its channel.
+"""

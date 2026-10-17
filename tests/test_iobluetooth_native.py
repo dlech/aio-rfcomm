@@ -44,6 +44,7 @@ from aio_rfcomm.errors import (
 )
 from tests.fake_iobluetooth import (
     FakeAuthorization,
+    FakeChannel,
     FakeCoordinatorClass,
     FakeDevice,
     FakeDeviceClass,
@@ -54,6 +55,7 @@ from tests.fake_iobluetooth import (
     clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
     fake_framework_parts,
     is_observed,
+    opened,
     stored_record,
     until_observed,
     wrap_channel,
@@ -564,6 +566,68 @@ async def test_the_claim_is_let_go_of_when_the_open_fails(
     assert native._in_use == set()
 
 
+class LateLanding(FakeDevice):
+    """
+    A device where an open of channel 22, given up on, lands on the next open.
+
+    Measured on macOS 26.6.2 against BlueZ 5.85 under load, 22 times in an
+    hour: asked for 25, which nothing listens on, bluetoothd refused it with
+    913 and then connected an earlier ask for 22. The framework gave that to
+    the channel asked for 25, which said it had opened. The refusal came first
+    20 times, and the connection first twice.
+
+    Args:
+        refused_first: Whether the refusal comes before the connection.
+    """
+
+    def __init__(self, refused_first: bool) -> None:
+        super().__init__(ADDRESS, connected=True, answers=True)
+        self.refuses = {25}
+        self.refused_first = refused_first
+        self.stray: FakeChannel | None = None
+
+    @override
+    def openRFCOMMChannelAsync(
+        self, _out: object, /, *, withChannelID: int, delegate: object
+    ) -> int:
+        if self.stray is not None:
+            return super().openRFCOMMChannelAsync(
+                _out, withChannelID=withChannelID, delegate=delegate
+            )
+
+        channel = FakeChannel(self, withChannelID, delegate)
+        channel.connected_to = 22
+        self.stray = channel
+        self.channels.append(channel)
+        opened.append(channel)
+        refusal = (native.record_open_result, ADDRESS, withChannelID, 913)
+        loop = asyncio.get_running_loop()
+        if self.refused_first:
+            loop.call_soon(*refusal)
+            loop.call_soon(channel.complete_open)
+        else:
+            loop.call_soon(channel.complete_open)
+            loop.call_later(0.01, *refusal)
+        return 0
+
+
+@pytest.mark.parametrize("refused_first", [True, False])
+async def test_a_late_open_of_another_channel_is_closed_not_handed_out(
+    devices: None, monkeypatch: pytest.MonkeyPatch, refused_first: bool
+) -> None:
+    monkeypatch.setattr(native, "_OPEN_REPORT_SECONDS", 0.05)
+    monkeypatch.setattr(native, "_open_results", {})
+    device = LateLanding(refused_first)
+    FakeDeviceClass.made[ADDRESS] = device
+
+    with pytest.raises(ServiceNotFoundError, match="refused channel 25"):
+        async with native.open_channel(ADDRESS, channel=25):
+            pass
+
+    assert device.stray is not None
+    assert not device.stray.open
+
+
 # --------------------------------------------------------------------------
 # Asking again when an open is never reported
 # --------------------------------------------------------------------------
@@ -573,6 +637,10 @@ class HandedBack:
     """
     An ``IOBluetoothRFCOMMChannel`` that is only ever asked two things.
     """
+
+    # Says nothing about which channel it holds, so it is taken as the one
+    # asked for.
+    rfcommchannel = None
 
     def __init__(self, open_already: bool) -> None:
         self.open_already = open_already
@@ -714,10 +782,80 @@ async def test_a_channel_open_elsewhere_is_not_asked_for_again(quick: None) -> N
 async def test_any_other_answer_from_bluetoothd_is_not_asked_for_again(
     quick: None,
 ) -> None:
-    device = RefusingDevice(1902)
-    with pytest.raises(ConnectionFailedError, match="bluetoothd said 1902"):
+    # 454 came once on macOS 26.6.2, opening a Pybricks EV3 just switched on.
+    device = RefusingDevice(454)
+    with pytest.raises(ConnectionFailedError, match="bluetoothd said 454"):
         await native._open_reported(cast(_Device, device), 4, ADDRESS)
     assert device.attempts == 1
+
+
+class StillGoingDevice(FlakyDevice):
+    """
+    A device whose first open is slow, so asking again is answered with 1902.
+
+    Measured on macOS 26.6.2 against BlueZ 5.85 under load: an ask went
+    unanswered for 5 s, asking again was answered with 1902 at once, and the
+    first ask then opened its channel and was reported to the newest one.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(report_on=99)
+
+    @override
+    def openRFCOMMChannelAsync(
+        self, _out: object, /, *, withChannelID: int, delegate: object
+    ) -> int:
+        self.attempts += 1
+        loop = asyncio.get_running_loop()
+        if self.attempts == 2:
+            loop.call_soon(native.record_open_result, ADDRESS, withChannelID, 1902)
+            opened = delegate.opened  # pyright: ignore[reportAttributeAccessIssue]
+            loop.call_later(4 * native._OPEN_REPORT_SECONDS, opened.set_result, None)
+        return 0
+
+
+async def test_an_open_still_going_is_waited_for(quick: None) -> None:
+    """
+    Giving up on it would leave it to land later, on nobody or on the next
+    open of another channel.
+    """
+    device = StillGoingDevice()
+    await native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert device.attempts == 2
+
+
+class Leftover:
+    """
+    A channel nobody holds, which the framework hands back until it is closed.
+    """
+
+    rfcommchannel = None
+
+    def __init__(self) -> None:
+        self.open = True
+
+    def isOpen(self) -> bool:
+        return self.open
+
+    def closeChannel(self) -> int:
+        self.open = False
+        return 0
+
+
+async def test_a_channel_nobody_holds_is_closed(
+    quick: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    An open given up on can land with no channel waiting to be told, and stays
+    open: on macOS 26.6.2, for 22 s.
+    """
+    leftover = Leftover()
+    monkeypatch.setattr(native, "IOBluetoothRFCOMMChannel", lambda _handle: leftover)
+    device = FlakyDevice(report_on=1)
+    await native._open_reported(cast(_Device, device), 4, ADDRESS)
+    assert not leftover.open
+    # Asked for until halfway, then once more after closing it.
+    assert device.attempts == native._OPEN_ATTEMPTS // 2 + 2
 
 
 async def test_an_open_bluetoothd_says_succeeded_is_asked_for_again(
