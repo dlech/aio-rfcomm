@@ -9,6 +9,21 @@ authors = [
     { name = "David Lechner", email = "david@pybricks.com" }
 ]
 requires-python = ">=3.11"
+keywords = ["asyncio", "bluetooth", "bluetooth-classic", "rfcomm", "serial"]
+# No License classifier: PEP 639 replaces those with the license field above.
+classifiers = [
+    "Framework :: AsyncIO",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
 dependencies = [
     # 4.4 is where typing_extensions.override arrived; typing.override itself
     # needs Python 3.12, which is above this project's floor.
@@ -31,6 +46,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/dlech/aio-rfcomm"
+Documentation = "https://dlech.github.io/aio-rfcomm/"
 Repository = "https://github.com/dlech/aio-rfcomm"
 Issues = "https://github.com/dlech/aio-rfcomm/issues"
 

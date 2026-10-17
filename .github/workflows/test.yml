@@ -1,0 +1,55 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv run --locked ruff check
+      - run: uv run --locked ruff format --check
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        # Each OS type checks only the backends that resolve there. dbus-fast
+        # and winrt install only on their own OS, and the macOS backend needs
+        # POSIX APIs that Windows lacks. rubicon-objc has stubs in typings/,
+        # so Linux checks the macOS backend too.
+        include:
+          - os: ubuntu-latest
+            not-here: windows
+          - os: macos-latest
+            not-here: bluez|windows
+          - os: windows-latest
+            not-here: bluez|iobluetooth
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv run --locked pytest
+      - name: Type check
+        shell: bash
+        env:
+          NOT_HERE: ${{ matrix.not-here }}
+        run: >-
+          git ls-files '*.py' ':!:prototypes' ':!:typings'
+          | grep -vE "$NOT_HERE"
+          | xargs uv run --locked pyright
