@@ -10,6 +10,7 @@ all ordinary logic. They are also where the bugs have actually been, so they
 are worth pinning down here rather than leaving to a machine with Bluetooth.
 """
 
+import asyncio
 import errno
 import os
 import socket
@@ -372,6 +373,33 @@ async def test_channel_numbers_need_bluetooth_sockets(
     with pytest.raises(UnsupportedOperationError, match="libbluetooth"):
         async with _bluetooth().open_channel(RfcommDeviceInfo("00:11:22:33:44:55"), 1):
             pass
+
+
+async def test_connecting_to_a_channel_never_blocks_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The loop's sock_connect calls connect() itself, so a blocking socket
+    stalls everything else for as long as the device is paged, and a cancel
+    cannot land until it ends.
+    """
+    # Any socket the platform can make stands in for a Bluetooth one.
+    monkeypatch.setattr(socket, "AF_BLUETOOTH", socket.AF_INET, raising=False)
+    monkeypatch.setattr(socket, "BTPROTO_RFCOMM", 0, raising=False)
+    blocking: list[bool] = []
+
+    async def sock_connect(sock: socket.socket, address: object) -> None:
+        blocking.append(sock.getblocking())
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "sock_connect", sock_connect)
+
+    with pytest.raises(ServiceNotFoundError):
+        async with _bluetooth(address=None).open_channel(
+            RfcommDeviceInfo("00:11:22:33:44:55"), 1
+        ):
+            pass
+    assert blocking == [False]
 
 
 def test_a_refused_channel_means_nothing_is_listening() -> None:

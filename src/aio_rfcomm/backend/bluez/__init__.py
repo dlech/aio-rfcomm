@@ -413,6 +413,11 @@ class BlueZBluetooth(BackendBluetooth):
                 socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM
             )
             stack.callback(sock.close)
+            # sock_connect calls connect() itself, so a blocking socket would
+            # hold the loop while the device is paged: about 5 s for one that
+            # does not answer, measured on BlueZ 5.85, with nothing able to
+            # cancel it.
+            sock.setblocking(False)
 
             # Which adapter a socket goes out of is chosen by binding to that
             # adapter's own address. Left unbound the kernel picks for itself,
