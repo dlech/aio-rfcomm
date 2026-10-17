@@ -7,7 +7,6 @@ Channels and requests over the file descriptors BlueZ hands over.
 
 import asyncio
 import logging
-import os
 import socket
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
@@ -23,7 +22,7 @@ from aio_rfcomm.backend.provider import (
 from aio_rfcomm.backend.stream import (
     StreamChannel,
     StreamProtocol,
-    hang_up,
+    hang_up_descriptor,
     open_stream,
 )
 from aio_rfcomm.discovery import RfcommDeviceInfo
@@ -148,8 +147,7 @@ class _Request(BackendRequest):
     def close(self) -> None:
         fd, self._fd = self._fd, None
         if fd is not None:
-            with socket.socket(fileno=fd) as sock:
-                hang_up(sock)
+            hang_up_descriptor(fd)
 
 
 class BlueZService(BackendService):
@@ -186,6 +184,6 @@ class BlueZService(BackendService):
             peer = _peer_from_path(device_path)
         except ValueError:
             # The descriptor is ours until a request holds it.
-            os.close(fd)
+            hang_up_descriptor(fd)
             raise
         return _Request(peer, fd, self._refresh)
