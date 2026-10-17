@@ -49,6 +49,7 @@ from aio_rfcomm.backend.iobluetooth.codes import (
     CBManagerAuthorization,
     CBManagerState,
     IOReturn,
+    OIStatus,
 )
 from aio_rfcomm.backend.iobluetooth.helper import native
 
@@ -337,6 +338,8 @@ class FakeDevice:
         self.channels: list[FakeChannel] = []
         #: The records macOS stored for the device, from :func:`stored_record`.
         self.services: list[ObjCInstance] = []
+        #: Channels the device refuses.
+        self.refuses: set[int] = set()
 
     def isConnected(self) -> bool:
         return self.connected
@@ -362,7 +365,17 @@ class FakeDevice:
         channel = FakeChannel(self, withChannelID, delegate)
         self.channels.append(channel)
         opened.append(channel)
-        asyncio.get_running_loop().call_soon(channel.complete_open)
+        if withChannelID in self.refuses:
+            # Measured on macOS 26.6.2 against BlueZ 5.85: bluetoothd reports
+            # 913 and the delegate is never told.
+            asyncio.get_running_loop().call_soon(
+                native.record_open_result,
+                self.address,
+                withChannelID,
+                OIStatus.RFCOMM_REMOTE_REJECT,
+            )
+        else:
+            asyncio.get_running_loop().call_soon(channel.complete_open)
         return 0
 
 

@@ -1104,6 +1104,32 @@ async def test_a_service_named_only_as_a_profile_cannot_be_opened(
             pass
 
 
+async def test_a_refused_stored_channel_may_be_out_of_date(stored: FakeDevice) -> None:
+    """
+    Measured on macOS 26.6.2 against BlueZ 5.85: a service that moved channel
+    while the link was up is still stored on the old one, and the device
+    refuses that. Only a link brought up afresh reads the services again.
+    """
+    stored.refuses.add(1)
+    with pytest.raises(ServiceNotFoundError, match="may be out of date"):
+        async with native.open_channel(ADDRESS, service=PYBRICKS):
+            pass
+
+
+async def test_a_refusal_just_after_connecting_is_not_blamed_on_the_copy(
+    stored: FakeDevice,
+) -> None:
+    """
+    Connecting is what refreshes the copy, so it is current.
+    """
+    stored.connected = False
+    stored.refuses.add(1)
+    with pytest.raises(ServiceNotFoundError, match="refused channel 1") as raised:
+        async with native.open_channel(ADDRESS, service=PYBRICKS):
+            pass
+    assert "out of date" not in str(raised.value)
+
+
 # --------------------------------------------------------------------------
 # Serving
 # --------------------------------------------------------------------------
