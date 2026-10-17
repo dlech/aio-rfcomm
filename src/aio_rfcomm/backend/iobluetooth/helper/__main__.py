@@ -37,7 +37,11 @@ from rubicon.objc.eventloop import RubiconEventLoop
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
 from aio_rfcomm.backend.iobluetooth.helper import native
 from aio_rfcomm.backend.iobluetooth.protocol import Link
-from aio_rfcomm.errors import BluetoothUnavailableError, RfcommError
+from aio_rfcomm.errors import (
+    BluetoothUnavailableError,
+    DeviceNotFoundError,
+    RfcommError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +217,8 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
         reply = {"id": number, "error": type(error).__name__, "message": str(error)}
         if isinstance(error, BluetoothUnavailableError):
             reply["reason"] = error.reason.name
+        if isinstance(error, DeviceNotFoundError):
+            reply["address"] = error.address
         link.send(reply)
     except Exception as error:
         logger.exception("helper failed to answer %r", message.get("op"))

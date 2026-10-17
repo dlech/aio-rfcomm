@@ -391,7 +391,7 @@ async def test_a_device_that_does_not_answer_is_not_found(bluez: FakeBlueZ) -> N
     device.answers = False
 
     async with _open() as bluetooth:
-        with pytest.raises(DeviceNotFoundError):
+        with pytest.raises(DeviceNotFoundError, match="switched off or out of range"):
             async with bluetooth.open_service(_info(device), UUID(SERVICE)):
                 pass
 

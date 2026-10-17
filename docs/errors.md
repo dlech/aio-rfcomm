@@ -27,7 +27,7 @@ what each reason means and what the user can do about it.
 
 | Error | Means |
 | --- | --- |
-| [`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError] | The device did not answer. It may be turned off or out of range. |
+| [`DeviceNotFoundError`][aio_rfcomm.errors.DeviceNotFoundError] | The device did not answer. It may be switched off or out of range. Its [`address`][aio_rfcomm.errors.DeviceNotFoundError.address] says which device. |
 | [`ServiceNotFoundError`][aio_rfcomm.errors.ServiceNotFoundError] | The device does not offer that service, or refused that channel number. See also [Platforms](platforms.md). |
 | [`ConnectionFailedError`][aio_rfcomm.errors.ConnectionFailedError] | The channel could not be opened, or the service could not be published. |
 

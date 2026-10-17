@@ -517,7 +517,8 @@ def devices(manager: FakeManager, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_an_address_that_is_not_one_is_refused(devices: None) -> None:
-    with pytest.raises(DeviceNotFoundError):
+    # A bug rather than a missing device: the library checks addresses first.
+    with pytest.raises(ValueError, match="not a Bluetooth address"):
         async with native.open_channel(FakeDeviceClass.unknown, channel=4):
             pass
 

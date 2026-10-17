@@ -84,7 +84,7 @@ def test_an_address_may_be_written_either_way_round() -> None:
 
 
 def test_something_that_is_not_an_address_says_so() -> None:
-    with pytest.raises(DeviceNotFoundError, match="not a Bluetooth address"):
+    with pytest.raises(ValueError, match="not a Bluetooth address"):
         parse_address("the kitchen radio")
 
 
@@ -114,6 +114,7 @@ def test_several_services_are_all_accepted() -> None:
 def test_a_device_that_is_not_there_is_not_a_connection_failure() -> None:
     error = translate_bluetooth_error(BluetoothError.DEVICE_NOT_CONNECTED, "00:11")
     assert isinstance(error, DeviceNotFoundError)
+    assert "switched off or out of range" in str(error)
 
 
 def test_a_radio_that_is_gone_is_reported_as_the_adapter() -> None:
@@ -515,7 +516,7 @@ async def test_a_device_that_does_not_answer_the_query_is_not_found(
 ) -> None:
     freyr.on = False
 
-    with pytest.raises(DeviceNotFoundError):
+    with pytest.raises(DeviceNotFoundError, match="switched off or out of range"):
         async with windows.open_service(RfcommDeviceInfo(FREYR), SERVICE):
             pass
 

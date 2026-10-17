@@ -73,7 +73,7 @@ async def _device(device: RfcommDeviceInfo, address: str) -> BluetoothDevice:
         The device.
 
     Raises:
-        DeviceNotFoundError: The device could not be reached.
+        DeviceNotFoundError: The device did not answer.
     """
     if device.id is not None:
         found = await BluetoothDevice.from_id_async(device.id)
@@ -83,7 +83,7 @@ async def _device(device: RfcommDeviceInfo, address: str) -> BluetoothDevice:
         )
 
     if found is None:
-        raise DeviceNotFoundError(f"{address} could not be reached")
+        raise DeviceNotFoundError(address)
     return found
 
 
@@ -133,7 +133,7 @@ async def look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int:
         to say which it meant. See the note where that is decided.
 
     Raises:
-        DeviceNotFoundError: The device could not be reached.
+        DeviceNotFoundError: The device did not answer.
         ServiceNotFoundError: It does not offer that service.
         ConnectionFailedError: The query failed.
     """
@@ -164,7 +164,7 @@ async def look_up(device: RfcommDeviceInfo, address: str, service: UUID) -> int:
         not result.services
         and found.connection_status == BluetoothConnectionStatus.DISCONNECTED
     ):
-        raise DeviceNotFoundError(f"{address} did not answer")
+        raise DeviceNotFoundError(address)
 
     offered = [s for s in result.services if s.service_id.uuid == service]
     if not offered:
