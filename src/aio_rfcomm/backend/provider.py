@@ -236,7 +236,7 @@ class BackendBluetooth(ABC):
 
         Raises:
             BluetoothUnavailableError: Bluetooth turned out not to be usable.
-            DeviceNotFoundError: The device could not be reached.
+            DeviceNotFoundError: The device did not answer.
             ServiceNotFoundError: The device does not offer ``service``.
             ConnectionFailedError: The channel could not be opened.
             UnsupportedOperationError: The platform cannot open a channel
@@ -261,7 +261,7 @@ class BackendBluetooth(ABC):
 
         Raises:
             BluetoothUnavailableError: Bluetooth turned out not to be usable.
-            DeviceNotFoundError: The device could not be reached.
+            DeviceNotFoundError: The device did not answer.
             ServiceNotFoundError: The device refused the channel, usually
                 because nothing there is listening on it.
             ConnectionFailedError: The channel could not be opened.

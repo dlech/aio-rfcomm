@@ -38,6 +38,7 @@ from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     ConnectionFailedError,
+    DeviceNotFoundError,
     RfcommError,
 )
 
@@ -350,7 +351,10 @@ class Helper:
             if "error" in message:
                 answer.set_exception(
                     _rebuild(
-                        message["error"], message["message"], message.get("reason")
+                        message["error"],
+                        message["message"],
+                        message.get("reason"),
+                        message.get("address"),
                     )
                 )
             else:
@@ -556,7 +560,9 @@ def _died(pid: int) -> RfcommError:
     )
 
 
-def _rebuild(name: str, message: str, reason: str | None = None) -> RfcommError:
+def _rebuild(
+    name: str, message: str, reason: str | None = None, address: str | None = None
+) -> RfcommError:
     """
     Turn an error the helper reported back into an exception.
 
@@ -565,6 +571,7 @@ def _rebuild(name: str, message: str, reason: str | None = None) -> RfcommError:
         message: Its message.
         reason: The ``Availability`` member's name, for an
             error built from one.
+        address: The device's address, for an error built from one.
 
     Returns:
         The error, or a generic connection failure if the name is not one of
@@ -579,15 +586,20 @@ def _rebuild(name: str, message: str, reason: str | None = None) -> RfcommError:
             case unavailable:
                 return BluetoothUnavailableError(unavailable, message)
 
+    if name == DeviceNotFoundError.__name__:
+        if address is None:
+            return ConnectionFailedError(message)
+        return DeviceNotFoundError(address)
+
     kind = getattr(errors, name, None)
     if isinstance(kind, type) and issubclass(kind, RfcommError):
         try:
             return kind(message)
         except (TypeError, AttributeError):
-            # Some of our errors are built from a reason rather than from a
+            # Some of our errors are built from something other than a
             # message, and take a string either by refusing it outright or by
-            # accepting it and then failing to read it as a reason. The helper
-            # never names one of those, so this is only reached by a helper
+            # accepting it and then failing to read it. The helper names only
+            # the ones handled above, so this is only reached by a helper
             # that does not match this library -- where losing the exact type
             # matters far less than getting the message to the caller.
             return ConnectionFailedError(message)

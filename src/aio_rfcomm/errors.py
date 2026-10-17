@@ -86,8 +86,28 @@ class BluetoothUnavailableError(RfcommError):
 
 class DeviceNotFoundError(RfcommError):
     """
-    The device did not answer. It may be turned off or out of range.
+    The device did not answer. It may be switched off or out of range.
     """
+
+    def __init__(self, address: str) -> None:
+        """
+        Args:
+            address: The device that did not answer.
+        """
+        # One wording for every platform and every way of opening, so that a
+        # program's users read the same thing wherever it runs.
+        super().__init__(
+            f"{address} did not answer. It may be switched off or out of range"
+        )
+        self.address: str = address
+        """
+        The device that did not answer, as it was asked for.
+        """
+
+    @override
+    def __reduce__(self) -> tuple[type[Self], tuple[str]]:
+        # Rebuilt from the address, which is the only argument.
+        return type(self), (self.address,)
 
 
 class ServiceNotFoundError(RfcommError):

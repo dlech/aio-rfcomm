@@ -18,6 +18,7 @@ from aio_rfcomm.errors import (
     BluetoothUnavailableError,
     BusyResourceError,
     ChannelClosedError,
+    DeviceNotFoundError,
     RfcommError,
     ScopeClosedError,
 )
@@ -129,6 +130,16 @@ def test_an_error_copies_as_itself() -> None:
 
     closed = copy.copy(ChannelClosedError())
     assert str(closed) == "the connection has ended"
+
+    missing = copy.copy(DeviceNotFoundError("00:11"))
+    assert missing.address == "00:11"
+    assert str(missing) == str(DeviceNotFoundError("00:11"))
+
+
+def test_a_device_that_did_not_answer_says_so_the_same_way_everywhere() -> None:
+    error = DeviceNotFoundError("00:11")
+    assert error.address == "00:11"
+    assert str(error) == "00:11 did not answer. It may be switched off or out of range"
 
 
 def test_the_platform_s_own_words_are_kept() -> None:

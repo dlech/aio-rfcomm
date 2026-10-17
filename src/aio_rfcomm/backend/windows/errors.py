@@ -40,7 +40,7 @@ def translate_bluetooth_error(error: BluetoothError, address: str) -> RfcommErro
         The error to raise instead.
     """
     if error == BluetoothError.DEVICE_NOT_CONNECTED:
-        return DeviceNotFoundError(f"{address} did not answer")
+        return DeviceNotFoundError(address)
     if error == BluetoothError.RADIO_NOT_AVAILABLE:
         return BluetoothUnavailableError(
             Availability.SWITCHED_OFF, "the Bluetooth radio is not available"
@@ -91,9 +91,7 @@ def translate_failure(error: OSError, address: str, channel: int) -> RfcommError
     # Windows 10.0.26200.9711, once against BlueZ 5.85 on a link that had to be
     # set up. So only a timeout on every attempt means nothing answered.
     if getattr(error, "winerror", None) == _WSAETIMEDOUT:
-        return DeviceNotFoundError(
-            f"{address} did not answer. It may be switched off or out of range"
-        )
+        return DeviceNotFoundError(address)
 
     return ConnectionFailedError(
         f"could not reach {address} on channel {channel}: {error}"

@@ -107,6 +107,7 @@ def test_page_timeout_means_the_device_did_not_answer() -> None:
         SERVICE,
     )
     assert isinstance(error, DeviceNotFoundError)
+    assert "switched off or out of range" in str(error)
 
 
 def test_anything_else_is_a_connection_failure() -> None:

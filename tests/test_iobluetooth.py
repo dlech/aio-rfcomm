@@ -381,7 +381,40 @@ async def test_giving_up_on_a_request_tells_the_helper_to_stop() -> None:
 
 
 def test_a_known_error_comes_back_as_itself() -> None:
-    assert isinstance(_rebuild("DeviceNotFoundError", "gone"), DeviceNotFoundError)
+    assert isinstance(_rebuild("ServiceNotFoundError", "gone"), ServiceNotFoundError)
+
+
+def test_a_device_that_did_not_answer_comes_back_with_its_address() -> None:
+    rebuilt = _rebuild("DeviceNotFoundError", "ignored", address="00:11")
+    assert isinstance(rebuilt, DeviceNotFoundError)
+    assert rebuilt.address == "00:11"
+    assert str(rebuilt) == DeviceNotFoundError("00:11").args[0]
+
+
+def test_a_device_error_without_an_address_still_says_what_happened() -> None:
+    # Only a helper that does not match this library leaves it out.
+    rebuilt = _rebuild("DeviceNotFoundError", "00:11 is not there")
+    assert isinstance(rebuilt, ConnectionFailedError)
+    assert str(rebuilt) == "00:11 is not there"
+
+
+async def test_a_device_that_did_not_answer_crosses_the_socket() -> None:
+    async with _helper() as (helper, there):
+        asking = asyncio.create_task(helper.ask("open", address="00:11"))
+        request = await _next(there)
+        there.send(
+            {
+                "id": request["id"],
+                "error": "DeviceNotFoundError",
+                "message": "00:11 did not answer",
+                "address": "00:11",
+            }
+        )
+
+        with pytest.raises(DeviceNotFoundError) as caught:
+            await asking
+
+    assert caught.value.address == "00:11"
 
 
 @pytest.mark.parametrize(

@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `reason` says why.
 - `ChannelClosedError` is raised once a connection has ended, because the other
   device hung up or the connection to it was lost.
+- `DeviceNotFoundError` is raised when a device does not answer. Its `address`
+  says which, and its message is the same on every platform.
 - `aio_rfcomm.macos.prompt_under_name()` gives a script a name for the macOS
   Bluetooth permission prompt.
 - A PyInstaller hook, so a frozen program can start the macOS helper.

@@ -7,10 +7,6 @@ Bluetooth addresses, between WinRT's integers and our text.
 
 from __future__ import annotations
 
-from aio_rfcomm.errors import (
-    DeviceNotFoundError,
-)
-
 __all__ = ["format_address", "parse_address"]
 
 
@@ -38,9 +34,9 @@ def parse_address(address: str) -> int:
         The address as a 48-bit integer.
 
     Raises:
-        DeviceNotFoundError: It is not a Bluetooth address.
+        ValueError: It is not a Bluetooth address.
     """
     try:
         return int(address.replace(":", "").replace("-", ""), 16)
     except ValueError as error:
-        raise DeviceNotFoundError(f"{address} is not a Bluetooth address") from error
+        raise ValueError(f"{address!r} is not a Bluetooth address") from error

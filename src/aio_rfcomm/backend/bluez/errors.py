@@ -67,7 +67,7 @@ def translate_connect(error: Exception, address: str, uuid: str) -> RfcommError:
     # an errno turned into a fixed string (src/error.c), never as the errno's
     # own text. A device that does not answer is EHOSTDOWN.
     if text == "br-connection-page-timeout":
-        return DeviceNotFoundError(f"{address} did not answer")
+        return DeviceNotFoundError(address)
 
     return ConnectionFailedError(f"could not open a channel to {address}: {text}")
 
@@ -95,9 +95,7 @@ def translate_socket_connect(error: OSError, address: str, channel: int) -> Rfco
         case errno.EHOSTDOWN:
             # Measured (BlueZ 5.85): a device that is not there, after the page
             # timeout.
-            return DeviceNotFoundError(
-                f"{address} did not answer. It may be switched off or out of range"
-            )
+            return DeviceNotFoundError(address)
         case _:
             return ConnectionFailedError(
                 f"could not reach {address} on channel {channel}: {error}"

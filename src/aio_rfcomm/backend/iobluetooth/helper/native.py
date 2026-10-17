@@ -1197,6 +1197,9 @@ async def open_channel(
         ServiceNotFoundError: The device does not offer that service.
         ConnectionFailedError: The channel could not be opened.
         UnsupportedOperationError: The device already has a channel open.
+        ValueError: ``address`` is not a Bluetooth address. The library
+            checks addresses before they reach the helper, so this is only
+            ever a bug.
     """
     if (service is None) == (channel is None):
         raise TypeError("open_channel takes exactly one of service and channel")
@@ -1208,7 +1211,7 @@ async def open_channel(
 
     device = IOBluetoothDevice.deviceWithAddressString(address)
     if not device:
-        raise DeviceNotFoundError(f"{address} is not a Bluetooth address")
+        raise ValueError(f"{address!r} is not a Bluetooth address")
     logger.debug("%s: connected=%s", address, device.isConnected())
 
     # One caller at a time per device, refused rather than queued, because
@@ -1886,9 +1889,7 @@ def _translate(error: MachError, address: str) -> RfcommError:
         The error to raise instead.
     """
     if error.code == IOReturn.TIMEOUT:
-        return DeviceNotFoundError(
-            f"{address} did not answer. It may be switched off or out of range"
-        )
+        return DeviceNotFoundError(address)
     return ConnectionFailedError(f"could not reach {address}: {error}")
 
 
