@@ -46,6 +46,9 @@ and for a pair of headphones.
 ### After a refusal, the next open waits
 
 When a device refuses a channel, the next open of a channel to that device
-takes about a minute. Seen on Windows 10.0.26200.9457.
+can take about a minute. It happened each time the refused open had to
+connect to the device first, and not when Windows was already connected to
+it. Seen on Windows 10.0.26200.9457 with a Mac, and on 10.0.26200.9711 with a
+Linux computer.
 
 **Next:** [API reference](reference/index.md), for every public name.
