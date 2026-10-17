@@ -37,6 +37,26 @@ If the user says no, or a script did not give a name, the availability is
 `NOT_ALLOWED`. After the user allows it in the system settings, start the
 program again.
 
+### Bundled applications
+
+On macOS the library uses Bluetooth from a helper process. A bundled
+application has to include the helper's code.
+
+PyInstaller needs nothing extra. The package tells PyInstaller what to include.
+
+py2app needs the package in its `packages` option:
+
+```python
+setup(
+    app=["main.py"],
+    options={"py2app": {"packages": ["aio_rfcomm"]}},
+)
+```
+
+Without it, the helper is left out, and `open_bluetooth` fails.
+
+Both were checked on macOS 26.6.2 with PyInstaller 6.22.3 and py2app 0.28.10.
+
 ### One channel per device at a time
 
 macOS cannot keep two channels open to the same device. It may close the
