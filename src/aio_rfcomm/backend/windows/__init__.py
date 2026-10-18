@@ -278,7 +278,7 @@ class WindowsBluetooth(BackendBluetooth):
             channel = await look_up(device, address, service)
 
         async with AsyncExitStack() as stack:
-            sock = await open_socket(address, channel, self.address, self._abandoned)
+            sock = await open_socket(address, channel, self._abandoned)
             stack.callback(sock.close)
 
             # An ordinary asyncio stream over a Bluetooth socket, which reads

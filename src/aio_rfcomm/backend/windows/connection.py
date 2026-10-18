@@ -227,7 +227,7 @@ async def _reach(
 
 
 async def open_socket(
-    address: str, channel: int, adapter: str | None, abandoned: AbandonedConnects
+    address: str, channel: int, abandoned: AbandonedConnects
 ) -> socket.socket:
     """
     Connect a Bluetooth socket, retrying while it looks like flakiness.
@@ -235,7 +235,6 @@ async def open_socket(
     Args:
         address: The device's Bluetooth address.
         channel: The RFCOMM channel number.
-        adapter: The adapter's address, if one should be insisted on.
         abandoned: Connects given up on, to wait for and to add to.
 
     Returns:
