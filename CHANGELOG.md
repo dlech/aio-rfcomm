@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - macOS: `open_bluetooth` never returned on a Mac whose Bluetooth never comes
   up, such as GitHub's macOS runners with their virtual controller. The
   availability is now `UNSUPPORTED`.
+- macOS: the permission dialog and Privacy & Security show the name passed to
+  `aio_rfcomm.macos.prompt_under_name()` instead of "AioRfcommHelper".
 
 ## [1.0.0] - 2026-10-17
 
