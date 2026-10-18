@@ -52,6 +52,7 @@ from aio_rfcomm.backend.iobluetooth.codes import (
     OIStatus,
 )
 from aio_rfcomm.backend.iobluetooth.helper import native
+from aio_rfcomm.backend.iobluetooth.helper.native import bindings, connecting
 
 
 class FakeManager(NSObject):
@@ -710,9 +711,9 @@ class Framework:
         Stand in for ``ObjCClass``, for the private classes looked up by name.
         """
         match name:
-            case native._COORDINATOR:
+            case bindings.COORDINATOR:
                 return FakeCoordinatorClass(self.manager)
-            case native._DEVICE_MANAGER:
+            case bindings.DEVICE_MANAGER:
                 return self.devices
             case _:
                 raise NameError(f"ObjC Class {name} couldn't be found.")
@@ -765,14 +766,40 @@ def fake_framework_parts(
     fake = FakeManager.alloc().init()
     fake.state = int(state)
     framework = Framework(fake)
-    monkeypatch.setattr(native, "ObjCClass", framework.find_class)
-    monkeypatch.setattr(native, "CBManager", FakeAuthorization(authorization))
-    monkeypatch.setattr(native, "IOBluetoothDevice", FakeDeviceClass)
-    monkeypatch.setattr(native, "IOBluetoothRFCOMMChannel", framework.channels)
-    monkeypatch.setattr(native, "IOBluetoothSDPServiceRecord", framework.records)
+    monkeypatch.setattr(bindings, "ObjCClass", framework.find_class)
+    monkeypatch.setattr(bindings, "CBManager", FakeAuthorization(authorization))
+    monkeypatch.setattr(bindings, "IOBluetoothDevice", FakeDeviceClass)
+    monkeypatch.setattr(bindings, "IOBluetoothRFCOMMChannel", framework.channels)
+    monkeypatch.setattr(bindings, "IOBluetoothSDPServiceRecord", framework.records)
     monkeypatch.setattr(FakeDeviceClass, "answers", answers)
     monkeypatch.setattr(FakeDeviceClass, "connected", connected)
     return framework
+
+
+# A device address in the form CBClassicPeer writes it, measured on macOS 26.6.2.
+ADDRESS = "00:1A:7D:DA:71:0C"
+
+
+def fake_manager(monkeypatch: pytest.MonkeyPatch) -> FakeManager:
+    """
+    Put a fake manager where the real one is reached.
+
+    Only the Objective-C class lookup is replaced, so everything from
+    _classic_manager down is the code under test.
+
+    Args:
+        monkeypatch: Undoes the replacement after the test.
+
+    Returns:
+        The fake, starting out in the unknown state and authorized.
+    """
+    fake = FakeManager.alloc().init()
+    found = FakeCoordinatorClass(fake)
+    monkeypatch.setattr(bindings, "ObjCClass", lambda _name: found)
+    monkeypatch.setattr(
+        bindings, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+    )
+    return fake
 
 
 @pytest.fixture(autouse=True)
@@ -784,12 +811,12 @@ def clean_state() -> Generator[None, None, None]:
     reloaded to get this back. Clearing what it holds is the nearest thing to
     the fresh process each test is written as though it had.
     """
-    native._in_use.clear()
-    native._closed_at.clear()
+    connecting._in_use.clear()
+    connecting._closed_at.clear()
     FakeDeviceClass.made.clear()
     opened.clear()
     yield
-    native._in_use.clear()
-    native._closed_at.clear()
+    connecting._in_use.clear()
+    connecting._closed_at.clear()
     FakeDeviceClass.made.clear()
     opened.clear()

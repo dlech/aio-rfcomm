@@ -16,12 +16,16 @@ by name and refuses a second one.
 """
 
 from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 import pytest
 
 from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
 from aio_rfcomm.channel import RfcommChannel
 from tests.fake import DEVICE, FakeChannel, FakeProvider
+
+if TYPE_CHECKING:
+    from tests.fake_iobluetooth import FakeManager
 
 
 @pytest.fixture
@@ -50,3 +54,14 @@ async def opened(
     """
     async with bluetooth.open_channel(DEVICE, 1) as channel:
         yield channel, provider.backend.channels[-1]
+
+
+@pytest.fixture
+def manager(monkeypatch: pytest.MonkeyPatch) -> "FakeManager":
+    """
+    A fake CoreBluetooth manager, for the macOS layer's tests.
+    """
+    # Imported here, because the fakes need rubicon, which only macOS has.
+    from tests.fake_iobluetooth import fake_manager
+
+    return fake_manager(monkeypatch)

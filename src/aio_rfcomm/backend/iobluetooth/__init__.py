@@ -311,9 +311,10 @@ class IOBluetoothBluetooth(BackendBluetooth):
         """
         self._serve_in = serve_in
         # Every channel this program has served on, kept for good, since its
-        # record outlives the service (see helper.native._choose_channel). A
-        # helper reads the others' records for itself, but not one being
-        # published at the same moment, nor any if that private path has gone.
+        # record outlives the service (see
+        # helper.native.serving._choose_channel). A helper reads the others'
+        # records for itself, but not one being published at the same moment,
+        # nor any if that private path has gone.
         self._served_on: set[int] = set()
         self._choosing = asyncio.Lock()
 
