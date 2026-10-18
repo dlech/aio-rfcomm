@@ -22,9 +22,15 @@ import asyncio
 import errno
 import logging
 import socket
+import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+# Type checking for another platform skips the rest of each module of this
+# backend, which all start this way. It does nothing at run time.
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from dbus_fast import Message, Variant
 from dbus_fast.aio import MessageBus

@@ -15,6 +15,13 @@ same code serves an in-process caller that already owns a CFRunLoop main
 thread.
 """
 
+import sys
+from typing import TYPE_CHECKING
+
+# Type checking off macOS skips the rest of each module of this package,
+# which all start this way. It does nothing at run time.
+assert not TYPE_CHECKING or sys.platform == "darwin"
+
 from aio_rfcomm.backend.iobluetooth.helper.native.bindings import MachError
 from aio_rfcomm.backend.iobluetooth.helper.native.connecting import (
     Channel,

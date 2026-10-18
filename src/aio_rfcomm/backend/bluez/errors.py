@@ -6,6 +6,10 @@ Turning what BlueZ and the kernel report into our errors.
 """
 
 import errno
+import sys
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from aio_rfcomm.errors import (
     ConnectionFailedError,

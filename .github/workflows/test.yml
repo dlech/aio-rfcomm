@@ -28,17 +28,6 @@ jobs:
         # 3.15 is still a release candidate, which uv picks when no final
         # release matches.
         python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
-        # Each OS type checks only the backends that resolve there. dbus-fast
-        # and winrt install only on their own OS, and the macOS backend needs
-        # POSIX APIs that Windows lacks. rubicon-objc has stubs in typings/,
-        # so Linux checks the macOS backend too.
-        include:
-          - os: ubuntu-latest
-            not-here: windows
-          - os: macos-latest
-            not-here: bluez|windows
-          - os: windows-latest
-            not-here: bluez|iobluetooth
         # winrt has no cp315 wheels yet, so it would be built from source.
         exclude:
           - os: windows-latest
@@ -51,11 +40,6 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python }}
       - run: uv run --locked pytest
-      - name: Type check
-        shell: bash
-        env:
-          NOT_HERE: ${{ matrix.not-here }}
-        run: >-
-          git ls-files '*.py' ':!:prototypes' ':!:typings'
-          | grep -vE "$NOT_HERE"
-          | xargs uv run --locked pyright
+      # Every file on every OS. A backend's modules start with a platform
+      # assert that type checking for another OS takes as unreachable.
+      - run: uv run --locked pyright

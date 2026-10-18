@@ -17,11 +17,14 @@ it is the real thing too.
 
 import asyncio
 import ctypes
+import sys
 import threading
 from collections.abc import Generator
 from ctypes import c_int, c_void_p
-from typing import Any, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
 from rubicon.objc import (

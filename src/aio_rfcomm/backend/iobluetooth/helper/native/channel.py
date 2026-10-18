@@ -16,7 +16,10 @@ A delegate is held weakly, so the channel object holds its own.
 import asyncio
 import ctypes
 import logging
-from typing import cast
+import sys
+from typing import TYPE_CHECKING, cast
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc import NSObject, ObjCInstance, objc_method
 from rubicon.objc.runtime import autoreleasepool

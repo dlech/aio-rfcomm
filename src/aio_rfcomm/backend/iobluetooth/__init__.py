@@ -21,9 +21,16 @@ import asyncio
 import logging
 import os
 import socket
+import sys
 from collections.abc import AsyncGenerator, Callable, Collection
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+# Type checking for Windows skips the rest of each module of this backend
+# that starts this way. The helper's native layer is checked on macOS only.
+# It does nothing at run time.
+assert not TYPE_CHECKING or sys.platform != "win32"
 
 from typing_extensions import override
 

@@ -7,9 +7,12 @@ every part of the backend shares.
 """
 
 import logging
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from dbus_fast import BusType, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus

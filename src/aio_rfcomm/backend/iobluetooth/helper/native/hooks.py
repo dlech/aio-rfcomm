@@ -11,7 +11,10 @@ import logging
 import os
 import socket
 import stat
-from typing import NamedTuple, cast
+import sys
+from typing import TYPE_CHECKING, NamedTuple, cast
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc import (
     ObjCInstance,

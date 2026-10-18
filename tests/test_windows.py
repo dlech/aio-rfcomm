@@ -11,6 +11,11 @@ errors turned into ours, and last the backend driven whole through the stand-ins
 in tests/fake_windows.py.
 """
 
+import sys
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "win32"
+
 import pytest
 
 pytest.importorskip(

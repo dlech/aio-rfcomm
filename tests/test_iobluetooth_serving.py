@@ -8,7 +8,10 @@ framework stood in for.
 
 import asyncio
 import sys
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
 

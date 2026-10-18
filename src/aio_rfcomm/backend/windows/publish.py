@@ -24,7 +24,11 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as w
 import socket
+import sys
 import uuid
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "win32"
 
 __all__ = ["delete", "register"]
 

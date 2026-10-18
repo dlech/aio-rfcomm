@@ -40,6 +40,9 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform != "win32"
 
 __all__ = ["build_helper"]
 

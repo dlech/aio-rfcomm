@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import TYPE_CHECKING, NamedTuple
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from dbus_fast.aio import MessageBus
 from dbus_fast.errors import DBusError

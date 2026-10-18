@@ -21,8 +21,11 @@ import json
 import os
 import socket
 import struct
+import sys
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+assert not TYPE_CHECKING or sys.platform != "win32"
 
 __all__ = ["MAX_MESSAGE", "Link"]
 

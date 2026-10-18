@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import sys
 from collections.abc import AsyncGenerator, Callable, Collection
 from contextlib import (
     AbstractAsyncContextManager,
@@ -32,7 +33,12 @@ from contextlib import (
     ExitStack,
     asynccontextmanager,
 )
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+# Type checking for another platform skips the rest of each module of this
+# backend, which all start this way. It does nothing at run time.
+assert not TYPE_CHECKING or sys.platform == "win32"
 
 from typing_extensions import override
 from winrt.windows.devices.bluetooth import (

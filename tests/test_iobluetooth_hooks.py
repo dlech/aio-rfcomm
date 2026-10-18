@@ -12,7 +12,9 @@ import socket
 import sys
 import threading
 from ctypes import c_int
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
 

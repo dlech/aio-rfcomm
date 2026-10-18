@@ -15,6 +15,7 @@ import asyncio
 import errno
 import logging
 import socket
+import sys
 import threading
 from collections.abc import AsyncGenerator
 from contextlib import (
@@ -22,7 +23,9 @@ from contextlib import (
     AsyncExitStack,
     asynccontextmanager,
 )
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+assert not TYPE_CHECKING or sys.platform == "win32"
 
 from typing_extensions import override
 

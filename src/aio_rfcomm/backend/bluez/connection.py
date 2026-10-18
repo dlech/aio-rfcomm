@@ -8,8 +8,12 @@ Channels and requests over the file descriptors BlueZ hands over.
 import asyncio
 import logging
 import socket
+import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from typing_extensions import override
 

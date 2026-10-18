@@ -14,10 +14,13 @@ Publishing a service, and hearing the channels peers open to it.
 import asyncio
 import ctypes
 import logging
+import sys
 from collections.abc import AsyncGenerator, Collection, Iterable
 from contextlib import asynccontextmanager
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc import (
     SEL,

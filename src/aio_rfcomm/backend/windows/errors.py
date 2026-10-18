@@ -7,6 +7,11 @@ Turning what WinRT and Winsock report into our errors.
 
 from __future__ import annotations
 
+import sys
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "win32"
+
 from winrt.windows.devices.bluetooth import (
     BluetoothError,
 )

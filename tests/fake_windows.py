@@ -20,10 +20,13 @@ import ctypes
 import errno
 import queue
 import socket
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+assert not TYPE_CHECKING or sys.platform == "win32"
 
 import pytest
 from typing_extensions import override

@@ -9,8 +9,10 @@ stood in for.
 import asyncio
 import sys
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
 from typing_extensions import override

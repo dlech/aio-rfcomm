@@ -28,7 +28,9 @@ import socket
 import sys
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+assert not TYPE_CHECKING or sys.platform != "win32"
 
 from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability

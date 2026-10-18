@@ -25,7 +25,9 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 import pytest
 from dbus_fast import DBusError, Message, MessageType, Variant

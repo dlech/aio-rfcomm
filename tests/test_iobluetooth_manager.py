@@ -14,6 +14,9 @@ key-value observable property, which is all the real one is from here.
 import asyncio
 import sys
 from ctypes import c_int
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
 

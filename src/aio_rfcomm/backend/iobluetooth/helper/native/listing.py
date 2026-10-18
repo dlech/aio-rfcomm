@@ -5,8 +5,12 @@
 The devices macOS has paired with, and the services it stored for them.
 """
 
+import sys
 from collections.abc import Collection
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from aio_rfcomm.backend.iobluetooth.codes import (
     SDPDataElementType,

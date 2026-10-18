@@ -10,11 +10,15 @@ ended. See ``tests/fake_bluez.py`` for what stands in for BlueZ.
 """
 
 import socket
+import sys
 import time
 from collections.abc import AsyncGenerator, Generator
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 import pytest
 

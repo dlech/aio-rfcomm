@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING, assert_never
+
+assert not TYPE_CHECKING or sys.platform == "win32"
 
 from winrt.windows.devices.bluetooth import (
     BluetoothAdapter,

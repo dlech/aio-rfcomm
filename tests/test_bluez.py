@@ -14,9 +14,12 @@ import asyncio
 import errno
 import os
 import socket
+import sys
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 import pytest
 

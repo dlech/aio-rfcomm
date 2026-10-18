@@ -14,11 +14,14 @@ Opening RFCOMM channels to devices.
 import asyncio
 import ctypes
 import logging
+import sys
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc import NSObject, ObjCInstance, objc_method
 from rubicon.objc.runtime import objc_id

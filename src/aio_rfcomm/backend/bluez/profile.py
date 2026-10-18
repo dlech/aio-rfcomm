@@ -13,9 +13,12 @@ The Profile1 objects BlueZ calls back with connected file descriptors.
 import asyncio
 import itertools
 import logging
+import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from dbus_fast import Variant
 from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd

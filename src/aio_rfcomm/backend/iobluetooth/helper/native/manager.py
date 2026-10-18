@@ -14,8 +14,11 @@ its state.
 
 import asyncio
 import logging
+import sys
 from collections.abc import Callable
-from typing import Any, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc import (
     NSObject,

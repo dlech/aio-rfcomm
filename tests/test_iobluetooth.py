@@ -21,6 +21,9 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform != "win32"
 
 import pytest
 
@@ -709,6 +712,8 @@ async def test_the_helper_says_so_when_it_has_let_the_device_go() -> None:
     Everything from the helper's request handling down through the native
     layer runs. Only the framework is stood in for.
     """
+    assert not TYPE_CHECKING or sys.platform == "darwin"
+
     from aio_rfcomm.backend.iobluetooth.helper import __main__ as helper_main
     from tests.fake_iobluetooth import fake_framework
 

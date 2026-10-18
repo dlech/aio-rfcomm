@@ -8,9 +8,12 @@ the small pieces every other module here needs.
 
 import ctypes
 import itertools
+import sys
 from collections.abc import Collection, Iterable
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc import (
     SEL,

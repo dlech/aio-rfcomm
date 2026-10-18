@@ -7,6 +7,11 @@ Bluetooth addresses, between WinRT's integers and our text.
 
 from __future__ import annotations
 
+import sys
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "win32"
+
 __all__ = ["format_address", "parse_address"]
 
 

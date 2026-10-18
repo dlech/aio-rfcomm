@@ -5,8 +5,12 @@
 BlueZ's adapters and devices, read once and then followed through its signals.
 """
 
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
+assert not TYPE_CHECKING or sys.platform == "linux"
 
 from dbus_fast import Message, MessageType, Variant
 from dbus_fast.aio import MessageBus

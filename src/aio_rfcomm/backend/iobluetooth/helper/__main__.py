@@ -23,8 +23,10 @@ import socket
 import sys
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 from rubicon.objc.runtime import load_library
 

@@ -8,8 +8,11 @@ Finding devices, and the channel a service is on, through WinRT.
 from __future__ import annotations
 
 import logging
-from typing import cast
+import sys
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "win32"
 
 from winrt.system import unbox_string
 from winrt.windows.devices.bluetooth import (

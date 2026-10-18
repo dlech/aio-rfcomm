@@ -17,7 +17,10 @@ import socket
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
 
