@@ -16,9 +16,6 @@ dependencies = [
     { name = "winrt-windows-devices-radios", marker = "sys_platform == 'win32'" },
     { name = "winrt-windows-foundation", marker = "sys_platform == 'win32'" },
     { name = "winrt-windows-foundation-collections", marker = "sys_platform == 'win32'" },
-    { name = "winrt-windows-networking", marker = "sys_platform == 'win32'" },
-    { name = "winrt-windows-networking-sockets", marker = "sys_platform == 'win32'" },
-    { name = "winrt-windows-storage", marker = "sys_platform == 'win32'" },
     { name = "winrt-windows-storage-streams", marker = "sys_platform == 'win32'" },
 ]
 
@@ -52,9 +49,6 @@ requires-dist = [
     { name = "winrt-windows-devices-radios", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
     { name = "winrt-windows-foundation", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
     { name = "winrt-windows-foundation-collections", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
-    { name = "winrt-windows-networking", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
-    { name = "winrt-windows-networking-sockets", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
-    { name = "winrt-windows-storage", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
     { name = "winrt-windows-storage-streams", marker = "sys_platform == 'win32'", specifier = ">=3.2.1" },
 ]
 
@@ -1087,75 +1081,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/47/b3301d964422d4611c181348149a7c5956a2a76e6339de451a000d4ae8e7/winrt_windows_foundation_collections-3.2.1-cp314-cp314-win32.whl", hash = "sha256:33188ed2d63e844c8adfbb82d1d3d461d64aaf78d225ce9c5930421b413c45ab", size = 62211, upload-time = "2025-09-20T07:11:52.411Z" },
     { url = "https://files.pythonhosted.org/packages/20/59/5f2c940ff606297129e93ebd6030c813e6a43a786de7fc33ccb268e0b06b/winrt_windows_foundation_collections-3.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:d4cfece7e9c0ead2941e55a1da82f20d2b9c8003bb7a8853bb7f999b539f80a4", size = 70399, upload-time = "2025-09-20T07:11:53.254Z" },
     { url = "https://files.pythonhosted.org/packages/f8/2d/2c8eb89062c71d4be73d618457ed68e7e2ba29a660ac26349d44fc121cbf/winrt_windows_foundation_collections-3.2.1-cp314-cp314-win_arm64.whl", hash = "sha256:3884146fea13727510458f6a14040b7632d5d90127028b9bfd503c6c655d0c01", size = 61392, upload-time = "2025-09-20T07:11:53.993Z" },
-]
-
-[[package]]
-name = "winrt-windows-networking"
-version = "3.2.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "winrt-runtime" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/e6/7cab755add8b8cb1afc08029007143f38ceef1b79583ed15cd7daf3524b0/winrt_windows_networking-3.2.1.tar.gz", hash = "sha256:1a26adfa6a0dd65a9f4c468c9fe011385dd79216bbbaf0c04a47c3d3beb79956", size = 6523, upload-time = "2025-06-06T14:42:50.191Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e4/96/d50d5644274a520d4fc863be39c0cc7974c25a9600535dbea7e027c0890b/winrt_windows_networking-3.2.1-cp311-cp311-win32.whl", hash = "sha256:649e1a264d910dbee90d9df788164bc15fe01f49a94e094b2fde4d365d1ef115", size = 26596, upload-time = "2025-06-06T07:28:24.102Z" },
-    { url = "https://files.pythonhosted.org/packages/78/89/6277cff0f123cb7e4b552551eedeb5fca8380532083b3916840fca114adf/winrt_windows_networking-3.2.1-cp311-cp311-win_amd64.whl", hash = "sha256:7719892a331f6ca314597ededdc196649501950a3bf124f8a366a91053352ceb", size = 28379, upload-time = "2025-06-06T07:28:24.874Z" },
-    { url = "https://files.pythonhosted.org/packages/6b/8e/df39d737a88b429fe387493177fffd5fcb196378f1d87483d1dbbf29732e/winrt_windows_networking-3.2.1-cp311-cp311-win_arm64.whl", hash = "sha256:4433fc2ba3dffee9abadcd8c270bb77a0f1a1edda9449f19332e7d1ad2f1851a", size = 24390, upload-time = "2025-06-06T07:28:25.625Z" },
-    { url = "https://files.pythonhosted.org/packages/57/3b/cdf509113c2216a2c029aa506f78ba105f0157fd106d194d1b0ea7c31d37/winrt_windows_networking-3.2.1-cp312-cp312-win32.whl", hash = "sha256:6dc37cbf16047fb87841081443f02cb230dc417213b02bf80be3fb6715a0b4ce", size = 26623, upload-time = "2025-06-06T07:28:26.361Z" },
-    { url = "https://files.pythonhosted.org/packages/a8/32/2459ac127e85679723ae515846ba127b8f90d34e2ab8a7671296d701b4bd/winrt_windows_networking-3.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:e851856a61c29994faef9dff5b593d6abebc8e6fab0c8be375e5cdf7245109f4", size = 28400, upload-time = "2025-06-06T07:28:27.082Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/7d/dba89e7b677b84f6fedda929dd80899746c1f94a193152dd796fdca22325/winrt_windows_networking-3.2.1-cp312-cp312-win_arm64.whl", hash = "sha256:d83df2a92c28281790a7fc195100e2b5111205566dd83aef70d7768b492cf056", size = 24371, upload-time = "2025-06-06T07:28:27.797Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/62/9d466f0eb434b77bf64e89e4338aed6479c9e1dd89c181541bb635a13e61/winrt_windows_networking-3.2.1-cp313-cp313-win32.whl", hash = "sha256:287c79010f5331901fe86a30aebf250c091563b6dbc28fa17714d370e7c0eb17", size = 26626, upload-time = "2025-06-06T07:28:28.547Z" },
-    { url = "https://files.pythonhosted.org/packages/46/d1/c58f7f59c15c2378108c1d925458ac5849e42e447fd82b4a85815a97423b/winrt_windows_networking-3.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:fb2f4b25ddf23dd30566b02d1f42a92ee3813a239b3e4b6cd51d49679f103792", size = 28402, upload-time = "2025-06-06T07:28:29.306Z" },
-    { url = "https://files.pythonhosted.org/packages/6a/f1/b5a7eb08cd546256fddfaae5f43ebcfdb27e4a238e06b75002ae896cd47b/winrt_windows_networking-3.2.1-cp313-cp313-win_arm64.whl", hash = "sha256:488d9cb52fa105aa609e847df7cab4aaad50ce20b83d8367a15bf7aafdffb378", size = 24372, upload-time = "2025-06-06T07:28:30.048Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/05/18500abdf96902df5a14d781925a341691cc2289b400331f86bed92af6d2/winrt_windows_networking-3.2.1-cp314-cp314-win32.whl", hash = "sha256:63db8131ae0b1df55e61d43ee76f398f0b1556f2ade7c19fb055ebef742a8458", size = 26938, upload-time = "2025-09-20T07:15:08.683Z" },
-    { url = "https://files.pythonhosted.org/packages/50/bc/aad5a27130b66d07c29a9edbe3ab729a1ceff3d2a2906999da7dc6cb86b0/winrt_windows_networking-3.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:2f99ad26bf4b5f7b750c607dafe6d6773d9a859ac78985448b7b587ea65cf361", size = 28934, upload-time = "2025-09-20T07:15:09.394Z" },
-    { url = "https://files.pythonhosted.org/packages/55/32/fa392f96356df98862c674ce6d379f84bdb74439f1212e4af8854193a650/winrt_windows_networking-3.2.1-cp314-cp314-win_arm64.whl", hash = "sha256:823e80062a3f46f24a087a8211856dbcbb32ef78b21f81bd4e6b70c5ac5403b2", size = 25183, upload-time = "2025-09-20T07:15:10.077Z" },
-]
-
-[[package]]
-name = "winrt-windows-networking-sockets"
-version = "3.2.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "winrt-runtime" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/19/e266c9a9e0e8d9b9fd123a761baf18580bd77072fafbaff5c3a76710a829/winrt_windows_networking_sockets-3.2.1.tar.gz", hash = "sha256:42c6d4e4a523facfed9e9010b7db96e500279960eefe393a8d70793f63ec5ccf", size = 39534, upload-time = "2025-06-06T14:42:55.109Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/a6/0937164828ec47d07fd73731d5b1bd5be98d8af7e6cb97ea4c7cae703887/winrt_windows_networking_sockets-3.2.1-cp311-cp311-win32.whl", hash = "sha256:aca9fb0c91103995bd8c9466fbd46e6b11fb8e43c4129c690576aefaf0fc9588", size = 178078, upload-time = "2025-06-06T07:30:04.592Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/63/166cfb1c662c3d4c6c8e719f8692b9f36119c76c20b05d9406a7238fef48/winrt_windows_networking_sockets-3.2.1-cp311-cp311-win_amd64.whl", hash = "sha256:02b061aaaf87aa05bdf77e5257b5addce8fa92680901c767324edbfb675fd031", size = 190465, upload-time = "2025-06-06T07:30:05.956Z" },
-    { url = "https://files.pythonhosted.org/packages/0c/15/d0932fc88c823c6e68438e496846a7701dd864e17b85b5156e47fa9ba47f/winrt_windows_networking_sockets-3.2.1-cp311-cp311-win_arm64.whl", hash = "sha256:9f40d8e65d52161cee98913c8f17405343326f75198bde7e48b897beaabf649b", size = 189729, upload-time = "2025-06-06T07:30:06.933Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/01/2a7a4894ef10650fb6d59adb4a20a878b157a4f09f494c543411bcb7f2c9/winrt_windows_networking_sockets-3.2.1-cp312-cp312-win32.whl", hash = "sha256:193677a97a0b0cd8a416c6e4def35f78f72ab0f8e83535c657bc27bfc87acf34", size = 178467, upload-time = "2025-06-06T07:30:07.933Z" },
-    { url = "https://files.pythonhosted.org/packages/9f/c5/4115a3b41ed4259b0b27ebef30df5eadd8fe7567f1784d7cf5f4fbdef59e/winrt_windows_networking_sockets-3.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:caaf76563b5593dfc699b570a5eac91b2cd7762a0983a89fc00feb840e6a4923", size = 190655, upload-time = "2025-06-06T07:30:08.913Z" },
-    { url = "https://files.pythonhosted.org/packages/13/0d/f0d6086453d1c7fdd08194b953858f442e893e74435493eda05dd42b7f03/winrt_windows_networking_sockets-3.2.1-cp312-cp312-win_arm64.whl", hash = "sha256:3b593297d7cbecf8286de5216260556def0b2cd462133da6aee3c0c95b51191c", size = 189426, upload-time = "2025-06-06T07:30:09.921Z" },
-    { url = "https://files.pythonhosted.org/packages/f5/38/ebe6b3c66d1d5be420837e44f34c06e050f9b3f9f2c9b907c80b6063d382/winrt_windows_networking_sockets-3.2.1-cp313-cp313-win32.whl", hash = "sha256:e8c8583cd62bb19291dcac9ae04709e01c4e67bd2275ab761969ac88e51ed6c8", size = 178439, upload-time = "2025-06-06T07:30:10.898Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/33/24b53a565eb4af2d8ef6990555d09d2b11bd9b55a75e30769135483734d6/winrt_windows_networking_sockets-3.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:75692ffd0d3351a74965de2507fbb143036032bfb4eb422b3d799d5eae7b3559", size = 190597, upload-time = "2025-06-06T07:30:11.849Z" },
-    { url = "https://files.pythonhosted.org/packages/6a/bb/be539beedd1d5fedd4cbcc216b4b5f46e1d5ed8d6db36932008641662dba/winrt_windows_networking_sockets-3.2.1-cp313-cp313-win_arm64.whl", hash = "sha256:7180062357055fccda0aeee6d894b9e8144ed6083a173d8d971e12a560c5d1c0", size = 189443, upload-time = "2025-06-06T07:30:12.881Z" },
-    { url = "https://files.pythonhosted.org/packages/ea/43/ae75c5ee75810ec66bbf731f5159ac470d2ccec67ead275bffc09ec85b0f/winrt_windows_networking_sockets-3.2.1-cp314-cp314-win32.whl", hash = "sha256:e69012e4e71d7b7a651aafc4dfbda56faefc89bdee2ee654ecea2a8279a134d7", size = 180679, upload-time = "2025-09-20T07:15:27.784Z" },
-    { url = "https://files.pythonhosted.org/packages/50/84/635e4bdaf716d836fc1edf44eba9d7d2728072c69bcaccdbb4bc005cb997/winrt_windows_networking_sockets-3.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:422006345e4cc16cba1a1aaca0b8c20ee580f1f7a8c5dafeb9800ff06adc0c10", size = 193834, upload-time = "2025-09-20T07:15:28.97Z" },
-    { url = "https://files.pythonhosted.org/packages/6e/2b/1d8830dbe3e4779bbcd8cb3a5a2f6debc2f9d93bce01c3d7e22c5bc5c8f8/winrt_windows_networking_sockets-3.2.1-cp314-cp314-win_arm64.whl", hash = "sha256:9e1f79d09734e77a88536763732eeca5eab64f16518f34ca8bd8c9ce1a95521b", size = 196626, upload-time = "2025-09-20T07:15:30.309Z" },
-]
-
-[[package]]
-name = "winrt-windows-storage"
-version = "3.2.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "winrt-runtime" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/a6/430d4881d214647e2e6c95bb2894bb9202c98bff5f82eca6ba5b5e5d09a1/winrt_windows_storage-3.2.1.tar.gz", hash = "sha256:c7d1c2326fd842babbf98d944d4991b7592ee8433c762af0a8b47696437fae0b", size = 48309, upload-time = "2025-06-06T14:43:17.793Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/05/d41741a2ce682d50d73f08b65a1e6164ecb49c2b99042e895c612cc3aac7/winrt_windows_storage-3.2.1-cp311-cp311-win32.whl", hash = "sha256:78b70421bd19c6705f47bf96a34cce80477522fa9c7d182b56ca781a64e76543", size = 238804, upload-time = "2025-06-06T13:59:52.899Z" },
-    { url = "https://files.pythonhosted.org/packages/e4/c7/e1d17cd1db9c33cdba4af4b333ecbe989272477b64d450dca271e410deb2/winrt_windows_storage-3.2.1-cp311-cp311-win_amd64.whl", hash = "sha256:a9020311207e937bde7a0a1cbe277d08eb051b6c0d90b3482cf305ec2cff03dd", size = 264314, upload-time = "2025-06-06T13:59:53.738Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/6b/42c0bd8ab653c9d7eefb0290eec089ea700d449614082c99fa809f92e0b6/winrt_windows_storage-3.2.1-cp311-cp311-win_arm64.whl", hash = "sha256:4c916d94856ed89fb5c67f649852310fcffb9d948c3b931fd4d47e970c46d685", size = 261415, upload-time = "2025-06-06T13:59:54.991Z" },
-    { url = "https://files.pythonhosted.org/packages/80/4f/fcc9c553e6d44e554e752ba86b21542f4f3c22e35316c6b4c9a5ab89ed04/winrt_windows_storage-3.2.1-cp312-cp312-win32.whl", hash = "sha256:01a4ae3b61c30c3fb492615c6961791cc83f2344b2fc1a9bdb2fd8d83024fce0", size = 239402, upload-time = "2025-06-06T13:59:56.594Z" },
-    { url = "https://files.pythonhosted.org/packages/d6/cc/7a6e801843f4eced507c3194aa8ad95b65b16aa03dfe8a228a74d34fb0eb/winrt_windows_storage-3.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:5bafa8c44238c3080c54fe44486c400a7a7a3f5ca9005e8fd97e6dd3e49920a2", size = 264669, upload-time = "2025-06-06T13:59:57.529Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/2f/91dcee47b5644c3209d017f239cb7ad898316b0003d1f567b414af01cb51/winrt_windows_storage-3.2.1-cp312-cp312-win_arm64.whl", hash = "sha256:05cb70a8f5cc356257a5e51964b280bd40b200f7257f2438f6edc192e67a3a9b", size = 261612, upload-time = "2025-06-06T13:59:58.461Z" },
-    { url = "https://files.pythonhosted.org/packages/66/8d/74ebfa9ee9e06350f850e3305c2d902910dbf8412436513cfb8e6e50f6ef/winrt_windows_storage-3.2.1-cp313-cp313-win32.whl", hash = "sha256:fc0567ff2303bcf7d471dba178a997bfdab57371e8282e90a40cc522d7fb4421", size = 239308, upload-time = "2025-06-06T13:59:59.361Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/96/47f63309001b480a8818eb5f26bbab571cdcb463531619f39b5004149610/winrt_windows_storage-3.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:7a57e022bc8e7096a12f2b530ab544a71ede704a01cdfde75009ed40897b696e", size = 264719, upload-time = "2025-06-06T14:00:00.263Z" },
-    { url = "https://files.pythonhosted.org/packages/b8/94/b4c5760fa183460c27144d3e05a5a793b181d182bec75573749d95268644/winrt_windows_storage-3.2.1-cp313-cp313-win_arm64.whl", hash = "sha256:7827a46098e0b0c97fdb085c1ebb4de0b130f36402723d9f539a1c1fb399c8e7", size = 261652, upload-time = "2025-06-06T14:00:01.297Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/2e/7dfe8b9c740e6f20503e14d6f6c84d9174b0fb22c3e83d82071dd3d638e2/winrt_windows_storage-3.2.1-cp314-cp314-win32.whl", hash = "sha256:b7d5739001d435c914da3354e2c173d3f3bc48b344ebf294308685db82240376", size = 244742, upload-time = "2025-09-20T07:16:52.661Z" },
-    { url = "https://files.pythonhosted.org/packages/36/0a/6e3474176fc2aa7a671000af8b7d2a10dc390cbd871f250e352dbefa79c4/winrt_windows_storage-3.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:f4f1fff7846f934f53b4cdc7089faa6d21ced9bc993215e95c4fcc716da851e7", size = 272760, upload-time = "2025-09-20T07:16:53.61Z" },
-    { url = "https://files.pythonhosted.org/packages/20/bb/02a0c692be2ea6d5bd4db1b3559e3eea96dae774826cc2bec6085f272bdb/winrt_windows_storage-3.2.1-cp314-cp314-win_arm64.whl", hash = "sha256:78d6191e1daabd4b6aff31b84cc890e5483f4e168bceb0ef6d099ec32af9b835", size = 275463, upload-time = "2025-09-20T07:16:54.597Z" },
 ]
 
 [[package]]

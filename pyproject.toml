@@ -38,10 +38,9 @@ dependencies = [
     "winrt-windows-devices-enumeration>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-devices-radios>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-foundation>=3.2.1 ; sys_platform == 'win32'",
+    # Never imported, but WinRT hands back their types: availability fails
+    # without collections, and reading SDP attributes without streams.
     "winrt-windows-foundation-collections>=3.2.1 ; sys_platform == 'win32'",
-    "winrt-windows-networking>=3.2.1 ; sys_platform == 'win32'",
-    "winrt-windows-networking-sockets>=3.2.1 ; sys_platform == 'win32'",
-    "winrt-windows-storage>=3.2.1 ; sys_platform == 'win32'",
     "winrt-windows-storage-streams>=3.2.1 ; sys_platform == 'win32'",
 ]
 
