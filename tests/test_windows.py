@@ -190,7 +190,7 @@ def test_a_free_channel_is_found_from_the_top_down() -> None:
     from aio_rfcomm.backend.windows.connection import bind_channel
 
     sock = _FakeSocket(set())
-    assert bind_channel(sock, None) == LAST_CHANNEL  # pyright: ignore[reportArgumentType]
+    assert bind_channel(sock, None) == LAST_CHANNEL
 
 
 def test_channels_in_use_are_stepped_over() -> None:
@@ -198,7 +198,7 @@ def test_channels_in_use_are_stepped_over() -> None:
     from aio_rfcomm.backend.windows.connection import bind_channel
 
     sock = _FakeSocket({LAST_CHANNEL, LAST_CHANNEL - 1})
-    assert bind_channel(sock, None) == LAST_CHANNEL - 2  # pyright: ignore[reportArgumentType]
+    assert bind_channel(sock, None) == LAST_CHANNEL - 2
 
 
 def test_an_asked_for_channel_that_is_taken_says_so() -> None:
@@ -207,7 +207,7 @@ def test_an_asked_for_channel_that_is_taken_says_so() -> None:
 
     sock = _FakeSocket({7})
     with pytest.raises(ChannelInUseError, match="channel 7"):
-        bind_channel(sock, 7)  # pyright: ignore[reportArgumentType]
+        bind_channel(sock, 7)
 
 
 def test_no_free_channel_at_all_is_an_error() -> None:
@@ -217,7 +217,7 @@ def test_no_free_channel_at_all_is_an_error() -> None:
 
     sock = _FakeSocket(set(range(FIRST_CHANNEL, LAST_CHANNEL + 1)))
     with pytest.raises(ChannelInUseError, match="every RFCOMM channel"):
-        bind_channel(sock, None)  # pyright: ignore[reportArgumentType]
+        bind_channel(sock, None)
 
 
 # --------------------------------------------------------------------------

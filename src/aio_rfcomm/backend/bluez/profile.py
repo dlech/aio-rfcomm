@@ -15,13 +15,12 @@ import itertools
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Protocol
 
 from dbus_fast import Variant
-from dbus_fast.aio import MessageBus
 from dbus_fast.annotations import DBusDict, DBusObjectPath, DBusUnixFd
 from dbus_fast.service import ServiceInterface, method
 
-from aio_rfcomm.backend.bluez.dbus import ProfileManagerProxy
 from aio_rfcomm.backend.bluez.errors import translate_registration
 from aio_rfcomm.backend.stream import hang_up_descriptor
 
@@ -105,6 +104,28 @@ class _Profile(ServiceInterface):
         logger.debug("BlueZ asked us to disconnect %s", device)
 
 
+# Only what Profiles uses, so a test can pass stand-ins. MessageBus and
+# ProfileManagerProxy are both these.
+class Exporter(Protocol):
+    """
+    Where profiles are exported.
+    """
+
+    def export(self, path: str, interface: ServiceInterface, /) -> None: ...
+    def unexport(self, path: str, /) -> None: ...
+
+
+class ProfileManager(Protocol):
+    """
+    BlueZ's ProfileManager1.
+    """
+
+    async def call_register_profile(
+        self, profile: str, uuid: str, options: dict[str, Variant], /
+    ) -> None: ...
+    async def call_unregister_profile(self, profile: str, /) -> None: ...
+
+
 class Profiles:
     """
     One Profile1 registration per service UUID, shared and reference counted.
@@ -117,8 +138,8 @@ class Profiles:
 
     def __init__(
         self,
-        bus: MessageBus,
-        manager: Callable[[], Awaitable[ProfileManagerProxy]],
+        bus: Exporter,
+        manager: Callable[[], Awaitable[ProfileManager]],
     ) -> None:
         """
         Args:

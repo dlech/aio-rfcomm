@@ -287,7 +287,7 @@ def _asking(manager: _FakeManager) -> Callable[[], Awaitable[_FakeManager]]:
 
 def _profiles() -> tuple[Profiles, _FakeBus, _FakeManager]:
     bus, manager = _FakeBus(), _FakeManager()
-    return Profiles(bus, _asking(manager)), bus, manager  # pyright: ignore[reportArgumentType]
+    return Profiles(bus, _asking(manager)), bus, manager
 
 
 async def test_concurrent_users_share_one_registration() -> None:
@@ -327,7 +327,7 @@ async def test_a_failed_registration_leaves_nothing_exported() -> None:
     manager = _FakeManager(
         fails=DBusError("org.bluez.Error.NotPermitted", "UUID already registered")
     )
-    profiles = Profiles(bus, _asking(manager))  # pyright: ignore[reportArgumentType]
+    profiles = Profiles(bus, _asking(manager))
 
     with pytest.raises(ConnectionFailedError, match="another program"):
         async with profiles.acquire(SERVICE):

@@ -22,6 +22,7 @@ from contextlib import (
     AsyncExitStack,
     asynccontextmanager,
 )
+from typing import Protocol
 
 from typing_extensions import override
 
@@ -265,7 +266,16 @@ async def open_socket(
     raise translate_failure(last, address, channel) from last
 
 
-def bind_channel(sock: socket.socket, channel: int | None) -> int:
+# Only what is used, so a test can pass a stand-in.
+class Bindable(Protocol):
+    """
+    What bind_channel needs of a socket.
+    """
+
+    def bind(self, address: tuple[str, int], /) -> None: ...
+
+
+def bind_channel(sock: Bindable, channel: int | None) -> int:
     """
     Put a listening socket on a channel, or find it one.
 
