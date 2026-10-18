@@ -35,7 +35,7 @@ assert not TYPE_CHECKING or sys.platform != "win32"
 
 from aio_rfcomm._teardown import unwrap_lone_error
 from aio_rfcomm.availability import Availability
-from aio_rfcomm.backend.iobluetooth.bundle import build_helper
+from aio_rfcomm.backend.iobluetooth.bundle import build_helper, shown_name
 from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.discovery import RfcommDeviceInfo
 from aio_rfcomm.errors import (
@@ -152,10 +152,12 @@ class Helper:
     manager's state to whoever reads ``next_state``.
     """
 
-    def __init__(self, link: Link) -> None:
+    def __init__(self, link: Link, name: str | None = None) -> None:
         """
         Args:
             link: The control socket. Taken over.
+            name: The name macOS asks about the helper under, as it shows it,
+                or ``None`` when the helper goes by whatever started it.
         """
         self._link = link
         self._numbers = itertools.count()
@@ -172,6 +174,12 @@ class Helper:
         # The number of the "ready" request, and whether it was answered.
         self._readying: int | None = None
         self._ready = False
+
+        self.name: str | None = name
+        """
+        The name macOS asks about the helper under, as it shows it, or
+        ``None`` when the helper goes by whatever started it.
+        """
 
         self.on_stop: Callable[[RfcommError], None] | None = None
         """
@@ -502,19 +510,21 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
 
     # Left to its defaults the bundle is never the one macOS asks about:
     # it inherits the responsibility of whatever started this process.
-    executable = (
-        build_helper(_own_name, _own_reason)
-        if _own_name is not None and _own_reason is not None
-        else build_helper()
-    )
+    if _own_name is not None and _own_reason is not None:
+        executable = build_helper(_own_name, _own_reason)
+        name = shown_name(_own_name)
+    else:
+        executable = build_helper()
+        name = None
+
     ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        pid = _spawn(executable, theirs, disclaim=_own_name is not None)
+        pid = _spawn(executable, theirs, disclaim=name is not None)
     finally:
         theirs.close()
 
     link = Link(ours)
-    helper = Helper(link)
+    helper = Helper(link, name)
     try:
         # The reader task is an implementation detail of this function, so
         # what the caller sees is their own error rather than a group of one

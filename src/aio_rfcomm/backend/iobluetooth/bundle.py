@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING
 
 assert not TYPE_CHECKING or sys.platform != "win32"
 
-__all__ = ["build_helper"]
+__all__ = ["build_helper", "shown_name"]
 
 # Bumped when the layout below changes, so a cached bundle built by an older
 # version of this package is rebuilt rather than reused.
@@ -71,6 +71,20 @@ def _folder(name: str) -> str:
     # are limited to 255 bytes.
     stem = name.replace("/", ":").encode()[: 255 - len(".app")]
     return f"{stem.decode(errors='ignore') or 'unnamed'}.app"
+
+
+def shown_name(name: str) -> str:
+    """
+    Say how the permission dialog and System Settings show a helper.
+
+    Args:
+        name: The name it was built under.
+
+    Returns:
+        The name as macOS shows it.
+    """
+    # Finder shows every ":" in the folder's name as "/".
+    return _folder(name).removesuffix(".app").replace(":", "/")
 
 
 def build_helper(name: str = _DEFAULT_NAME, reason: str = _DEFAULT_REASON) -> Path:

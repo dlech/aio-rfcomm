@@ -35,6 +35,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - macOS: if the Bluetooth service restarted while the permission dialog was
   open, the availability became `UNSUPPORTED` and stayed so after the user
   allowed Bluetooth. It now stays `AWAITING_PERMISSION` until the answer.
+- macOS: the message for a refused permission ended with a note about
+  `prompt_under_name()` that only a programmer could act on. It now names the
+  program as System Settings shows it instead. So does the message for an
+  open permission dialog.
 
 ## [1.0.0] - 2026-10-17
 

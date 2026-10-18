@@ -635,9 +635,13 @@ async def _relay(helper: Helper, state: AvailabilityState) -> None:
                     "this Mac's Bluetooth is switched off. Turn it on",
                 )
             case Availability.NOT_ALLOWED:
-                state.set(Availability.NOT_ALLOWED, _not_allowed(authorization))
+                state.set(
+                    Availability.NOT_ALLOWED, _not_allowed(authorization, helper.name)
+                )
             case Availability.AWAITING_PERMISSION:
-                state.set(Availability.AWAITING_PERMISSION, _AWAITING_PERMISSION)
+                state.set(
+                    Availability.AWAITING_PERMISSION, _awaiting_permission(helper.name)
+                )
             case available:
                 state.set(available)
 
@@ -695,35 +699,55 @@ def _availability(manager: int, authorization: int) -> Availability | None:
             return None
 
 
-_AWAITING_PERMISSION = (
-    "macOS is asking whether this program may use Bluetooth. Answer the "
-    "permission dialog."
-)
+def _awaiting_permission(name: str | None) -> str:
+    """
+    Say that macOS is asking whether the program may use Bluetooth.
+
+    Args:
+        name: The name macOS asks under, or ``None`` when the helper goes by
+            whatever started it.
+
+    Returns:
+        What to tell the user.
+    """
+    asked = "this program" if name is None else f'"{name}"'
+    return (
+        f"macOS is asking whether {asked} may use Bluetooth. Answer the "
+        "permission dialog."
+    )
 
 
-def _not_allowed(authorization: int) -> str:
+def _not_allowed(authorization: int, name: str | None) -> str:
     """
     Say why this program may not use Bluetooth, which is not always the same.
 
     Args:
         authorization: A ``CBManagerAuthorization`` from the helper.
+        name: The name macOS asked under, or ``None`` when the helper goes by
+            whatever started it.
 
     Returns:
         What to tell the user.
     """
+    # Read by the program's users, so programmer advice (such as keeping the
+    # name the same) belongs in prompt_under_name's documentation instead.
     match authorization:
         case CBManagerAuthorization.RESTRICTED:
             return (
                 "Bluetooth is not allowed on this Mac, by a profile or parental "
                 "controls rather than by a choice this program can undo."
             )
-        case _:
+        case _ if name is None:
             return (
                 "Bluetooth was refused for this program. Allow it under "
-                "Privacy & Security > Bluetooth in System Settings. Note that "
-                "the name passed to aio_rfcomm.macos.prompt_under_name() is "
-                "what the permission is remembered against, so changing it "
-                "asks again."
+                "Privacy & Security > Bluetooth in System Settings, then start "
+                "it again."
+            )
+        case _:
+            return (
+                f'Bluetooth was refused. Allow "{name}" under Privacy & '
+                "Security > Bluetooth in System Settings, then start the "
+                "program again."
             )
 
 
