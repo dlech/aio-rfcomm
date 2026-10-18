@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-18
+
 ### Added
 
 - `Availability.AWAITING_PERMISSION`: the system is asking the user whether
@@ -48,5 +50,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Initial release.
 
-[Unreleased]: https://github.com/dlech/aio-rfcomm/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/dlech/aio-rfcomm/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/dlech/aio-rfcomm/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/dlech/aio-rfcomm/releases/tag/v1.0.0
