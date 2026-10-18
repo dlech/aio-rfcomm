@@ -29,7 +29,7 @@ import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from functools import partial
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias
 
 assert not TYPE_CHECKING or sys.platform != "win32"
 
@@ -44,8 +44,16 @@ from aio_rfcomm.errors import (
     DeviceNotFoundError,
     RfcommError,
 )
+from aio_rfcomm.macos import MissingUsageDescriptionError
 
-__all__ = ["Ending", "Helper", "Request", "prompt_under_name", "run_helper"]
+__all__ = [
+    "Ending",
+    "Helper",
+    "Request",
+    "StopError",
+    "prompt_under_name",
+    "run_helper",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +89,12 @@ class HelperFailedError(RfcommError):
     what a caller can do about it is the same as for any other failure to
     reach Bluetooth.
     """
+
+
+StopError: TypeAlias = RfcommError | MissingUsageDescriptionError
+"""
+Why a helper stopped. Only the program's own mistake is not an ``RfcommError``.
+"""
 
 
 class Ending:
@@ -169,8 +183,8 @@ class Helper:
         self._states: asyncio.Queue[tuple[int, int] | None] = asyncio.Queue()
         self._requests: asyncio.Queue[Request | None] = asyncio.Queue()
         # Set once the service has gone: withdrawn, or the helper stopped.
-        self._unserved: RfcommError | None = None
-        self._stopped: RfcommError | None = None
+        self._unserved: StopError | None = None
+        self._stopped: StopError | None = None
         # The number of the "ready" request, and whether it was answered.
         self._readying: int | None = None
         self._ready = False
@@ -181,7 +195,7 @@ class Helper:
         ``None`` when the helper goes by whatever started it.
         """
 
-        self.on_stop: Callable[[RfcommError], None] | None = None
+        self.on_stop: Callable[[StopError], None] | None = None
         """
         Called with the reason as the helper is found to have stopped, before
         anything waiting on it is told, so that whatever the stop means is
@@ -202,6 +216,8 @@ class Helper:
 
         Raises:
             RfcommError: The helper reported a failure, or stopped.
+            MissingUsageDescriptionError: macOS ended the helper, because it
+                could not ask about Bluetooth.
         """
         if self._stopped is not None:
             raise self._stopped
@@ -283,6 +299,8 @@ class Helper:
         Raises:
             RfcommError: The helper has stopped. States it sent before it
                 stopped are not handed out after: they no longer say anything.
+            MissingUsageDescriptionError: macOS ended the helper, because it
+                could not ask about Bluetooth.
         """
         if self._stopped is not None:
             raise self._stopped
@@ -305,6 +323,8 @@ class Helper:
 
         Raises:
             RfcommError: The helper has stopped, or the service has ended.
+            MissingUsageDescriptionError: macOS ended the helper, because it
+                could not ask about Bluetooth.
         """
         if self._stopped is not None:
             raise self._stopped
@@ -352,7 +372,7 @@ class Helper:
         self._finished.pop(handle, None)
 
     async def deliver(
-        self, explain: Callable[[], Awaitable[RfcommError]] | None = None
+        self, explain: Callable[[], Awaitable[StopError]] | None = None
     ) -> None:
         """
         Hand each frame to whoever is waiting for it, until the helper stops.
@@ -438,7 +458,7 @@ class Helper:
         for fd in fds:
             os.close(fd)
 
-    def _end_requests(self, error: RfcommError) -> None:
+    def _end_requests(self, error: StopError) -> None:
         """
         Hang up on every peer waiting, and say why to whoever waits for one.
 
@@ -455,7 +475,7 @@ class Helper:
                 self.forget(waiting.handle)
         self._requests.put_nowait(None)
 
-    def stop(self, error: RfcommError) -> None:
+    def stop(self, error: StopError) -> None:
         """
         Fail everything outstanding, because the helper has gone.
 
@@ -491,8 +511,9 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
     Start a helper process and keep it running for the enclosing block.
 
     Yields:
-        The helper, as soon as it is started. If macOS refuses it Bluetooth,
-        everything waiting on it fails with ``BluetoothUnavailableError``.
+        The helper, as soon as it is started. If macOS ends it for want of a
+        usage description, everything waiting on it fails with
+        ``MissingUsageDescriptionError``.
 
     Raises:
         HelperFailedError: The helper could not be started.
@@ -547,14 +568,16 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
         await _reap(pid)
 
 
-async def _why_stopped(pid: int, helper: Helper) -> RfcommError:
+async def _why_stopped(pid: int, helper: Helper) -> StopError:
     """
     Work out why a helper stopped.
 
-    macOS does not refuse Bluetooth when a process starts. It refuses at the
-    first call that needs it, by ending the process with ``SIGABRT``. So that
-    ending means a refusal only before the helper is ready. After that it is
-    an ordinary crash, and the helper can be replaced.
+    macOS does not check for a usage description when a process starts. It
+    checks at the first call that needs Bluetooth, and ends the process with
+    ``SIGABRT`` if there is none. So that ending means a missing usage
+    description only before the helper is ready, and only for a helper going
+    by whatever started it: a named one has its own. Otherwise it is an
+    ordinary crash, and the helper can be replaced.
 
     Args:
         pid: The helper's process id.
@@ -579,20 +602,20 @@ async def _why_stopped(pid: int, helper: Helper) -> RfcommError:
 
     if (
         not helper.ready
+        and helper.name is None
         and os.WIFSIGNALED(status)
         and os.WTERMSIG(status) == signal.SIGABRT
     ):
-        return BluetoothUnavailableError(
-            Availability.NOT_ALLOWED,
-            "macOS refused Bluetooth to the helper process and ended it. "
-            "A bundled application needs NSBluetoothAlwaysUsageDescription "
-            "in its Info.plist. Any other program -- a script, a REPL or a "
-            "command line tool -- needs to call "
-            "aio_rfcomm.macos.prompt_under_name() before opening "
-            "Bluetooth, so the helper can ask for permission itself, or the "
-            "program that started it, such as the terminal, has to be added "
-            "under Privacy & Security > Bluetooth in System Settings. Once "
-            "it is allowed, start the program again.",
+        return MissingUsageDescriptionError(
+            "macOS ended the Bluetooth helper process, because the program "
+            "it asks for has no NSBluetoothAlwaysUsageDescription. A bundled "
+            "application needs it in its Info.plist. Any other program -- a "
+            "script, a REPL or a command line tool -- needs to call "
+            "aio_rfcomm.macos.prompt_under_name() before opening Bluetooth, "
+            "so the helper can ask for permission itself, or the program "
+            "that started it, such as the terminal, has to be added under "
+            "Privacy & Security > Bluetooth in System Settings. Once it is "
+            "allowed, start the program again."
         )
     return HelperFailedError(f"the macOS Bluetooth helper stopped (status {status})")
 

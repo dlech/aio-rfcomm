@@ -63,6 +63,7 @@ from aio_rfcomm.errors import (
     RfcommError,
     ServiceNotFoundError,
 )
+from aio_rfcomm.macos import MissingUsageDescriptionError
 
 
 @asynccontextmanager
@@ -83,15 +84,18 @@ async def _pair() -> AsyncGenerator[tuple[Link, Link], None]:
 
 
 @asynccontextmanager
-async def _helper() -> AsyncGenerator[tuple[Helper, Link], None]:
+async def _helper(name: str | None = None) -> AsyncGenerator[tuple[Helper, Link], None]:
     """
     A helper wired to a socket the test plays the other end of.
+
+    Args:
+        name: The name macOS asks about it under.
 
     Yields:
         The helper, and the far end of its control socket.
     """
     async with _pair() as (here, there):
-        helper = Helper(here)
+        helper = Helper(here, name)
         async with asyncio.TaskGroup() as group:
             reader = group.create_task(helper.deliver())
             try:
@@ -745,15 +749,31 @@ async def _ready(helper: Helper, there: Link) -> None:
     await asking
 
 
-async def test_a_helper_macos_ended_was_not_allowed(
+async def test_a_helper_macos_ended_lacked_a_usage_description(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """
+    The program's mistake, so the error says how to fix it and is not an
+    RfcommError that a caller would catch and show its users.
+    """
     _exits_with(monkeypatch, (42, signal.SIGABRT))
     async with _helper() as (helper, _there):
         error = await _why_stopped(42, helper)
-    assert isinstance(error, BluetoothUnavailableError)
-    assert error.reason is Availability.NOT_ALLOWED
+    assert isinstance(error, MissingUsageDescriptionError)
+    assert isinstance(error, RuntimeError)
     assert "prompt_under_name" in str(error)
+
+
+async def test_an_abort_of_a_named_helper_is_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A named helper's bundle has its own usage description.
+    """
+    _exits_with(monkeypatch, (42, signal.SIGABRT))
+    async with _helper("Robot Console") as (helper, _there):
+        error = await _why_stopped(42, helper)
+    assert type(error) is HelperFailedError
 
 
 async def test_the_exit_status_is_waited_for(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -764,7 +784,7 @@ async def test_the_exit_status_is_waited_for(monkeypatch: pytest.MonkeyPatch) ->
     asked = _exits_with(monkeypatch, (0, 0), (0, 0), (42, signal.SIGABRT))
     async with _helper() as (helper, _there):
         error = await _why_stopped(42, helper)
-    assert isinstance(error, BluetoothUnavailableError)
+    assert isinstance(error, MissingUsageDescriptionError)
     assert asked == [42, 42, 42]
 
 
@@ -782,8 +802,8 @@ async def test_an_abort_after_ready_is_a_crash_not_a_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    macOS refuses at the first call that needs Bluetooth, before the helper
-    is ready. An abort after that is an ordinary crash, and the helper is
+    macOS checks for a usage description at the first call that needs
+    Bluetooth, before the helper is ready. An abort after that is an ordinary crash, and the helper is
     replaced rather than given up on.
     """
     _exits_with(monkeypatch, (42, signal.SIGABRT))
