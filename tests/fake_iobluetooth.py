@@ -65,12 +65,14 @@ class FakeManager(NSObject):
     """
 
     state = objc_property(int)
+    tccApproved = objc_property(bool)
 
     @objc_method
     def init(self):
         # Held as a plain int, because a test needs to set a value that is not
         # a CBManagerState at all.
         self.state = int(CBManagerState.UNKNOWN)
+        self.tccApproved = True
         return self
 
 

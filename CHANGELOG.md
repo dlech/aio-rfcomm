@@ -32,6 +32,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - macOS: a program that ended while the permission dialog was open waited two
   seconds for the helper process, then logged a warning and killed it. The
   helper now exits at once.
+- macOS: if the Bluetooth service restarted while the permission dialog was
+  open, the availability became `UNSUPPORTED` and stayed so after the user
+  allowed Bluetooth. It now stays `AWAITING_PERMISSION` until the answer.
 
 ## [1.0.0] - 2026-10-17
 

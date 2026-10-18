@@ -510,6 +510,11 @@ class IOBluetoothBackend(BackendProvider):
         helper itself stops. Either way the system's Bluetooth service is
         unavailable until a new helper says otherwise.
 
+        It is also finished when its manager missed the permission answer,
+        which a bluetoothd restart with the dialog open causes. That says
+        nothing about Bluetooth, so availability is left for the new helper to
+        report.
+
         Args:
             bluetooth: Where the running helper is kept.
             state: Where to report availability.
@@ -597,7 +602,8 @@ class IOBluetoothBackend(BackendProvider):
 
 async def _relay(helper: Helper, state: AvailabilityState) -> None:
     """
-    Report each state the helper sends, until the service resets.
+    Report each state the helper sends, until the service resets or the
+    helper's manager turns out to have missed the permission answer.
 
     Args:
         helper: The running helper.
@@ -607,8 +613,13 @@ async def _relay(helper: Helper, state: AvailabilityState) -> None:
         HelperFailedError: The helper stopped.
     """
     while True:
-        manager, authorization = await helper.next_state()
+        reported = await helper.next_state()
+        if reported is None:
+            # Its manager missed the permission answer. What was last said
+            # stands until the new helper says otherwise.
+            return
 
+        manager, authorization = reported
         match _availability(manager, authorization):
             case None:
                 pass

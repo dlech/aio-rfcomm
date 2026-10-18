@@ -811,6 +811,15 @@ async def test_a_reader_giving_up_loses_no_state() -> None:
             assert await helper.next_state() == (CBManagerState.POWERED_OFF, 3)
 
 
+async def test_a_helper_whose_manager_missed_the_answer_says_so() -> None:
+    async with _helper() as (helper, there):
+        there.send({"event": "stale"})
+        async with asyncio.timeout(1):
+            assert await helper.next_state() is None
+            # And again to whoever asks next.
+            assert await helper.next_state() is None
+
+
 async def test_states_from_a_helper_that_has_gone_are_not_handed_out() -> None:
     """
     They described a helper that is no longer there, and acting on one --
