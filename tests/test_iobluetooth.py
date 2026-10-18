@@ -39,11 +39,12 @@ from aio_rfcomm.backend.iobluetooth import (
     IOBluetoothBluetooth,
     IOBluetoothChannel,
     _availability,
+    _awaiting_permission,
     _not_allowed,
     _wanted,
     bundle,
 )
-from aio_rfcomm.backend.iobluetooth.bundle import _folder, _identifier, _key
+from aio_rfcomm.backend.iobluetooth.bundle import _folder, _identifier, _key, shown_name
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth.process import (
     Helper,
@@ -532,6 +533,20 @@ def test_an_empty_name_still_makes_a_folder() -> None:
     assert _folder("") == "unnamed.app"
 
 
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("Robot Console", "Robot Console"),
+        ("Robot/Console", "Robot/Console"),
+        # Measured on macOS 26.6.2: a folder "a:b.app" is shown as "a/b".
+        ("Robot:Console", "Robot/Console"),
+        ("", "unnamed"),
+    ],
+)
+def test_the_name_is_reported_as_macos_shows_it(name: str, shown: str) -> None:
+    assert shown_name(name) == shown
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="Finder names are macOS only")
 def test_macos_calls_the_bundle_by_the_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -562,7 +577,7 @@ def test_macos_calls_the_bundle_by_the_name(
     key = objc_const(load_library("Foundation"), "NSURLLocalizedNameKey")
     name = objc_id()
     assert url.getResourceValue(name, forKey=key, error=None)
-    assert str(ObjCInstance(name)) == "Robot/Console"
+    assert str(ObjCInstance(name)) == shown_name("Robot/Console")
 
 
 # --------------------------------------------------------------------------
@@ -581,7 +596,7 @@ def test_a_refused_permission_is_not_reported_as_a_dead_radio() -> None:
     assert _availability(CBManagerState.POWERED_OFF, denied) is (
         Availability.NOT_ALLOWED
     )
-    assert "System Settings" in _not_allowed(denied)
+    assert "System Settings" in _not_allowed(denied, None)
 
 
 def test_a_refused_dialog_is_not_reported_as_no_bluetooth() -> None:
@@ -638,7 +653,8 @@ def test_a_powered_on_radio_is_usable_whatever_the_authorization_says() -> None:
 
 
 def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
-    assert "parental controls" in _not_allowed(CBManagerAuthorization.RESTRICTED)
+    restricted = CBManagerAuthorization.RESTRICTED
+    assert "parental controls" in _not_allowed(restricted, None)
 
 
 def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
@@ -648,13 +664,32 @@ def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
     )
 
 
-def test_the_renaming_trap_is_in_the_refusal_message() -> None:
+def test_a_refusal_names_what_to_allow_as_macos_shows_it() -> None:
     """
-    The permission is remembered against the name given to
-    prompt_under_name, so renaming an application asks again -- and the
-    symptom points nowhere near the cause.
+    System Settings lists the name given to prompt_under_name, not the
+    program the user ran.
     """
-    assert "prompt_under_name" in _not_allowed(CBManagerAuthorization.DENIED)
+    refused = _not_allowed(CBManagerAuthorization.DENIED, "Robot Console")
+    assert 'Allow "Robot Console" under Privacy & Security' in refused
+
+
+def test_an_open_dialog_names_what_it_asks_about() -> None:
+    assert '"Robot Console"' in _awaiting_permission("Robot Console")
+
+
+@pytest.mark.parametrize("name", [None, "Robot Console"])
+@pytest.mark.parametrize(
+    "authorization",
+    [CBManagerAuthorization.DENIED, CBManagerAuthorization.RESTRICTED],
+)
+def test_a_refusal_says_nothing_only_a_programmer_can_act_on(
+    authorization: CBManagerAuthorization, name: str | None
+) -> None:
+    """
+    Programs show the message to their users. That a new name asks again is
+    in prompt_under_name's documentation instead.
+    """
+    assert "prompt_under_name" not in _not_allowed(authorization, name)
 
 
 @pytest.mark.parametrize(

@@ -109,15 +109,18 @@ class _HeldHelper:
         self,
         says: list[tuple[int, int]],
         explain: Callable[[], Awaitable[RfcommError]] | None = None,
+        name: str | None = None,
     ) -> None:
         """
         Args:
             says: The states it reports as it starts, as the manager's state
                 and the authorization.
             explain: Why it stopped, once it has.
+            name: The name macOS asks about it under.
         """
         self.says = says
         self.explain = explain
+        self.name = name
         self.far: Link | None = None
         self.helper: Helper | None = None
         self.starts = 0
@@ -131,7 +134,7 @@ class _HeldHelper:
             self.far.send(
                 {"event": "state", "state": state, "authorization": authorization}
             )
-        helper = Helper(Link(near))
+        helper = Helper(Link(near), self.name)
         self.helper = helper
         reading = asyncio.ensure_future(helper.deliver(self.explain))
         try:
@@ -613,6 +616,31 @@ async def test_the_answer_to_a_permission_dialog_is_reported(
         await held.answer_ready()
         async with asyncio.timeout(1):
             assert await anext(watcher) is availability
+
+
+async def test_a_refusal_names_what_to_allow() -> None:
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    held = _HeldHelper([(CBManagerState.UNKNOWN, unasked)], name="Robot Console")
+
+    async with _open_bluetooth(IOBluetoothBackend(held.start)) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.AWAITING_PERMISSION
+        with pytest.raises(BluetoothUnavailableError, match='"Robot Console"'):
+            await bluetooth.list_known_devices()
+
+        assert held.far is not None
+        held.far.send(
+            {
+                "event": "state",
+                "state": CBManagerState.UNSUPPORTED,
+                "authorization": CBManagerAuthorization.DENIED,
+            }
+        )
+        await held.answer_ready()
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is Availability.NOT_ALLOWED
+        with pytest.raises(BluetoothUnavailableError, match='Allow "Robot Console"'):
+            await bluetooth.list_known_devices()
 
 
 async def test_a_controller_that_never_comes_up_is_unsupported(
