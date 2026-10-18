@@ -39,10 +39,9 @@ __all__ = [
 ]
 
 # Everything multi-byte in a record is big-endian -- sizes and integers alike.
-# Worth stating because the prototype this was drawn from reads them
-# little-endian throughout and appears to work: every field that matters in
-# practice is one byte wide, so the mistake stays invisible until a record
-# carries a longer one.
+# Worth stating because reading them little-endian appears to work: every
+# field that matters in practice is one byte wide, so the mistake stays
+# invisible until a record carries a longer one.
 _SIZE_32 = struct.Struct(">I")
 _SIZE_16 = struct.Struct(">H")
 
