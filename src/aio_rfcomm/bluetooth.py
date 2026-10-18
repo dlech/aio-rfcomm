@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
+# Bluetooth, RfcommChannel and RfcommService work as one unit across modules,
+# calling members underscored only to keep them out of the public API.
+# pyright: reportPrivateUsage=false
+
 """
 The object that stands for Bluetooth on this machine.
 

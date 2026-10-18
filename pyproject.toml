@@ -97,6 +97,8 @@ default-groups = ["lint", "test", "demo"]
 extend-exclude = ["prototypes", "typings"]
 
 [tool.pyright]
+# The mode the editor runs too, so CI and the editor report the same things.
+typeCheckingMode = "strict"
 exclude = ["prototypes", ".venv"]
 # typings/ is pyright's default stub path, and is where the rubicon-objc
 # stubs land; it is named here only to keep them out of the check itself.
@@ -107,6 +109,14 @@ reportMissingModuleSource = "none"
 # An overriding method says so, rather than leaving a reader to go and
 # check for themselves. Enforced here rather than left to review.
 reportImplicitOverride = "error"
+
+# Tests check internals on purpose, so private names are theirs to reach.
+# extraPaths resolves their imports as the rest of the project's are: tests.*
+# from the root, and aio_rfcomm from src rather than whatever is installed.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+extraPaths = [".", "src"]
+reportPrivateUsage = false
 
 [tool.ruff.lint]
 # Not among ruff's default rules, and what makes the banned list below bite.

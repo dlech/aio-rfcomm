@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 David Lechner <david@pybricks.com>
 
+# These classes and Bluetooth work as one unit across modules, calling members
+# underscored only to keep them out of the public API.
+# pyright: reportPrivateUsage=false
+
 """
 Serving, the way a listening socket does it.
 
