@@ -17,7 +17,7 @@ import logging
 import sys
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 assert not TYPE_CHECKING or sys.platform == "darwin"
 
@@ -68,6 +68,9 @@ class _Manager(_Observable, Protocol):
     # Reached privately, but a ``CBManager``, and its state is public API.
     @property
     def state(self) -> int: ...
+    # Private: whether the coordinator let this manager through TCC.
+    @property
+    def tccApproved(self) -> bool: ...
 
 
 class _Coordinator(Protocol):
@@ -253,6 +256,34 @@ async def _reach_classic_manager() -> _Manager | None:
     return await reached
 
 
+def _missed_the_answer(manager: _Manager) -> bool:
+    """
+    Say whether the coordinator made the classic manager before TCC let it.
+
+    A bluetoothd restart while the permission dialog is open does this: the
+    reset ends the coordinator's wait in init, which then marks the manager
+    not approved (disassembly of macOS 26.6.2), and CoreBluetooth's classic
+    calls check that mark. bluetoothd checks a classic session's permission
+    once, when it checks in. Measured on macOS 26.6.2: it told this manager
+    "unsupported", and then nothing through Allow, Don't Allow, and the
+    radio switched on and off, until bluetoothd restarted again. A new
+    process waits for the answer in the coordinator's init instead, and
+    macOS settles its request with the same answer.
+
+    Args:
+        manager: The classic manager.
+
+    Returns:
+        True if only a new process can use Bluetooth.
+    """
+    # A refused program's manager is not approved either, and a new process
+    # would be refused the same way.
+    return not manager.tccApproved and read_authorization() not in (
+        CBManagerAuthorization.DENIED,
+        CBManagerAuthorization.RESTRICTED,
+    )
+
+
 def _central_manager() -> _Manager | None:
     """
     Reach the central manager the coordinator keeps beside the classic one.
@@ -312,7 +343,7 @@ async def _wait_until_settled(manager: _Manager) -> None:
 
 async def report_states(
     report: Callable[[int, int], None], reached: asyncio.Event
-) -> NoReturn:
+) -> None:
     """
     Report the manager's state now, and again on every change.
 
@@ -335,6 +366,10 @@ async def report_states(
             IOBluetooth call on this thread can hold it until a permission
             dialog is answered, since most of them reach the manager too and
             wait for the first to finish (measured on macOS 26.6.2).
+
+    Returns:
+        Only if this process's manager missed the permission answer, which
+        only a new process recovers from. See ``_missed_the_answer``.
     """
     last: tuple[int, int] | None = None
 
@@ -358,6 +393,9 @@ async def report_states(
         )
         await asyncio.Event().wait()
         raise AssertionError("an event nobody sets was set")
+
+    if _missed_the_answer(manager):
+        return
 
     central = _central_manager()
 

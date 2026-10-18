@@ -162,7 +162,8 @@ class Helper:
         self._waiting: dict[int, asyncio.Future[tuple[Any, list[int]]]] = {}
         self._channels: dict[int, Ending] = {}
         self._finished: dict[int, asyncio.Future[None]] = {}
-        # None marks the helper's end, so a reader waiting here hears of it.
+        # None marks the helper's end, or its manager having missed the
+        # permission answer, so a reader waiting here hears of it.
         self._states: asyncio.Queue[tuple[int, int] | None] = asyncio.Queue()
         self._requests: asyncio.Queue[Request | None] = asyncio.Queue()
         # Set once the service has gone: withdrawn, or the helper stopped.
@@ -259,7 +260,7 @@ class Helper:
         if finished is not None:
             await finished
 
-    async def next_state(self) -> tuple[int, int]:
+    async def next_state(self) -> tuple[int, int] | None:
         """
         Wait for the helper to report the manager's state.
 
@@ -267,7 +268,9 @@ class Helper:
         that, one per change, in order.
 
         Returns:
-            The ``CBManagerState`` and the ``CBManagerAuthorization`` with it.
+            The ``CBManagerState`` and the ``CBManagerAuthorization`` with it,
+            or ``None`` once the helper says its manager missed the permission
+            answer, which only a new helper recovers from.
 
         Raises:
             RfcommError: The helper has stopped. States it sent before it
@@ -280,8 +283,8 @@ class Helper:
         if reported is None:
             # Left for whoever asks next, who must hear the same.
             self._states.put_nowait(None)
-            assert self._stopped is not None
-            raise self._stopped
+            if self._stopped is not None:
+                raise self._stopped
         return reported
 
     async def next_request(self) -> Request:
@@ -417,6 +420,8 @@ class Helper:
                     finished.set_result(None)
             case "state":
                 self._states.put_nowait((message["state"], message["authorization"]))
+            case "stale":
+                self._states.put_nowait(None)
             case _:
                 pass
 

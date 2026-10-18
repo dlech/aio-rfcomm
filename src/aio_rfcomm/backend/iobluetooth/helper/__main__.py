@@ -155,6 +155,10 @@ async def _report_states(link: Link, reached: asyncio.Event) -> None:
             )
         except Exception:
             logger.exception("could not read the power state either")
+    else:
+        # Its manager missed the permission answer: only a new helper can use
+        # Bluetooth.
+        link.send({"event": "stale"})
 
 
 def _forget(

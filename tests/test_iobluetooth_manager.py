@@ -435,6 +435,74 @@ async def test_the_authorization_is_said_before_the_manager_is_reached(
 
     monkeypatch.setattr(bindings, "ObjCClass", find_class)
     monkeypatch.setattr(bindings, "CBManager", FakeAuthorization(unasked))
+    found = asyncio.Event()
+    watching = asyncio.ensure_future(
+        native.report_states(
+            lambda state, authorization: reports.append((state, authorization)),
+            found,
+        )
+    )
+    try:
+        async with asyncio.timeout(1):
+            await found.wait()
+        assert reached == [[(CBManagerState.UNKNOWN, unasked)]]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_a_manager_that_missed_the_answer_is_given_up_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on macOS 26.6.2, with bluetoothd restarted while the permission
+    dialog was open: the classic manager was reached with the authorization
+    still not determined, the central manager resetting, and the classic one
+    not approved and saying unsupported. It never recovered.
+    """
+    manager = FakeManager.alloc().init()
+    manager.state = CBManagerState.UNSUPPORTED
+    manager.tccApproved = False
+    central = FakeManager.alloc().init()
+    central.state = CBManagerState.RESETTING
+    central.tccApproved = False
+
+    def find_class(_name: str) -> FakeCoordinatorClass:
+        return FakeCoordinatorClass(manager, central)
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
+    monkeypatch.setattr(
+        bindings, "CBManager", FakeAuthorization(CBManagerAuthorization.NOT_DETERMINED)
+    )
+    reports: list[tuple[int, int]] = []
+    async with asyncio.timeout(1):
+        await native.report_states(
+            lambda state, authorization: reports.append((state, authorization)),
+            asyncio.Event(),
+        )
+    assert reports == [(CBManagerState.UNKNOWN, CBManagerAuthorization.NOT_DETERMINED)]
+
+
+async def test_a_refused_manager_is_still_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on macOS 26.6.2, after Don't Allow: the classic manager was not
+    approved either, said unsupported, and the central manager unauthorized.
+    """
+    refused = CBManagerAuthorization.DENIED
+    manager = FakeManager.alloc().init()
+    manager.state = CBManagerState.UNSUPPORTED
+    manager.tccApproved = False
+    central = FakeManager.alloc().init()
+    central.state = CBManagerState.UNAUTHORIZED
+
+    def find_class(_name: str) -> FakeCoordinatorClass:
+        return FakeCoordinatorClass(manager, central)
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
+    monkeypatch.setattr(bindings, "CBManager", FakeAuthorization(refused))
+    reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
         native.report_states(
             lambda state, authorization: reports.append((state, authorization)),
@@ -443,7 +511,12 @@ async def test_the_authorization_is_said_before_the_manager_is_reached(
     )
     try:
         await _reported(reports, 2)
-        assert reached == [[(CBManagerState.UNKNOWN, unasked)]]
+        await asyncio.sleep(SETTLE)
+        assert not watching.done()
+        assert reports == [
+            (CBManagerState.UNKNOWN, refused),
+            (CBManagerState.UNSUPPORTED, refused),
+        ]
     finally:
         watching.cancel()
         await asyncio.gather(watching, return_exceptions=True)

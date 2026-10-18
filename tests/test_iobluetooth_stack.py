@@ -199,6 +199,48 @@ class _Dialog:
         self.answered.wait(5)
 
 
+class _RestartedDialog:
+    """
+    A permission dialog left open across a bluetoothd restart.
+
+    Measured on macOS 26.6.2: the restart let the first helper's coordinator
+    init go on with the dialog still open, and its classic manager was not
+    approved. A helper started after that waited in init until the dialog was
+    answered, and macOS settled its request with the same answer.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, framework: Framework) -> None:
+        self.restarted = threading.Event()
+        self.answered = threading.Event()
+        self.first: threading.Thread | None = None
+        dialog = self
+
+        def find_class(name: str) -> object:
+            if name == bindings.COORDINATOR:
+                dialog.wait()
+            return framework.find_class(name)
+
+        monkeypatch.setattr(bindings, "ObjCClass", find_class)
+
+    def wait(self) -> None:
+        here = threading.current_thread()
+        if here is threading.main_thread():
+            # A request, which waits until the manager has been reached.
+            return
+
+        if self.first is None:
+            self.first = here
+        # Bounded, so that a mistake fails the test rather than hanging it.
+        if here is self.first:
+            self.restarted.wait(5)
+        else:
+            self.answered.wait(5)
+
+    def end(self) -> None:
+        self.restarted.set()
+        self.answered.set()
+
+
 @asynccontextmanager
 async def _stack(helpers: _Helpers | None = None) -> AsyncGenerator[Bluetooth, None]:
     """
@@ -740,6 +782,99 @@ async def test_a_helper_held_by_a_permission_dialog_goes_on_once_answered(
         assert threading.current_thread() not in dialog.held[:1]
     finally:
         dialog.answered.set()
+
+
+async def _restart_under_the_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Framework, _RestartedDialog, _Helpers]:
+    framework = fake_framework_parts(
+        monkeypatch,
+        state=CBManagerState.UNSUPPORTED,
+        authorization=CBManagerAuthorization.NOT_DETERMINED,
+    )
+    framework.manager.tccApproved = False
+    return framework, _RestartedDialog(monkeypatch, framework), _Helpers()
+
+
+def _answer(
+    monkeypatch: pytest.MonkeyPatch,
+    framework: Framework,
+    dialog: _RestartedDialog,
+    authorization: int,
+    state: int,
+) -> None:
+    # A new helper is a new process, with a manager of its own.
+    fresh = FakeManager.alloc().init()
+    fresh.state = state
+    fresh.tccApproved = authorization == CBManagerAuthorization.ALLOWED_ALWAYS
+    framework.manager = fresh
+    monkeypatch.setattr(bindings.CBManager, "authorization", authorization)
+    dialog.answered.set()
+
+
+async def test_a_bluetoothd_restart_under_a_permission_dialog_waits_for_allow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    framework, dialog, helpers = await _restart_under_the_dialog(monkeypatch)
+    try:
+        async with _stack(helpers) as bluetooth:
+            watcher = bluetooth.watch_availability()
+            assert await anext(watcher) is Availability.AWAITING_PERMISSION
+
+            dialog.restarted.set()
+            async with asyncio.timeout(1):
+                while len(helpers.started) < 2:
+                    await asyncio.sleep(0.01)
+            with pytest.raises(BluetoothUnavailableError) as raised:
+                await bluetooth.list_known_devices()
+            assert raised.value.reason is Availability.AWAITING_PERMISSION
+
+            _answer(
+                monkeypatch,
+                framework,
+                dialog,
+                CBManagerAuthorization.ALLOWED_ALWAYS,
+                CBManagerState.POWERED_ON,
+            )
+            async with asyncio.timeout(1):
+                assert await anext(watcher) is Availability.USABLE
+                await bluetooth.list_known_devices()
+            assert len(helpers.started) == 2
+    finally:
+        dialog.end()
+
+
+async def test_a_bluetoothd_restart_under_a_permission_dialog_waits_for_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on macOS 26.6.2: after Don't Allow, the new helper's classic
+    manager was not approved, said unsupported, and the authorization denied.
+    """
+    framework, dialog, helpers = await _restart_under_the_dialog(monkeypatch)
+    try:
+        async with _stack(helpers) as bluetooth:
+            watcher = bluetooth.watch_availability()
+            assert await anext(watcher) is Availability.AWAITING_PERMISSION
+
+            dialog.restarted.set()
+            async with asyncio.timeout(1):
+                while len(helpers.started) < 2:
+                    await asyncio.sleep(0.01)
+
+            _answer(
+                monkeypatch,
+                framework,
+                dialog,
+                CBManagerAuthorization.DENIED,
+                CBManagerState.UNSUPPORTED,
+            )
+            async with asyncio.timeout(1):
+                assert await anext(watcher) is Availability.NOT_ALLOWED
+            await asyncio.sleep(0.05)
+            assert len(helpers.started) == 2
+    finally:
+        dialog.end()
 
 
 # --------------------------------------------------------------------------
