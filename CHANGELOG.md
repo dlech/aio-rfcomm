@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   availability is now `UNSUPPORTED`.
 - macOS: the permission dialog and Privacy & Security show the name passed to
   `aio_rfcomm.macos.prompt_under_name()` instead of "AioRfcommHelper".
+- macOS: a program that ended while the permission dialog was open waited two
+  seconds for the helper process, then logged a warning and killed it. The
+  helper now exits at once.
 
 ## [1.0.0] - 2026-10-17
 

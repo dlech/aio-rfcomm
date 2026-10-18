@@ -74,6 +74,9 @@ class _Session:
         """
         self.link = link
         self.group = group
+        # Set once IOBluetooth can be called without holding this thread
+        # until a permission dialog is answered. See native.report_states.
+        self.reached = asyncio.Event()
         self.serving: asyncio.Task[None] | None = None
         # Set once the serve request's task has finished, its service
         # withdrawn. Withdrawing waits on this rather than on the task.
@@ -93,7 +96,7 @@ async def _serve(sock: socket.socket) -> None:
         try:
             async with asyncio.TaskGroup() as group:
                 session = _Session(link, group)
-                group.create_task(_report_states(link))
+                group.create_task(_report_states(link, session.reached))
                 while True:
                     frame = await link.receive()
                     if frame is None:
@@ -122,7 +125,7 @@ async def _serve(sock: socket.socket) -> None:
         link.close()
 
 
-async def _report_states(link: Link) -> None:
+async def _report_states(link: Link, reached: asyncio.Event) -> None:
     """
     Tell the library the manager's state, now and on every change.
 
@@ -131,17 +134,19 @@ async def _report_states(link: Link) -> None:
 
     Args:
         link: The control socket.
+        reached: Set once IOBluetooth can be called from this thread.
     """
 
     def report(state: int, authorization: int) -> None:
         link.send({"event": "state", "state": state, "authorization": authorization})
 
     try:
-        await native.report_states(report)
+        await native.report_states(report, reached)
     except Exception:
         # Losing the watch costs the reports, not the helper and its channels,
         # but the library waits for a first one: the power state stands in.
         logger.exception("could not watch the manager's state")
+        reached.set()
         try:
             powered = native.read_power_state()
             report(
@@ -176,6 +181,9 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
     """
     link = session.link
     number = message["id"]
+    # Every request calls IOBluetooth, which could hold this thread, and with
+    # it the end of file that says the library has gone.
+    await session.reached.wait()
     try:
         match message["op"]:
             case "ready":
@@ -500,7 +508,8 @@ def main() -> int:
     native.keep_unread_bytes()
     # Every IOBluetooth call below runs on this thread, driven by the
     # CFRunLoop this loop is built on. Anywhere else, asynchronous calls
-    # return success and then never complete.
+    # return success and then never complete. The one exception is the first
+    # reach of the manager, which is synchronous: see native.report_states.
     loop = RubiconEventLoop()
     try:
         loop.run_until_complete(_serve(sock))
