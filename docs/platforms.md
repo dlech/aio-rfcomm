@@ -12,15 +12,16 @@ answer under the program's name.
 
 A bundled application is asked about under its own name. Put
 `NSBluetoothAlwaysUsageDescription` in the application's `Info.plist`, with
-the reason to show in the dialog. Without it, macOS can end the program
-instead of asking.
+the reason to show in the dialog. Without it, macOS can end the library's
+helper process instead of asking, and the `open_bluetooth()` block raises
+`aio_rfcomm.macos.MissingUsageDescriptionError`.
 
 A script run from a terminal has no name of its own. Without one, macOS goes
 by the permission of the program that started it, such as the terminal. It
-asks under that program's name, or refuses if that program cannot be asked,
-and then the availability is `NOT_ALLOWED`. If that program already has
-permission, Bluetooth works without asking. To give it permission, add it
-under Privacy & Security > Bluetooth in System Settings.
+asks under that program's name. If that program cannot be asked, the
+`open_bluetooth()` block raises `MissingUsageDescriptionError`. If that
+program already has permission, Bluetooth works without asking. To give it
+permission, add it under Privacy & Security > Bluetooth in System Settings.
 
 A script started by launchd, with a Python from python.org, Homebrew or uv,
 is asked about as that Python itself. Measured on macOS 26.6.2.

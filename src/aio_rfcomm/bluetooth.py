@@ -523,5 +523,8 @@ def open_bluetooth() -> AbstractAsyncContextManager[Bluetooth]:
         BluetoothAlreadyOpenError: Bluetooth is already open in this program.
         RfcommError: The library itself cannot start. On macOS, that is its
             helper process.
+        aio_rfcomm.macos.MissingUsageDescriptionError: On macOS, from the
+            block: the program gave macOS no way to ask the user about
+            Bluetooth.
     """
     return _open_bluetooth(get_backend())

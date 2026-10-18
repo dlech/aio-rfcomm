@@ -10,5 +10,5 @@ Every public name, one page per topic:
 - [macOS](macos.md): naming your program for the permission dialog.
 
 Everything is importable from the top-level `aio_rfcomm` package, except the
-errors, which live in `aio_rfcomm.errors`, and `prompt_under_name`, which lives
-in `aio_rfcomm.macos`.
+errors, which live in `aio_rfcomm.errors`, and what only macOS needs, which
+lives in `aio_rfcomm.macos`.

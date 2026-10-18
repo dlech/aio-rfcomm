@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - macOS: `open_bluetooth` no longer waits for the user to answer the
   permission dialog. The availability is `AWAITING_PERMISSION` until they do,
   then `USABLE` or `NOT_ALLOWED`.
+- macOS: when macOS ends the helper process because the program has no
+  usage description, the `open_bluetooth()` block raises
+  `aio_rfcomm.macos.MissingUsageDescriptionError`, a `RuntimeError`. This is
+  the program's mistake, so it is no longer reported as `NOT_ALLOWED`.
 
 ### Fixed
 

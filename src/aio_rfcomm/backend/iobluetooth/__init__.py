@@ -47,6 +47,7 @@ from aio_rfcomm.backend.iobluetooth.process import (
     Helper,
     HelperFailedError,
     Request,
+    StopError,
     run_helper,
 )
 from aio_rfcomm.backend.provider import (
@@ -65,6 +66,7 @@ from aio_rfcomm.errors import (
     RfcommError,
     UnsupportedOperationError,
 )
+from aio_rfcomm.macos import MissingUsageDescriptionError
 
 __all__ = ["IOBluetoothBackend"]
 
@@ -523,6 +525,8 @@ class IOBluetoothBackend(BackendProvider):
             HelperFailedError: The first helper stopped before it said
                 anything. A later failure is reported as unavailable instead,
                 since the caller has long since been told about Bluetooth.
+            MissingUsageDescriptionError: macOS ended the helper, because it
+                could not ask about Bluetooth. A new one would end the same way.
         """
         replacing = False
 
@@ -535,10 +539,11 @@ class IOBluetoothBackend(BackendProvider):
                     # A helper that stops takes its channels with it, and they
                     # have to hear why, not that their link dropped, so this
                     # is said before they are told anything.
-                    def stopped(error: RfcommError) -> None:
+                    def stopped(error: StopError) -> None:
                         match error:
-                            case BluetoothUnavailableError(reason=reason):
-                                state.set(reason, str(error))
+                            case MissingUsageDescriptionError():
+                                # The program's mistake, raised instead.
+                                pass
                             case _ if state.is_known:
                                 state.set(
                                     Availability.SERVICE_UNAVAILABLE,
@@ -552,7 +557,7 @@ class IOBluetoothBackend(BackendProvider):
                     async def confirm() -> None:
                         # The helper records the answer itself, the moment it
                         # arrives, and a failure is the relay's to report.
-                        with suppress(RfcommError):
+                        with suppress(RfcommError, MissingUsageDescriptionError):
                             await helper.ask("ready")
 
                     helper.on_stop = stopped
@@ -576,11 +581,6 @@ class IOBluetoothBackend(BackendProvider):
                         ready = helper.ready
                         helper.on_stop = None
                         bluetooth.helper = None
-            except BluetoothUnavailableError as refused:
-                # macOS refused Bluetooth to the helper and ended it, and would
-                # refuse a new one the same way.
-                state.set(refused.reason, str(refused))
-                return
             except (HelperFailedError, OSError) as failed:
                 if not ready:
                     if not state.is_known:
