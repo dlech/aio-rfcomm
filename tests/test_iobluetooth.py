@@ -16,6 +16,7 @@ descriptors -- which is why the whole module steps aside on Windows.
 
 import asyncio
 import os
+import signal
 import socket
 import sys
 from collections.abc import AsyncGenerator
@@ -47,6 +48,7 @@ from aio_rfcomm.backend.iobluetooth.process import (
     Helper,
     HelperFailedError,
     _rebuild,
+    _why_stopped,
     run_helper,
 )
 from aio_rfcomm.backend.iobluetooth.protocol import MAX_MESSAGE, Link, ProtocolError
@@ -518,16 +520,63 @@ def test_a_refused_permission_is_not_reported_as_a_dead_radio() -> None:
     once.
     """
     denied = CBManagerAuthorization.DENIED
-    assert _availability(CBManagerState.POWERED_OFF, denied) is Availability.NOT_ALLOWED
+    assert _availability(CBManagerState.POWERED_OFF, denied) is (
+        Availability.NOT_ALLOWED
+    )
     assert "System Settings" in _not_allowed(denied)
 
 
-def test_an_unanswered_prompt_says_so() -> None:
-    unasked = CBManagerAuthorization.NOT_DETERMINED
-    assert (
-        _availability(CBManagerState.POWERED_OFF, unasked) is Availability.NOT_ALLOWED
+def test_a_refused_dialog_is_not_reported_as_no_bluetooth() -> None:
+    """
+    Measured on macOS 26.6.2: after the user clicked Don't Allow, the manager
+    said unsupported, with the authorization denied.
+    """
+    denied = CBManagerAuthorization.DENIED
+    assert _availability(CBManagerState.UNSUPPORTED, denied) is (
+        Availability.NOT_ALLOWED
     )
-    assert "dialog" in _not_allowed(unasked)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        CBManagerState.UNKNOWN,
+        CBManagerState.POWERED_OFF,
+        CBManagerState.UNAUTHORIZED,
+        CBManagerState.UNSUPPORTED,
+    ],
+)
+@pytest.mark.parametrize(
+    "authorization",
+    [CBManagerAuthorization.RESTRICTED, CBManagerAuthorization.DENIED],
+)
+def test_a_program_not_allowed_is_not_allowed_whatever_the_state(
+    state: CBManagerState, authorization: CBManagerAuthorization
+) -> None:
+    assert _availability(state, authorization) is (Availability.NOT_ALLOWED)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        CBManagerState.UNKNOWN,
+        CBManagerState.POWERED_OFF,
+        CBManagerState.UNAUTHORIZED,
+    ],
+)
+def test_an_unanswered_prompt_is_awaiting_permission(state: CBManagerState) -> None:
+    """
+    Measured on GitHub's macOS 15.7.9 and 26.6.2 runners and on macOS 26.6.2:
+    a helper asking under its own name reads NOT_DETERMINED, and is then held,
+    with the state still unknown, for as long as the permission dialog is open.
+    """
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    assert _availability(state, unasked) is Availability.AWAITING_PERMISSION
+
+
+def test_a_powered_on_radio_is_usable_whatever_the_authorization_says() -> None:
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    assert _availability(CBManagerState.POWERED_ON, unasked) is Availability.USABLE
 
 
 def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
@@ -536,8 +585,8 @@ def test_a_restriction_says_it_is_not_this_program_s_to_undo() -> None:
 
 def test_an_allowed_program_with_a_dead_radio_is_told_to_turn_it_on() -> None:
     allowed = CBManagerAuthorization.ALLOWED_ALWAYS
-    assert (
-        _availability(CBManagerState.POWERED_OFF, allowed) is Availability.SWITCHED_OFF
+    assert _availability(CBManagerState.POWERED_OFF, allowed) is (
+        Availability.SWITCHED_OFF
     )
 
 
@@ -566,6 +615,61 @@ def test_each_manager_state_means_one_thing(
 ) -> None:
     allowed = CBManagerAuthorization.ALLOWED_ALWAYS
     assert _availability(state, allowed) is availability
+
+
+# --------------------------------------------------------------------------
+# Why a helper stopped
+# --------------------------------------------------------------------------
+
+
+def _exits_with(
+    monkeypatch: pytest.MonkeyPatch, *statuses: tuple[int, int]
+) -> list[int]:
+    """
+    Make ``os.waitpid`` give each status in turn, then the last for good.
+
+    Returns:
+        The process ids it was asked about.
+    """
+    asked: list[int] = []
+    waiting = list(statuses)
+
+    def waitpid(pid: int, _options: int) -> tuple[int, int]:
+        asked.append(pid)
+        return waiting.pop(0) if len(waiting) > 1 else waiting[0]
+
+    monkeypatch.setattr(os, "waitpid", waitpid)
+    return asked
+
+
+async def test_a_helper_macos_ended_was_not_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _exits_with(monkeypatch, (42, signal.SIGABRT))
+    error = await _why_stopped(42)
+    assert isinstance(error, BluetoothUnavailableError)
+    assert error.reason is Availability.NOT_ALLOWED
+    assert "prompt_under_name" in str(error)
+
+
+async def test_the_exit_status_is_waited_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    The control socket closes as the helper exits, a moment before its
+    status can be had.
+    """
+    asked = _exits_with(monkeypatch, (0, 0), (0, 0), (42, signal.SIGABRT))
+    error = await _why_stopped(42)
+    assert isinstance(error, BluetoothUnavailableError)
+    assert asked == [42, 42, 42]
+
+
+async def test_a_helper_that_exits_otherwise_just_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _exits_with(monkeypatch, (42, 1 << 8))
+    error = await _why_stopped(42)
+    assert type(error) is HelperFailedError
+    assert "status 256" in str(error)
 
 
 # --------------------------------------------------------------------------

@@ -18,9 +18,12 @@ def prompt_under_name(*, name: str, reason: str) -> None:
 
     macOS asks the user before a program can use Bluetooth. A bundled application
     is asked about under its own name, and does not need this. A script, a REPL
-    or a command line tool has no name of its own. Without one, macOS refuses
-    instead of asking, and the availability is ``NOT_ALLOWED``. Call this before
-    opening Bluetooth.
+    or a command line tool has no name of its own. Without one, macOS goes by the
+    permission of the program that started it, such as the terminal. It asks
+    under that program's name, or refuses if that program cannot be asked, and
+    then the availability is ``NOT_ALLOWED``. If that program already has
+    permission, Bluetooth works without asking. Call this before opening
+    Bluetooth, so that your program is asked about under its own name.
 
     The user sees ``name`` in the permission dialog and later in the system
     settings, and macOS remembers the answer under it. Name it after your program,

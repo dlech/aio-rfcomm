@@ -72,6 +72,8 @@ class _Manager(_Observable, Protocol):
 class _Coordinator(Protocol):
     @property
     def classicManager(self) -> _Manager: ...
+    @property
+    def centralManager(self) -> _Manager | None: ...
 
 
 class _CoordinatorClass(Protocol):
@@ -136,6 +138,7 @@ class _StateReporter(NSObject):
 
     loop: asyncio.AbstractEventLoop
     report: Callable[[int, int], None]
+    central: _Manager | None
 
     @objc_method
     def init(self):
@@ -154,7 +157,9 @@ class _StateReporter(NSObject):
         # Read here, on the framework thread, so each change is reported as
         # it was rather than as it is by the time the loop gets to it.
         self.loop.call_soon_threadsafe(
-            self.report, cast(_Manager, watched).state, read_authorization()
+            self.report,
+            _read_state(cast(_Manager, watched), self.central),
+            read_authorization(),
         )
 
 
@@ -196,6 +201,11 @@ def _classic_manager() -> _Manager | None:
     """
     Reach CoreBluetooth's classic manager, if this macOS has one.
 
+    Blocks while a permission dialog for this process is open: the shared
+    coordinator's ``init`` waits with no time limit for its central manager's
+    first state, which macOS holds back until the dialog is answered. Seen in
+    the disassembly of macOS 26.6.2, and measured on macOS 15.7.9 and 26.6.2.
+
     Returns:
         The manager, or ``None`` if the private path to it has gone.
     """
@@ -205,6 +215,46 @@ def _classic_manager() -> _Manager | None:
     except Exception:  # noqa: BLE001
         logger.debug("CoreBluetooth's classic manager could not be reached")
         return None
+
+
+def _central_manager() -> _Manager | None:
+    """
+    Reach the central manager the coordinator keeps beside the classic one.
+
+    Returns:
+        The manager, or ``None`` if it cannot be reached.
+    """
+    try:
+        coordinator = cast(_CoordinatorClass, find_class(COORDINATOR))
+        return coordinator.sharedInstance().centralManager
+    except Exception:  # noqa: BLE001
+        logger.debug("CoreBluetooth's central manager could not be reached")
+        return None
+
+
+def _read_state(manager: _Manager, central: _Manager | None) -> int:
+    """
+    Read the classic manager's state, or what stands in for it.
+
+    On a GitHub-hosted macOS runner (macOS 15.7.9 and 26.6.2), whose virtual
+    controller never comes up, the classic manager stays unknown for good,
+    while the central manager says unsupported. Measured.
+
+    Args:
+        manager: The classic manager.
+        central: The central manager, if it could be reached.
+
+    Returns:
+        A ``CBManagerState``.
+    """
+    state = manager.state
+    if (
+        state == CBManagerState.UNKNOWN
+        and central is not None
+        and central.state == CBManagerState.UNSUPPORTED
+    ):
+        return CBManagerState.UNSUPPORTED
+    return state
 
 
 async def _wait_until_settled(manager: _Manager) -> None:
@@ -244,16 +294,6 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
         report: Called with each ``CBManagerState`` and the
             ``CBManagerAuthorization`` at the time, on this loop's thread.
     """
-    manager = _classic_manager()
-    if manager is None:
-        powered = read_power_state()
-        report(
-            CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF,
-            read_authorization(),
-        )
-        await asyncio.Event().wait()
-        raise AssertionError("an event nobody sets was set")
-
     last: tuple[int, int] | None = None
 
     def once(state: int, authorization: int) -> None:
@@ -262,9 +302,26 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
             last = (state, authorization)
             report(state, authorization)
 
+    # Said first, because reaching the manager can block this thread until a
+    # permission dialog is answered, and reading this does not.
+    once(CBManagerState.UNKNOWN, read_authorization())
+
+    manager = _classic_manager()
+    if manager is None:
+        powered = read_power_state()
+        once(
+            CBManagerState.POWERED_ON if powered else CBManagerState.POWERED_OFF,
+            read_authorization(),
+        )
+        await asyncio.Event().wait()
+        raise AssertionError("an event nobody sets was set")
+
+    central = _central_manager()
+
     # KVO offers no way to say which thread to answer on -- see the reporter.
     reporter = _StateReporter.alloc().init()
     reporter.report = once
+    reporter.central = central
     manager.addObserver(
         reporter, forKeyPath="state", options=_OBSERVE_INITIAL, context=None
     )
@@ -274,7 +331,9 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
         # it and before the observer hears of changes, so nothing reports it.
         # Read again now that the observer is in place, queued behind that
         # notification.
-        asyncio.get_running_loop().call_soon(once, manager.state, read_authorization())
+        asyncio.get_running_loop().call_soon(
+            once, _read_state(manager, central), read_authorization()
+        )
 
         # Unknown is documented as temporary with an update to follow, but in
         # a fresh process on macOS 26.6.2 the update was measured going
@@ -282,7 +341,7 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
         await asyncio.sleep(0)
         while last is not None and last[0] == CBManagerState.UNKNOWN:
             await asyncio.sleep(_UNKNOWN_POLL_SECONDS)
-            once(manager.state, read_authorization())
+            once(_read_state(manager, central), read_authorization())
 
         await asyncio.Event().wait()
         raise AssertionError("an event nobody sets was set")
@@ -324,18 +383,32 @@ def _unusable(state: int) -> RfcommError:
     Returns:
         The error to raise.
     """
+    authorization = read_authorization()
     match state:
-        case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED:
-            # Both, because macOS 26.6.2 reports a radio this program may not
+        case _ if authorization in (
+            CBManagerAuthorization.DENIED,
+            CBManagerAuthorization.RESTRICTED,
+        ):
+            # Whatever the state says: after the user refused the dialog on
+            # macOS 26.6.2, the manager said unsupported.
+            return BluetoothUnavailableError(
+                Availability.NOT_ALLOWED,
+                "Bluetooth is not allowed for this program. Check Privacy & "
+                "Security > Bluetooth in System Settings",
+            )
+        case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED if (
+            authorization == CBManagerAuthorization.ALLOWED_ALWAYS
+        ):
+            # Checked, because macOS 26.6.2 reports a radio this program may not
             # use as switched off -- so telling someone to turn Bluetooth on
             # would send them to a switch that is already on. The authorization
             # is what separates the two, as it does in the reported
             # availability.
-            if read_authorization() == CBManagerAuthorization.ALLOWED_ALWAYS:
-                return BluetoothUnavailableError(
-                    Availability.SWITCHED_OFF,
-                    "this Mac's Bluetooth is switched off. Turn it on",
-                )
+            return BluetoothUnavailableError(
+                Availability.SWITCHED_OFF,
+                "this Mac's Bluetooth is switched off. Turn it on",
+            )
+        case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED:
             return BluetoothUnavailableError(
                 Availability.NOT_ALLOWED,
                 "Bluetooth is not allowed for this program. Check Privacy & "

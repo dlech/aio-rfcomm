@@ -44,6 +44,7 @@ async for availability in bluetooth.watch_availability():
 | `SWITCHED_OFF` | Bluetooth is turned off. | Turn it on. |
 | `NO_ADAPTER` | The computer has no Bluetooth adapter. | Plug one in. |
 | `NOT_ALLOWED` | This program does not have permission to use Bluetooth. | Give it permission in the system settings. |
+| `AWAITING_PERMISSION` | The system is asking the user whether this program may use Bluetooth. | Answer the permission dialog. |
 | `SERVICE_UNAVAILABLE` | The system's Bluetooth service is not running. | Wait a moment. It usually restarts by itself. |
 | `UNSUPPORTED` | This system cannot use Bluetooth at all. | Use a different computer. |
 

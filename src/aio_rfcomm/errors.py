@@ -49,6 +49,9 @@ _DESCRIPTIONS: dict[UnavailableReason, str] = {
     Availability.SWITCHED_OFF: "Bluetooth is switched off",
     Availability.NO_ADAPTER: "this computer has no Bluetooth adapter",
     Availability.NOT_ALLOWED: "this program may not use Bluetooth",
+    Availability.AWAITING_PERMISSION: (
+        "the system is asking whether this program may use Bluetooth"
+    ),
     Availability.SERVICE_UNAVAILABLE: "the Bluetooth service is not running",
     Availability.UNSUPPORTED: "this system has no Bluetooth",
 }

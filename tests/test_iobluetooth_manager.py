@@ -24,6 +24,7 @@ if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
 
 from rubicon.objc.runtime import set_ivar
+from typing_extensions import override
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
@@ -38,6 +39,7 @@ from aio_rfcomm.errors import (
 )
 from tests.fake_iobluetooth import (
     FakeAuthorization,
+    FakeCoordinator,
     FakeCoordinatorClass,
     FakeManager,
     SettlingManager,
@@ -177,6 +179,22 @@ async def test_an_unauthorized_state_is_a_permission_error(
     assert raised.value.reason is Availability.NOT_ALLOWED
 
 
+async def test_a_refused_dialog_is_not_a_machine_with_no_bluetooth(
+    manager: FakeManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Measured on macOS 26.6.2: after the user clicked Don't Allow, the manager
+    said unsupported, with the authorization denied.
+    """
+    monkeypatch.setattr(
+        bindings, "CBManager", FakeAuthorization(CBManagerAuthorization.DENIED)
+    )
+    manager.state = CBManagerState.UNSUPPORTED
+    with pytest.raises(BluetoothUnavailableError) as raised:
+        await wait_until_ready()
+    assert raised.value.reason is Availability.NOT_ALLOWED
+
+
 async def test_a_machine_with_no_bluetooth_is_not_an_adapter_that_is_off(
     manager: FakeManager,
 ) -> None:
@@ -275,7 +293,8 @@ async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None
         await until_observed(manager)
         change_state(manager, CBManagerState.POWERED_OFF)
         allowed = CBManagerAuthorization.ALLOWED_ALWAYS
-        assert await _reported(reports, 2) == [
+        assert await _reported(reports, 3) == [
+            (CBManagerState.UNKNOWN, allowed),
             (CBManagerState.POWERED_ON, allowed),
             (CBManagerState.POWERED_OFF, allowed),
         ]
@@ -304,8 +323,9 @@ async def test_a_restart_is_reported_state_by_state(manager: FakeManager) -> Non
             CBManagerState.POWERED_ON,
             CBManagerState.POWERED_OFF,
         )
-        states = [state for state, _ in await _reported(reports, 4)]
+        states = [state for state, _ in await _reported(reports, 5)]
         assert states == [
+            CBManagerState.UNKNOWN,
             CBManagerState.POWERED_ON,
             CBManagerState.RESETTING,
             CBManagerState.POWERED_ON,
@@ -381,6 +401,106 @@ async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> N
     assert not is_observed(manager)
 
 
+async def test_the_authorization_is_said_before_the_manager_is_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on GitHub's macOS 15.7.9 and 26.6.2 runners: reaching the
+    manager held the helper for as long as the permission dialog was open,
+    which there was forever, while the authorization could be read at once.
+    """
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    reports: list[tuple[int, int]] = []
+    # What had been reported when the manager was first reached.
+    reached: list[list[tuple[int, int]]] = []
+    manager = FakeManager.alloc().init()
+    manager.state = CBManagerState.POWERED_ON
+
+    class Held(FakeCoordinatorClass):
+        @override
+        def sharedInstance(self) -> FakeCoordinator:
+            if not reached:
+                reached.append(list(reports))
+            return super().sharedInstance()
+
+    def find_class(_name: str) -> Held:
+        return Held(manager)
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
+    monkeypatch.setattr(bindings, "CBManager", FakeAuthorization(unasked))
+    watching = asyncio.ensure_future(
+        native.report_states(
+            lambda state, authorization: reports.append((state, authorization))
+        )
+    )
+    try:
+        await _reported(reports, 2)
+        assert reached == [[(CBManagerState.UNKNOWN, unasked)]]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_a_controller_that_never_comes_up_is_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on GitHub's macOS 15.7.9 and 26.6.2 runners, which have a
+    virtual controller: the classic manager stayed unknown for good, and the
+    central manager beside it said unsupported.
+    """
+    manager = FakeManager.alloc().init()
+    manager.state = CBManagerState.UNKNOWN
+    central = FakeManager.alloc().init()
+    central.state = CBManagerState.UNSUPPORTED
+
+    def find_class(_name: str) -> FakeCoordinatorClass:
+        return FakeCoordinatorClass(manager, central)
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
+    monkeypatch.setattr(
+        bindings, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
+    )
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        native.report_states(lambda state, _auth: reports.append((state, 0)))
+    )
+    try:
+        states = [state for state, _ in await _reported(reports, 2)]
+        assert states == [CBManagerState.UNKNOWN, CBManagerState.UNSUPPORTED]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
+async def test_a_central_manager_does_not_overrule_a_known_state(
+    manager: FakeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager.state = CBManagerState.POWERED_OFF
+    central = FakeManager.alloc().init()
+    central.state = CBManagerState.UNSUPPORTED
+
+    def find_class(_name: str) -> FakeCoordinatorClass:
+        return FakeCoordinatorClass(manager, central)
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
+    reports: list[tuple[int, int]] = []
+    watching = asyncio.ensure_future(
+        native.report_states(lambda state, _auth: reports.append((state, 0)))
+    )
+    try:
+        await _reported(reports, 2)
+        await asyncio.sleep(SETTLE)
+        assert [state for state, _ in reports] == [
+            CBManagerState.UNKNOWN,
+            CBManagerState.POWERED_OFF,
+        ]
+    finally:
+        watching.cancel()
+        await asyncio.gather(watching, return_exceptions=True)
+
+
 class _Controller:
     """
     Stands in for ``IOBluetoothHostController``, asked only its power state.
@@ -412,8 +532,10 @@ async def test_a_manager_that_cannot_be_reached_reports_the_power_once(
     )
     try:
         await asyncio.sleep(SETTLE)
+        allowed = CBManagerAuthorization.ALLOWED_ALWAYS
         assert reports == [
-            (CBManagerState.POWERED_ON, CBManagerAuthorization.ALLOWED_ALWAYS)
+            (CBManagerState.UNKNOWN, allowed),
+            (CBManagerState.POWERED_ON, allowed),
         ]
         assert not watching.done()
     finally:

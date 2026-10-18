@@ -15,7 +15,7 @@ left out, since the child would not have the fake.
 import asyncio
 import socket
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -29,7 +29,7 @@ if sys.platform != "darwin":
 
 from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import IOBluetoothBackend, IOBluetoothBluetooth
-from aio_rfcomm.backend.iobluetooth.codes import CBManagerState
+from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth.helper import __main__ as helper_main
 from aio_rfcomm.backend.iobluetooth.process import Helper, HelperFailedError
 from aio_rfcomm.backend.iobluetooth.protocol import Link
@@ -40,6 +40,7 @@ from aio_rfcomm.errors import (
     ChannelClosedError,
     ChannelInUseError,
     DeviceNotFoundError,
+    RfcommError,
 )
 from aio_rfcomm.service import RfcommConnectionRequest, RfcommService
 from tests.fake_iobluetooth import (
@@ -91,6 +92,68 @@ class _Helpers:
         """
         _helper, far = self.started[-1]
         far.shutdown(socket.SHUT_RDWR)
+
+
+class _HeldHelper:
+    """
+    A helper the test speaks for, which can stay held as a permission dialog
+    holds a real one.
+    """
+
+    def __init__(
+        self,
+        says: list[tuple[int, int]],
+        explain: Callable[[], Awaitable[RfcommError]] | None = None,
+    ) -> None:
+        """
+        Args:
+            says: The states it reports as it starts, as the manager's state
+                and the authorization.
+            explain: Why it stopped, once it has.
+        """
+        self.says = says
+        self.explain = explain
+        self.far: Link | None = None
+        self.starts = 0
+
+    @asynccontextmanager
+    async def start(self) -> AsyncGenerator[Helper, None]:
+        self.starts += 1
+        near, far = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.far = Link(far)
+        for state, authorization in self.says:
+            self.far.send(
+                {"event": "state", "state": state, "authorization": authorization}
+            )
+        helper = Helper(Link(near))
+        reading = asyncio.ensure_future(helper.deliver(self.explain))
+        try:
+            yield helper
+        finally:
+            helper.stop(HelperFailedError("the helper was stopped"))
+            helper._link.close()
+            self.far.close()
+            reading.cancel()
+            await asyncio.gather(reading, return_exceptions=True)
+
+    async def answer_ready(self) -> None:
+        """
+        Answer the "ready" the library is waiting on.
+        """
+        assert self.far is not None
+        async with asyncio.timeout(1):
+            frame = await self.far.receive()
+        assert frame is not None
+        message, _fds = frame
+        assert message["op"] == "ready"
+        self.far.send({"id": message["id"], "ok": None})
+
+    def stop(self) -> None:
+        """
+        End the helper, as macOS ending it would.
+        """
+        assert self.far is not None
+        self.far.close()
 
 
 @asynccontextmanager
@@ -413,6 +476,139 @@ async def test_a_replacement_that_will_not_start_is_not_retried(
 
         await asyncio.sleep(0.05)
     assert attempts == 2
+
+
+async def test_a_permission_dialog_nobody_answers_is_awaited() -> None:
+    """
+    Measured on GitHub's macOS 15.7.9 and 26.6.2 runners: a helper asking
+    under its own name read NOT_DETERMINED, and was then held for as long as
+    the permission dialog was open, which there was forever.
+    """
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    held = _HeldHelper([(CBManagerState.UNKNOWN, unasked)])
+
+    async with _open_bluetooth(IOBluetoothBackend(held.start)) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.AWAITING_PERMISSION
+        with pytest.raises(BluetoothUnavailableError, match="Answer the permission"):
+            await bluetooth.list_known_devices()
+
+
+@pytest.mark.parametrize(
+    ("answer", "state", "availability"),
+    [
+        (
+            CBManagerAuthorization.ALLOWED_ALWAYS,
+            CBManagerState.POWERED_ON,
+            Availability.USABLE,
+        ),
+        # Measured on macOS 26.6.2 after Don't Allow.
+        (
+            CBManagerAuthorization.DENIED,
+            CBManagerState.UNSUPPORTED,
+            Availability.NOT_ALLOWED,
+        ),
+    ],
+)
+async def test_the_answer_to_a_permission_dialog_is_reported(
+    answer: CBManagerAuthorization,
+    state: CBManagerState,
+    availability: Availability,
+) -> None:
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    held = _HeldHelper([(CBManagerState.UNKNOWN, unasked)])
+
+    async with _open_bluetooth(IOBluetoothBackend(held.start)) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.AWAITING_PERMISSION
+
+        # The user answers, and the helper is let go.
+        assert held.far is not None
+        held.far.send({"event": "state", "state": state, "authorization": answer})
+        await held.answer_ready()
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is availability
+
+
+async def test_a_controller_that_never_comes_up_is_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Measured on GitHub's macOS 15.7.9 and 26.6.2 runners, which have a
+    virtual controller: the classic manager stayed unknown for good, and the
+    central manager beside it said unsupported.
+    """
+    framework = fake_framework_parts(monkeypatch, state=CBManagerState.UNKNOWN)
+    central = FakeManager.alloc().init()
+    central.state = CBManagerState.UNSUPPORTED
+    framework.central = central
+
+    async with _stack() as bluetooth:
+        async with asyncio.timeout(1):
+            availability = await anext(bluetooth.watch_availability())
+        assert availability is Availability.UNSUPPORTED
+
+
+async def test_a_first_helper_that_stops_before_saying_anything_is_an_error() -> None:
+    held = _HeldHelper([])
+
+    async def stop_soon() -> None:
+        while held.far is None:
+            await asyncio.sleep(0)
+        held.stop()
+
+    stopping = asyncio.ensure_future(stop_soon())
+    try:
+        with pytest.raises(HelperFailedError):
+            async with _open_bluetooth(IOBluetoothBackend(held.start)):
+                pass
+    finally:
+        await stopping
+
+
+async def test_a_helper_macos_ends_while_held_is_not_allowed() -> None:
+    """
+    Measured on macOS 26.6.2: a helper going by a program with no usage
+    description reads NOT_DETERMINED, and macOS ends it 15 to 44 ms later
+    without asking. Until then it looks the same as one whose dialog is open.
+    It would be ended the same way again, so nothing is retried.
+    """
+
+    async def refused() -> RfcommError:
+        return BluetoothUnavailableError(
+            Availability.NOT_ALLOWED, "call prompt_under_name() first"
+        )
+
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    held = _HeldHelper([(CBManagerState.UNKNOWN, unasked)], refused)
+
+    async with _open_bluetooth(IOBluetoothBackend(held.start)) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.AWAITING_PERMISSION
+        held.stop()
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is Availability.NOT_ALLOWED
+        with pytest.raises(BluetoothUnavailableError, match="prompt_under_name"):
+            await bluetooth.list_known_devices()
+        await asyncio.sleep(0.05)
+    assert held.starts == 1
+
+
+async def test_a_held_helper_that_stops_is_not_replaced() -> None:
+    """
+    It stopped before it was ready, and a new one would do the same.
+    """
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    held = _HeldHelper([(CBManagerState.UNKNOWN, unasked)])
+
+    async with _open_bluetooth(IOBluetoothBackend(held.start)) as bluetooth:
+        watcher = bluetooth.watch_availability()
+        assert await anext(watcher) is Availability.AWAITING_PERMISSION
+        held.stop()
+        async with asyncio.timeout(1):
+            assert await anext(watcher) is Availability.SERVICE_UNAVAILABLE
+        await asyncio.sleep(0.05)
+    assert held.starts == 1
 
 
 # --------------------------------------------------------------------------

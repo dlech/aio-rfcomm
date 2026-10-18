@@ -15,8 +15,15 @@ A bundled application is asked about under its own name. Put
 the reason to show in the dialog. Without it, macOS can end the program
 instead of asking.
 
-A script run from a terminal has no name of its own, so give it one before
-opening Bluetooth:
+A script run from a terminal has no name of its own. Without one, macOS goes
+by the permission of the program that started it, such as the terminal. It
+asks under that program's name, or refuses if that program cannot be asked,
+and then the availability is `NOT_ALLOWED`. If that program already has
+permission, Bluetooth works without asking. To give it permission, add it
+under Privacy & Security > Bluetooth in System Settings.
+
+Give the script a name before opening Bluetooth, so that it is asked about
+under its own name:
 
 ```python
 import aio_rfcomm.macos
@@ -29,13 +36,27 @@ Linux and Windows, so it can run on every platform.
 
 !!! warning "Keep the name the same"
 
-    macOS remembers the answer under the name you pass. The first time, and
-    after any change of name, macOS asks, and `open_bluetooth` waits until the
-    user answers, however long that takes.
+    macOS remembers the answer under the name you pass. A name it has not
+    seen before is asked about again. A name used before gets the answer given
+    then.
 
-If the user says no, or a script did not give a name, the availability is
-`NOT_ALLOWED`. After the user allows it in the system settings, start the
-program again.
+While the dialog is open, the availability is `AWAITING_PERMISSION`. When the
+user answers, it changes to `USABLE` or `NOT_ALLOWED`.
+
+If the user says no, the availability is `NOT_ALLOWED`. After the user allows
+it in the system settings, start the program again.
+
+### Continuous integration
+
+GitHub's macOS runners have a virtual Bluetooth controller that never works,
+so Bluetooth cannot be used there. Which availability you see depends on `prompt_under_name`:
+
+| | Availability | Why |
+| --- | --- | --- |
+| Without `prompt_under_name` | `UNSUPPORTED` | The runner already has Bluetooth permission, and the script uses it. macOS then reports that Bluetooth is unsupported. |
+| With `prompt_under_name` | `AWAITING_PERMISSION` | The script asks under its own name. Nobody answers the dialog, and macOS says nothing more until someone does. |
+
+Measured on macOS 15.7.9 and 26.6.2 runners.
 
 ### Bundled applications
 

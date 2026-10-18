@@ -120,6 +120,8 @@ def _explain(reason: UnavailableReason) -> str:
             return "none"
         case Availability.NOT_ALLOWED:
             return "refused"
+        case Availability.AWAITING_PERMISSION:
+            return "asking"
         case Availability.SERVICE_UNAVAILABLE:
             return "restarting"
         case Availability.UNSUPPORTED:

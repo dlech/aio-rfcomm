@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `Availability.AWAITING_PERMISSION`: the system is asking the user whether
+  this program may use Bluetooth. It is also an `UnavailableReason`, so an
+  exhaustive `match` on the reasons needs a case for it.
+
+### Changed
+
+- macOS: `open_bluetooth` no longer waits for the user to answer the
+  permission dialog. The availability is `AWAITING_PERMISSION` until they do,
+  then `USABLE` or `NOT_ALLOWED`.
+
+### Fixed
+
+- macOS: `open_bluetooth` never returned on a machine where nobody can answer
+  the permission dialog, such as a CI runner.
+- macOS: a refused permission was reported as `UNSUPPORTED` rather than
+  `NOT_ALLOWED`.
+- macOS: `open_bluetooth` never returned on a Mac whose Bluetooth never comes
+  up, such as GitHub's macOS runners with their virtual controller. The
+  availability is now `UNSUPPORTED`.
+
 ## [1.0.0] - 2026-10-17
 
 Initial release.

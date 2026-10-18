@@ -172,8 +172,9 @@ class FakeCoordinator:
     Stands in for ``IOBluetoothCoreBluetoothCoordinator``'s shared instance.
     """
 
-    def __init__(self, manager: FakeManager) -> None:
+    def __init__(self, manager: FakeManager, central: FakeManager | None) -> None:
         self.classicManager = manager
+        self.centralManager = central
 
 
 class FakeCoordinatorClass:
@@ -181,11 +182,25 @@ class FakeCoordinatorClass:
     Stands in for the coordinator class itself, as rubicon hands it over.
     """
 
-    def __init__(self, manager: FakeManager) -> None:
-        self.shared = FakeCoordinator(manager)
+    def __init__(
+        self, manager: FakeManager, central: FakeManager | None = None
+    ) -> None:
+        self.shared = FakeCoordinator(manager, central)
 
     def sharedInstance(self) -> FakeCoordinator:
         return self.shared
+
+
+class FakeController:
+    """
+    Stands in for ``IOBluetoothHostController``, asked only its power state.
+    """
+
+    powerState = 1  # kBluetoothHCIPowerStateON
+
+    @classmethod
+    def defaultController(cls) -> "FakeController":
+        return cls()
 
 
 class FakeConnection:
@@ -731,6 +746,11 @@ class Framework:
 
     def __init__(self, manager: FakeManager) -> None:
         self.manager = manager
+        self.central: FakeManager | None = None
+        """
+        The central manager beside the classic one. Set it before the helper
+        starts.
+        """
         self.channels = FakeChannelClass(manager)
         self.devices = FakeDeviceManagerClass([1, 8])
         self.records = FakeRecordClass(self.devices)
@@ -741,7 +761,7 @@ class Framework:
         """
         match name:
             case bindings.COORDINATOR:
-                return FakeCoordinatorClass(self.manager)
+                return FakeCoordinatorClass(self.manager, self.central)
             case bindings.DEVICE_MANAGER:
                 return self.devices
             case _:
@@ -797,6 +817,7 @@ def fake_framework_parts(
     framework = Framework(fake)
     monkeypatch.setattr(bindings, "ObjCClass", framework.find_class)
     monkeypatch.setattr(bindings, "CBManager", FakeAuthorization(authorization))
+    monkeypatch.setattr(bindings, "IOBluetoothHostController", FakeController)
     monkeypatch.setattr(bindings, "IOBluetoothDevice", FakeDeviceClass)
     monkeypatch.setattr(bindings, "IOBluetoothRFCOMMChannel", framework.channels)
     monkeypatch.setattr(bindings, "IOBluetoothSDPServiceRecord", framework.records)

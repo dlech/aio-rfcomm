@@ -26,8 +26,9 @@ import os
 import signal
 import socket
 import sys
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 assert not TYPE_CHECKING or sys.platform != "win32"
@@ -168,10 +169,11 @@ class Helper:
         self._unserved: RfcommError | None = None
         self._stopped: RfcommError | None = None
 
-        self.on_stop: Callable[[], None] | None = None
+        self.on_stop: Callable[[RfcommError], None] | None = None
         """
-        Called as the helper is found to have stopped, before anything waiting
-        on it is told, so that whatever the stop means is settled first.
+        Called with the reason as the helper is found to have stopped, before
+        anything waiting on it is told, so that whatever the stop means is
+        settled first.
         """
 
     async def ask(self, op: str, **fields: Any) -> tuple[Any, list[int]]:
@@ -325,16 +327,24 @@ class Helper:
         self._channels.pop(handle, None)
         self._finished.pop(handle, None)
 
-    async def deliver(self) -> None:
+    async def deliver(
+        self, explain: Callable[[], Awaitable[RfcommError]] | None = None
+    ) -> None:
         """
         Hand each frame to whoever is waiting for it, until the helper stops.
 
         Runs for as long as the helper does, and returns when it has gone.
+
+        Args:
+            explain: Says why the helper stopped, once it has.
         """
         while True:
             frame = await self._link.receive()
             if frame is None:
-                self.stop(HelperFailedError("the macOS Bluetooth helper stopped"))
+                if explain is None:
+                    self.stop(HelperFailedError("the macOS Bluetooth helper stopped"))
+                else:
+                    self.stop(await explain())
                 return
 
             message, fds = frame
@@ -425,7 +435,7 @@ class Helper:
 
         self._stopped = error
         if self.on_stop is not None:
-            self.on_stop()
+            self.on_stop(error)
 
         self._states.put_nowait(None)
         self._end_requests(error)
@@ -449,10 +459,10 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
     Start a helper process and keep it running for the enclosing block.
 
     Yields:
-        The helper, ready for requests.
+        The helper, as soon as it is started. If macOS refuses it Bluetooth,
+        everything waiting on it fails with ``BluetoothUnavailableError``.
 
     Raises:
-        BluetoothUnavailableError: macOS refused Bluetooth to the helper.
         HelperFailedError: The helper could not be started.
     """
     if sys.platform != "darwin":
@@ -487,9 +497,11 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
         # wrapped around it.
         with unwrap_lone_error():
             async with asyncio.TaskGroup() as group:
-                reader = group.create_task(helper.deliver(), name="aio-rfcomm helper")
+                reader = group.create_task(
+                    helper.deliver(partial(_why_stopped, pid)),
+                    name="aio-rfcomm helper",
+                )
                 try:
-                    await _wait_until_ready(helper, pid)
                     yield helper
                 finally:
                     reader.cancel()
@@ -501,50 +513,33 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
         await _reap(pid)
 
 
-async def _wait_until_ready(helper: Helper, pid: int) -> None:
+async def _why_stopped(pid: int) -> RfcommError:
     """
-    Wait for the helper to report that Bluetooth is usable.
+    Work out why a helper stopped.
 
-    The request the helper answers here makes a real IOBluetooth call, because
-    macOS does not refuse Bluetooth when a process starts: it refuses at the
-    first call that needs it, and refuses by ending the process with
-    ``SIGABRT``. A helper that has merely started tells us nothing, so this
-    waits until one has actually used the radio and lived.
-
-    There is deliberately no time limit. The first such call is what puts the
-    permission dialog on screen, so this waits for however long somebody takes
-    to read it and decide -- which is not a length of time a library is
-    entitled to guess at. A caller who is not prepared to wait says so by
-    opening Bluetooth inside a cancel scope of their own.
-
-    Args:
-        helper: The helper being started.
-        pid: Its process id.
-
-    Raises:
-        BluetoothUnavailableError: macOS refused Bluetooth to the helper.
-        HelperFailedError: The helper stopped before answering.
-    """
-    try:
-        await helper.ask("ready")
-    except HelperFailedError:
-        raise _died(pid) from None
-
-
-def _died(pid: int) -> RfcommError:
-    """
-    Work out why a helper that stopped during startup stopped.
+    macOS does not refuse Bluetooth when a process starts. It refuses at the
+    first call that needs it, by ending the process with ``SIGABRT``, so that
+    is the one ending with a meaning here.
 
     Args:
         pid: The helper's process id.
 
     Returns:
-        The error to raise.
+        The error to fail everything waiting on the helper with.
     """
-    try:
-        _done, status = os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-        status = 0
+    # Called when the control socket closes, which can come a moment before
+    # the exit status: on macOS 26.6.2, 11 of 500 processes ended by SIGABRT
+    # had none yet, for up to 0.16 ms. Polled like _wait_for_exit, and a
+    # helper that never exits is killed by _reap at the end of its block.
+    status = 0
+    for _ in range(200):
+        try:
+            done, status = os.waitpid(pid, os.WNOHANG)  # noqa: ASYNC222
+        except ChildProcessError:
+            break
+        if done:
+            break
+        await asyncio.sleep(0.01)
 
     if os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGABRT:
         return BluetoothUnavailableError(
@@ -554,12 +549,12 @@ def _died(pid: int) -> RfcommError:
             "in its Info.plist. Any other program -- a script, a REPL or a "
             "command line tool -- needs to call "
             "aio_rfcomm.macos.prompt_under_name() before opening "
-            "Bluetooth, so the helper can ask for permission itself. Once "
+            "Bluetooth, so the helper can ask for permission itself, or the "
+            "program that started it, such as the terminal, has to be added "
+            "under Privacy & Security > Bluetooth in System Settings. Once "
             "it is allowed, start the program again.",
         )
-    return HelperFailedError(
-        f"the macOS Bluetooth helper stopped during startup (status {status})"
-    )
+    return HelperFailedError(f"the macOS Bluetooth helper stopped (status {status})")
 
 
 def _rebuild(

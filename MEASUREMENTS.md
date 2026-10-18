@@ -52,6 +52,18 @@ since claims in the code refer to it.
 - Python 3.11.9, arm64.
 - Peer: the Linux machine above, on BlueZ package 5.85-4ubuntu0.4.
 
+## GitHub's macOS runners
+
+- Measured on 2026-10-18 with the macos-15 image 20260907.0337 (macOS 15.7.9,
+  build 24G830, Apple M1 virtual), the macos-15-intel image 20260824.0482
+  (macOS 15.7.9, build 24G830, Intel virtual) and the macos-26 image
+  20261013.0424 (macOS 26.6.2, build 25G83, Apple M1 virtual).
+- Controller: virtual. `system_profiler` says chipset APPLE_VIRTUAL, firmware
+  v0, address NULL, state Off.
+- bluetoothd runs, and the user `runner` is logged in to a GUI session.
+- Python 3.13 from uv.
+- In comments: "GitHub's macOS 15.7.9 and 26.6.2 runners".
+
 ## Recording a new one
 
 - macOS: `sw_vers`, and the controller's firmware from

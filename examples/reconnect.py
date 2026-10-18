@@ -59,6 +59,8 @@ def explain(reason: UnavailableReason) -> str:
             return "this computer has no Bluetooth adapter. Plug one in"
         case Availability.NOT_ALLOWED:
             return "this program may not use Bluetooth. Allow it in settings"
+        case Availability.AWAITING_PERMISSION:
+            return "answer the Bluetooth permission dialog"
         case Availability.SERVICE_UNAVAILABLE:
             return "the Bluetooth service is restarting. Waiting for it"
         case Availability.UNSUPPORTED:

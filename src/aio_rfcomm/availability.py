@@ -53,11 +53,19 @@ class Availability(enum.Enum):
     This system cannot use Bluetooth at all.
     """
 
+    # Added last, so that the members before it keep their values.
+    AWAITING_PERMISSION = enum.auto()
+    """
+    The system is asking the user whether this program may use Bluetooth.
+    The availability changes when they answer.
+    """
+
 
 UnavailableReason: TypeAlias = Literal[
     Availability.SWITCHED_OFF,
     Availability.NO_ADAPTER,
     Availability.NOT_ALLOWED,
+    Availability.AWAITING_PERMISSION,
     Availability.SERVICE_UNAVAILABLE,
     Availability.UNSUPPORTED,
 ]

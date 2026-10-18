@@ -170,6 +170,9 @@ class _Served:
         """
         try:
             async with start() as helper:
+                # Asked before anything else, so a helper still waiting on a
+                # permission dialog is canceled rather than asked to withdraw.
+                await helper.ask("ready")
                 self.helper = helper
                 self._started.set()
                 await self._done.wait()
@@ -507,34 +510,61 @@ class IOBluetoothBackend(BackendProvider):
             state: Where to report availability.
 
         Raises:
-            HelperFailedError: The first helper could not be started. A later
-                one that cannot be is reported as unavailable instead, since
-                the caller has long since been told Bluetooth was there.
+            HelperFailedError: The first helper stopped before it said
+                anything. A later failure is reported as unavailable instead,
+                since the caller has long since been told about Bluetooth.
         """
         replacing = False
 
         while True:
-            running = False
+            ready = False
             try:
                 async with self._start() as helper:
-                    running = True
                     bluetooth.helper = helper
 
                     # A helper that stops takes its channels with it, and they
-                    # have to hear that the service went, not that their link
-                    # dropped, so this is said before they are told anything.
-                    def stopped() -> None:
-                        state.set(
-                            Availability.SERVICE_UNAVAILABLE,
-                            "the macOS Bluetooth helper stopped",
-                        )
+                    # have to hear why, not that their link dropped, so this
+                    # is said before they are told anything.
+                    def stopped(error: RfcommError) -> None:
+                        match error:
+                            case BluetoothUnavailableError(reason=reason):
+                                state.set(reason, str(error))
+                            case _ if state.is_known:
+                                state.set(
+                                    Availability.SERVICE_UNAVAILABLE,
+                                    "the macOS Bluetooth helper stopped",
+                                )
+                            case _:
+                                # Nothing has been said yet. The failure is
+                                # raised instead.
+                                pass
+
+                    async def confirm() -> None:
+                        nonlocal ready
+                        try:
+                            await helper.ask("ready")
+                        except RfcommError:
+                            # The relay hears of the stop too, and reports it.
+                            return
+                        ready = True
 
                     helper.on_stop = stopped
                     if helper.stopped:
                         # It stopped before there was anyone to hear it.
-                        stopped()
+                        stopped(HelperFailedError("the macOS Bluetooth helper stopped"))
                     try:
-                        await _relay(helper, state)
+                        # The helper answers "ready" once it has touched the
+                        # radio and lived. Until then it can be held for as
+                        # long as a permission dialog is open, which is
+                        # forever on a machine nobody is at. What it said
+                        # before that is reported meanwhile.
+                        with unwrap_lone_error():
+                            async with asyncio.TaskGroup() as group:
+                                confirming = group.create_task(confirm())
+                                try:
+                                    await _relay(helper, state)
+                                finally:
+                                    confirming.cancel()
                     finally:
                         helper.on_stop = None
                         bluetooth.helper = None
@@ -544,14 +574,15 @@ class IOBluetoothBackend(BackendProvider):
                 state.set(refused.reason, str(refused))
                 return
             except (HelperFailedError, OSError) as failed:
-                if not running and not replacing:
-                    raise
-                if not running:
-                    # A replacement that will not start would not start next
-                    # time either. Trying again would only spin.
+                if not ready:
+                    if not state.is_known:
+                        raise
+                    # A helper that will not start would not start next time
+                    # either. Trying again would only spin.
+                    doing = "restarted" if replacing else "started"
                     state.set(
                         Availability.SERVICE_UNAVAILABLE,
-                        f"the macOS Bluetooth helper could not be restarted: {failed}",
+                        f"the macOS Bluetooth helper could not be {doing}: {failed}",
                     )
                     return
                 logger.info("the macOS Bluetooth helper stopped: %s", failed)
@@ -591,6 +622,8 @@ async def _relay(helper: Helper, state: AvailabilityState) -> None:
                 )
             case Availability.NOT_ALLOWED:
                 state.set(Availability.NOT_ALLOWED, _not_allowed(authorization))
+            case Availability.AWAITING_PERMISSION:
+                state.set(Availability.AWAITING_PERMISSION, _AWAITING_PERMISSION)
             case available:
                 state.set(available)
 
@@ -602,7 +635,8 @@ def _availability(manager: int, authorization: int) -> Availability | None:
     Args:
         manager: The manager's state.
         authorization: The ``CBManagerAuthorization`` at the time, since macOS
-            reports a radio this program may not use as switched off.
+            reports a radio this program may not use as switched off or
+            unsupported.
 
     Returns:
         The availability, or ``None`` for a state that is not an answer.
@@ -610,16 +644,34 @@ def _availability(manager: int, authorization: int) -> Availability | None:
     match manager:
         case CBManagerState.POWERED_ON:
             return Availability.USABLE
+        case CBManagerState.RESETTING:
+            # Set only when the connection to bluetoothd is lost, never on an
+            # ordinary toggle (follow-ups §13.2).
+            return Availability.SERVICE_UNAVAILABLE
+        case _ if authorization in (
+            CBManagerAuthorization.DENIED,
+            CBManagerAuthorization.RESTRICTED,
+        ):
+            # Whatever the state says: after the user refused the dialog on
+            # macOS 26.6.2, the manager said unsupported.
+            return Availability.NOT_ALLOWED
+        case (
+            CBManagerState.UNKNOWN
+            | CBManagerState.POWERED_OFF
+            | CBManagerState.UNAUTHORIZED
+        ) if authorization == CBManagerAuthorization.NOT_DETERMINED:
+            # The helper says this before it reaches the manager, which macOS
+            # holds up for as long as its permission dialog is open. A helper
+            # going by a program macOS cannot ask reads it too, and macOS ends
+            # it without asking: on macOS 26.6.2, 15 to 44 ms later. That is
+            # the programmer's to fix, and the error then says how.
+            return Availability.AWAITING_PERMISSION
         case CBManagerState.POWERED_OFF if (
             authorization == CBManagerAuthorization.ALLOWED_ALWAYS
         ):
             return Availability.SWITCHED_OFF
         case CBManagerState.POWERED_OFF | CBManagerState.UNAUTHORIZED:
             return Availability.NOT_ALLOWED
-        case CBManagerState.RESETTING:
-            # Set only when the connection to bluetoothd is lost, never on an
-            # ordinary toggle (follow-ups §13.2).
-            return Availability.SERVICE_UNAVAILABLE
         case CBManagerState.UNSUPPORTED:
             return Availability.UNSUPPORTED
         case CBManagerState.UNKNOWN:
@@ -627,6 +679,12 @@ def _availability(manager: int, authorization: int) -> Availability | None:
         case _:
             logger.warning("CoreBluetooth reported state %d, unknown here", manager)
             return None
+
+
+_AWAITING_PERMISSION = (
+    "macOS is asking whether this program may use Bluetooth. Answer the "
+    "permission dialog."
+)
 
 
 def _not_allowed(authorization: int) -> str:
@@ -644,12 +702,6 @@ def _not_allowed(authorization: int) -> str:
             return (
                 "Bluetooth is not allowed on this Mac, by a profile or parental "
                 "controls rather than by a choice this program can undo."
-            )
-        case CBManagerAuthorization.NOT_DETERMINED:
-            return (
-                "Bluetooth permission for this program has not been answered. "
-                "A dialog should have appeared. If it was dismissed, run the "
-                "program again and allow it."
             )
         case _:
             return (

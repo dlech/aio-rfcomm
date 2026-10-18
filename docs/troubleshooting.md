@@ -9,7 +9,7 @@ know about.
 
 | What you see | Where to look |
 | --- | --- |
-| `open_bluetooth` does not return on macOS | macOS is waiting for the user to answer the [permission](platforms.md#permission) dialog. |
+| `AWAITING_PERMISSION` on macOS | macOS is waiting for the user to answer the [permission](platforms.md#permission) dialog. |
 | `ServiceNotFoundError`, but the device offers the service | The system's stored copy of the device's services is out of date. See [macOS](platforms.md#when-a-devices-services-change) or [Linux](platforms.md#when-a-devices-services-change_1). |
 | `ChannelInUseError` from `serve` on macOS | [Each channel is served once](platforms.md#each-channel-is-served-once). |
 | `UnsupportedOperationError` on Linux | Python lacks [Bluetooth sockets](platforms.md#bluetooth-sockets). |
