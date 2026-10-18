@@ -33,13 +33,26 @@ another channel while the device stays connected stays stored on the old
 channel, and opening it fails. [Platforms](platforms.md) says what to do. Seen
 on macOS 26.6.2, with a peer running BlueZ 5.85.
 
-### A paired device with no stored services
+When the device is not connected, `performSDPQuery:` connects to it instead,
+and never calls back. Seen on macOS 26.6.2.
 
-Sometimes macOS has no stored services at all for a paired device. Then
-`open_service` raises `ServiceNotFoundError`, and `list_known_devices` with a
-`service` leaves the device out. Remove the device in the system settings and
-pair it again. The cause is unknown. Seen on macOS 26.6.2, for a Pybricks EV3
-and for a pair of headphones.
+### A paired device can have no stored services
+
+When macOS's Bluetooth service restarts, it forgets the stored services of
+every paired device. Switching Bluetooth off can restart it, as
+[above](#switching-bluetooth-off-can-restart-the-bluetooth-service). It reads a device's services again the next time it
+connects to it. Until then, `list_known_devices` with a `service` leaves the
+device out.
+
+To get them back, open a channel to the device, with `open_service` or
+`open_channel`. The library connects to the device first, and macOS reads its
+services as it connects. Clicking Connect for the device in System Settings >
+Bluetooth also works, even for a device that disconnects again a few seconds
+later. There is no need to pair the device again.
+
+The Bluetooth log says `sdp attributes is empty` for such a device. Seen on
+macOS 26.6.2 after each of eight restarts, with a Pybricks EV3 and a peer
+running BlueZ 5.85.
 
 ## Windows
 

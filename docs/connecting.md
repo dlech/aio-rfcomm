@@ -78,6 +78,8 @@ nothing on the device is listening on that channel, the device refuses, and
 
 The system keeps a stored copy of each device's services, which can be out of
 date. [Platforms](platforms.md) says how to refresh it on each system, and
-which Python builds on Linux cannot connect by number.
+which Python builds on Linux cannot connect by number. On macOS the copy can
+also be empty, and [Known bugs](known-bugs.md#a-paired-device-can-have-no-stored-services)
+says what to do.
 
 **Next:** [Channels](channels.md), to send and receive once connected.
