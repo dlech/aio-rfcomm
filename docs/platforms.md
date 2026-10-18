@@ -22,6 +22,9 @@ and then the availability is `NOT_ALLOWED`. If that program already has
 permission, Bluetooth works without asking. To give it permission, add it
 under Privacy & Security > Bluetooth in System Settings.
 
+A script started by launchd, with a Python from python.org, Homebrew or uv,
+is asked about as that Python itself. Measured on macOS 26.6.2.
+
 Give the script a name before opening Bluetooth, so that it is asked about
 under its own name:
 

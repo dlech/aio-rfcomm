@@ -22,8 +22,10 @@ def prompt_under_name(*, name: str, reason: str) -> None:
     permission of the program that started it, such as the terminal. It asks
     under that program's name, or refuses if that program cannot be asked, and
     then the availability is ``NOT_ALLOWED``. If that program already has
-    permission, Bluetooth works without asking. Call this before opening
-    Bluetooth, so that your program is asked about under its own name.
+    permission, Bluetooth works without asking. A script started by launchd,
+    with a Python from python.org, Homebrew or uv, is asked about as that
+    Python itself. Call this before opening Bluetooth, so that your program is
+    asked about under its own name.
 
     The user sees ``name`` in the permission dialog and later in the system
     settings, and macOS remembers the answer under it. Name it after your program,
