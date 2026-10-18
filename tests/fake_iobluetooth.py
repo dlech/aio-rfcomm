@@ -20,12 +20,13 @@ import ctypes
 import threading
 from collections.abc import Generator
 from ctypes import c_int, c_void_p
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast
 from uuid import UUID
 
 import pytest
 from rubicon.objc import (
     SEL,
+    NSDictionary,
     NSMutableDictionary,
     NSObject,
     NSUInteger,
@@ -90,7 +91,7 @@ class SettlingManager(FakeManager):
         context: c_void_p,
     ) -> None:
         send_super(
-            __class__,  # type: ignore[name-defined]
+            __class__,
             self,
             "addObserver:forKeyPath:options:context:",
             observer,
@@ -194,6 +195,23 @@ class FakeConnection:
         self.channelID = channel_id
 
 
+class _Delegate(Protocol):
+    """
+    A channel's delegate, called the way the framework calls it.
+    """
+
+    def rfcommChannelOpenComplete_status_(
+        self, channel: None, status: int, /
+    ) -> None: ...
+    def rfcommChannelData_data_length_(
+        self, channel: None, data: int, length: int, /
+    ) -> None: ...
+    def rfcommChannelClosed_(self, channel: None, /) -> None: ...
+    def rfcommChannelWriteComplete_refcon_status_bytesWritten_(
+        self, channel: None, refcon: int, status: int, length: int, /
+    ) -> None: ...
+
+
 class FakeChannel:
     """
     An ``IOBluetoothRFCOMMChannel`` that opens, carries bytes and closes.
@@ -216,7 +234,7 @@ class FakeChannel:
         #: always the one asked for: an earlier open that lands late is given
         #: to the newest channel waiting.
         self.connected_to = number
-        self.delegate: object = delegate
+        self.delegate = cast(_Delegate, delegate)
         self.open = False
         self.written = bytearray()
 
@@ -235,7 +253,7 @@ class FakeChannel:
             return IOReturn.NOT_OPEN
         self.written += data[:length]
         asyncio.get_running_loop().call_soon(
-            self.delegate.rfcommChannelWriteComplete_refcon_status_bytesWritten_,  # pyright: ignore[reportAttributeAccessIssue]
+            self.delegate.rfcommChannelWriteComplete_refcon_status_bytesWritten_,
             None,
             refcon,
             0,
@@ -253,14 +271,14 @@ class FakeChannel:
 
     def complete_open(self) -> None:
         self.open = True
-        self.delegate.rfcommChannelOpenComplete_status_(None, 0)  # pyright: ignore[reportAttributeAccessIssue]
+        self.delegate.rfcommChannelOpenComplete_status_(None, 0)
 
     def arrive(self, data: bytes) -> None:
         """
         Deliver bytes from the peer, in a buffer the callback may only borrow.
         """
         buffer = ctypes.create_string_buffer(data, len(data))
-        self.delegate.rfcommChannelData_data_length_(  # pyright: ignore[reportAttributeAccessIssue]
+        self.delegate.rfcommChannelData_data_length_(
             None, ctypes.addressof(buffer), len(data)
         )
 
@@ -272,7 +290,7 @@ class FakeChannel:
         self._report_closed()
 
     def _report_closed(self) -> None:
-        self.delegate.rfcommChannelClosed_(None)  # pyright: ignore[reportAttributeAccessIssue]
+        self.delegate.rfcommChannelClosed_(None)
 
 
 def stored_record(
@@ -340,6 +358,14 @@ def stored_record(
     return record.withServiceDictionary_device_(attributes, None)
 
 
+class _ConnectionTarget(Protocol):
+    """
+    The target of ``openConnection:``, called the way the framework calls it.
+    """
+
+    def connectionComplete_status_(self, device: None, status: int, /) -> None: ...
+
+
 class FakeDevice:
     """
     An ``IOBluetoothDevice``, one per address for the life of the process.
@@ -372,7 +398,7 @@ class FakeDevice:
         if self.answers:
             self.connected = True
         asyncio.get_running_loop().call_soon(
-            target.connectionComplete_status_,  # pyright: ignore[reportAttributeAccessIssue]
+            cast(_ConnectionTarget, target).connectionComplete_status_,
             None,
             status,
         )
@@ -473,7 +499,7 @@ class FakeIncomingChannel(NSObject):
     @objc_method
     def setDelegate_(self, delegate: ObjCInstance) -> int:
         inner = self.inner
-        inner.delegate = delegate
+        inner.delegate = cast(_Delegate, delegate)
         asyncio.get_running_loop().call_soon(inner.complete_open)
         return 0
 
@@ -612,7 +638,7 @@ class FakePublished:
     A service record that has been published.
     """
 
-    def __init__(self, record: dict[str, object]) -> None:
+    def __init__(self, record: dict[str, Any]) -> None:
         self.record = record
         self.withdrawn = False
 
@@ -632,12 +658,13 @@ class FakeLocalRecord:
     def __init__(self, number: int | None) -> None:
         self.number = number
 
-    def getRFCOMMChannelID(self, out: object, /) -> int:
+    # Any for the ``ctypes.byref`` result, as in NativeRecord.
+    def getRFCOMMChannelID(self, out: Any, /) -> int:
         if self.number is None:
             # What a record that is not an RFCOMM service returned, measured on
             # macOS 26.6.2.
             return -536870160
-        out._obj.value = bytes([self.number])  # type: ignore[attr-defined]
+        out._obj.value = bytes([self.number])
         return 0
 
 
@@ -686,11 +713,10 @@ class FakeRecordClass:
     def publishedServiceRecordWithDictionary(
         self, record: ObjCInstance, /
     ) -> FakePublished:
-        published = FakePublished(py_from_ns(cast(Any, record)))
+        published = FakePublished(py_from_ns(cast("NSDictionary[str, Any]", record)))
         self.published.append(published)
-        attributes = cast(Any, published.record)
         self._devices.shared.records.append(
-            FakeLocalRecord(attributes["0004"][1][1]["DataElementValue"])
+            FakeLocalRecord(published.record["0004"][1][1]["DataElementValue"])
         )
         return published
 
@@ -795,7 +821,11 @@ def fake_manager(monkeypatch: pytest.MonkeyPatch) -> FakeManager:
     """
     fake = FakeManager.alloc().init()
     found = FakeCoordinatorClass(fake)
-    monkeypatch.setattr(bindings, "ObjCClass", lambda _name: found)
+
+    def find_class(_name: str) -> object:
+        return found
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
     monkeypatch.setattr(
         bindings, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
     )

@@ -8,7 +8,6 @@ framework stood in for.
 
 import asyncio
 import sys
-from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -26,7 +25,8 @@ from tests.fake_iobluetooth import (
     ADDRESS,
     FakeLocalRecord,
     change_state,
-    clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    # An autouse fixture, used by being imported.
+    clean_state,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     fake_framework_parts,
     until_observed,
 )
@@ -44,7 +44,7 @@ async def test_a_service_is_published_on_the_channel_it_reports(
     framework = fake_framework_parts(monkeypatch)
     async with native.serve(SERVICE, name="chat", channel=None) as service:
         [published] = framework.records.published
-        record = cast(Any, published.record)
+        record = published.record
         assert record["0100"] == "chat"
         rfcomm = record["0004"][1]
         assert rfcomm[1]["DataElementValue"] == service.channel

@@ -28,7 +28,8 @@ from aio_rfcomm.backend.iobluetooth.helper.native.channel import (
 )
 from tests.fake_iobluetooth import (
     ADDRESS,
-    clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    # An autouse fixture, used by being imported.
+    clean_state,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
 
 

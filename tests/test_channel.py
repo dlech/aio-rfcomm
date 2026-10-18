@@ -156,17 +156,19 @@ async def test_until_counts_the_delimiter_in_its_limit(
         await channel.receive_until(b"\n", max_bytes=5)
 
 
-@pytest.mark.parametrize(
-    "second",
-    [
-        lambda channel: channel.receive(),
-        lambda channel: channel.receive_exactly(1),
-        lambda channel: channel.receive_until(b"\n", max_bytes=10),
-    ],
-)
+# One call that receives on a channel.
+Receive = Callable[[RfcommChannel], Awaitable[bytes]]
+
+EVERY_WAY_OF_RECEIVING: list[Receive] = [
+    lambda channel: channel.receive(),
+    lambda channel: channel.receive_exactly(1),
+    lambda channel: channel.receive_until(b"\n", max_bytes=10),
+]
+
+
+@pytest.mark.parametrize("second", EVERY_WAY_OF_RECEIVING)
 async def test_every_way_of_receiving_shares_one_reader(
-    opened: tuple[RfcommChannel, FakeChannel],
-    second: Callable[[RfcommChannel], Awaitable[bytes]],
+    opened: tuple[RfcommChannel, FakeChannel], second: Receive
 ) -> None:
     channel, _fake = opened
     waiting = asyncio.ensure_future(channel.receive_until(b"\n", max_bytes=10))
@@ -180,18 +182,17 @@ async def test_every_way_of_receiving_shares_one_reader(
     await asyncio.gather(waiting, return_exceptions=True)
 
 
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda channel: channel.receive_exactly(0),
-        lambda channel: channel.receive_until(b"", max_bytes=5),
-        lambda channel: channel.receive_until(b"\n", max_bytes=0),
-        lambda channel: channel.receive_until(b"\r\n", max_bytes=1),
-    ],
-)
+NONSENSE_ARGUMENTS: list[Receive] = [
+    lambda channel: channel.receive_exactly(0),
+    lambda channel: channel.receive_until(b"", max_bytes=5),
+    lambda channel: channel.receive_until(b"\n", max_bytes=0),
+    lambda channel: channel.receive_until(b"\r\n", max_bytes=1),
+]
+
+
+@pytest.mark.parametrize("call", NONSENSE_ARGUMENTS)
 async def test_nonsense_arguments_are_refused(
-    opened: tuple[RfcommChannel, FakeChannel],
-    call: Callable[[RfcommChannel], Awaitable[bytes]],
+    opened: tuple[RfcommChannel, FakeChannel], call: Receive
 ) -> None:
     channel, _fake = opened
     with pytest.raises(ValueError):

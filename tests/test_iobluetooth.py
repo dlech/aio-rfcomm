@@ -20,6 +20,7 @@ import socket
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
+from pathlib import Path
 
 import pytest
 
@@ -491,7 +492,7 @@ def test_a_name_with_nothing_usable_in_it_still_makes_an_identifier() -> None:
     assert _identifier("...") == "dev.aiorfcomm.helper.unnamed"
 
 
-def test_the_cache_key_follows_what_goes_into_the_bundle(tmp_path) -> None:
+def test_the_cache_key_follows_what_goes_into_the_bundle(tmp_path: Path) -> None:
     interpreter = tmp_path / "python"
     interpreter.write_bytes(b"not really an interpreter")
 

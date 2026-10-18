@@ -39,7 +39,8 @@ from tests.fake_iobluetooth import (
     FakeManager,
     SettlingManager,
     change_state,
-    clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    # An autouse fixture, used by being imported.
+    clean_state,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     is_observed,
     until_observed,
 )
@@ -263,7 +264,9 @@ async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None
     manager.state = CBManagerState.POWERED_ON
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda *each: reports.append(each))
+        native.report_states(
+            lambda state, authorization: reports.append((state, authorization))
+        )
     )
     try:
         await until_observed(manager)
@@ -318,9 +321,11 @@ async def test_a_state_that_settles_unheard_is_still_reported(
     the state was powered on half a second later, and nothing ever said so.
     """
     settling = SettlingManager.alloc().init()
-    monkeypatch.setattr(
-        bindings, "ObjCClass", lambda _name: FakeCoordinatorClass(settling)
-    )
+
+    def find_class(_name: str) -> FakeCoordinatorClass:
+        return FakeCoordinatorClass(settling)
+
+    monkeypatch.setattr(bindings, "ObjCClass", find_class)
     monkeypatch.setattr(
         bindings, "CBManager", FakeAuthorization(CBManagerAuthorization.ALLOWED_ALWAYS)
     )
@@ -364,7 +369,9 @@ async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> N
     rest of the process, into a loop that may have gone.
     """
     manager.state = CBManagerState.POWERED_ON
-    watching = asyncio.ensure_future(native.report_states(lambda *_each: None))
+    watching = asyncio.ensure_future(
+        native.report_states(lambda _state, _authorization: None)
+    )
     await until_observed(manager)
     watching.cancel()
     await asyncio.gather(watching, return_exceptions=True)
@@ -396,7 +403,9 @@ async def test_a_manager_that_cannot_be_reached_reports_the_power_once(
     )
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda *each: reports.append(each))
+        native.report_states(
+            lambda state, authorization: reports.append((state, authorization))
+        )
     )
     try:
         await asyncio.sleep(SETTLE)

@@ -287,7 +287,7 @@ def _asking(manager: _FakeManager) -> Callable[[], Awaitable[_FakeManager]]:
 
 def _profiles() -> tuple[Profiles, _FakeBus, _FakeManager]:
     bus, manager = _FakeBus(), _FakeManager()
-    return Profiles(bus, _asking(manager)), bus, manager  # type: ignore[arg-type]
+    return Profiles(bus, _asking(manager)), bus, manager  # pyright: ignore[reportArgumentType]
 
 
 async def test_concurrent_users_share_one_registration() -> None:
@@ -327,7 +327,7 @@ async def test_a_failed_registration_leaves_nothing_exported() -> None:
     manager = _FakeManager(
         fails=DBusError("org.bluez.Error.NotPermitted", "UUID already registered")
     )
-    profiles = Profiles(bus, _asking(manager))  # type: ignore[arg-type]
+    profiles = Profiles(bus, _asking(manager))  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ConnectionFailedError, match="another program"):
         async with profiles.acquire(SERVICE):
@@ -352,8 +352,8 @@ async def test_a_service_can_be_registered_again_after_release() -> None:
 
 def _bluetooth(address: str | None = "00:11:22:33:44:55") -> BlueZBluetooth:
     bluetooth = BlueZBluetooth(
-        None,  # type: ignore[arg-type]
-        None,  # type: ignore[arg-type]
+        None,  # pyright: ignore[reportArgumentType]
+        None,  # pyright: ignore[reportArgumentType]
     )
     bluetooth.path = "/org/bluez/hci0"
     bluetooth.address = address

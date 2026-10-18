@@ -43,7 +43,8 @@ from tests.fake_iobluetooth import (
     FakeDeviceClass,
     FakeManager,
     change_state,
-    clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    # An autouse fixture, used by being imported.
+    clean_state,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     fake_framework,
     fake_framework_parts,
     opened,

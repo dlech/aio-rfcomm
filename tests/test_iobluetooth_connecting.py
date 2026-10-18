@@ -40,7 +40,8 @@ from tests.fake_iobluetooth import (
     FakeDevice,
     FakeDeviceClass,
     FakeManager,
-    clean_state,  # noqa: F401 -- an autouse fixture, used by being imported
+    # An autouse fixture, used by being imported.
+    clean_state,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     fake_framework_parts,
     opened,
     stored_record,
@@ -294,11 +295,11 @@ def quick(monkeypatch: pytest.MonkeyPatch) -> None:
         "aio_rfcomm.backend.iobluetooth.helper.native.channel._CLOSE_TIMEOUT", 0.05
     )
     monkeypatch.setattr(hooks, "open_results", {})
-    monkeypatch.setattr(
-        bindings,
-        "IOBluetoothRFCOMMChannel",
-        lambda _handle: HandedBack(bool(_pending.pop(0)) if _pending else False),
-    )
+
+    def wrap(_handle: object) -> HandedBack:
+        return HandedBack(bool(_pending.pop(0)) if _pending else False)
+
+    monkeypatch.setattr(bindings, "IOBluetoothRFCOMMChannel", wrap)
 
 
 _pending: list[int] = []
@@ -452,7 +453,11 @@ async def test_a_channel_nobody_holds_is_closed(
     open: on macOS 26.6.2, for 22 s.
     """
     leftover = Leftover()
-    monkeypatch.setattr(bindings, "IOBluetoothRFCOMMChannel", lambda _handle: leftover)
+
+    def wrap(_handle: object) -> Leftover:
+        return leftover
+
+    monkeypatch.setattr(bindings, "IOBluetoothRFCOMMChannel", wrap)
     device = FlakyDevice(report_on=1)
     await connecting._open_reported(cast(bindings.NativeDevice, device), 4, ADDRESS)
     assert not leftover.open
