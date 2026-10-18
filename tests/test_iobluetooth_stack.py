@@ -114,6 +114,7 @@ class _HeldHelper:
         self.says = says
         self.explain = explain
         self.far: Link | None = None
+        self.helper: Helper | None = None
         self.starts = 0
 
     @asynccontextmanager
@@ -126,6 +127,7 @@ class _HeldHelper:
                 {"event": "state", "state": state, "authorization": authorization}
             )
         helper = Helper(Link(near))
+        self.helper = helper
         reading = asyncio.ensure_future(helper.deliver(self.explain))
         try:
             yield helper
@@ -592,6 +594,44 @@ async def test_a_helper_macos_ends_while_held_is_not_allowed() -> None:
             await bluetooth.list_known_devices()
         await asyncio.sleep(0.05)
     assert held.starts == 1
+
+
+async def test_a_helper_that_stops_just_after_it_is_ready_is_replaced() -> None:
+    """
+    Its last state, its answer to "ready" and its end can be read together.
+    It was ready, so it is replaced, like any helper that stops.
+    """
+    unasked = CBManagerAuthorization.NOT_DETERMINED
+    held = _HeldHelper([(CBManagerState.UNKNOWN, unasked)])
+
+    async with _open_bluetooth(IOBluetoothBackend(held.start)) as bluetooth:
+        assert await anext(bluetooth.watch_availability()) is (
+            Availability.AWAITING_PERMISSION
+        )
+        far = held.far
+        assert far is not None
+        async with asyncio.timeout(1):
+            frame = await far.receive()
+        assert frame is not None
+        asked, _fds = frame
+        assert asked["op"] == "ready"
+
+        # Queued as the reader queues frames that arrive together, so nothing
+        # else runs between them.
+        assert held.helper is not None
+        arrived = held.helper._link._arrived
+        state = {
+            "event": "state",
+            "state": CBManagerState.POWERED_ON,
+            "authorization": CBManagerAuthorization.ALLOWED_ALWAYS,
+        }
+        arrived.put_nowait((state, []))
+        arrived.put_nowait(({"id": asked["id"], "ok": None}, []))
+        arrived.put_nowait(None)
+
+        async with asyncio.timeout(1):
+            while held.starts < 2:
+                await asyncio.sleep(0.01)
 
 
 async def test_a_held_helper_that_stops_is_not_replaced() -> None:

@@ -58,6 +58,7 @@ from aio_rfcomm.errors import (
     ChannelClosedError,
     ConnectionFailedError,
     DeviceNotFoundError,
+    RfcommError,
     ServiceNotFoundError,
 )
 
@@ -642,11 +643,22 @@ def _exits_with(
     return asked
 
 
+async def _ready(helper: Helper, there: Link) -> None:
+    """
+    Have the helper answer "ready", as one that touched Bluetooth and lived.
+    """
+    asking = asyncio.ensure_future(helper.ask("ready"))
+    request = await _next(there)
+    there.send({"id": request["id"], "ok": None})
+    await asking
+
+
 async def test_a_helper_macos_ended_was_not_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _exits_with(monkeypatch, (42, signal.SIGABRT))
-    error = await _why_stopped(42)
+    async with _helper() as (helper, _there):
+        error = await _why_stopped(42, helper)
     assert isinstance(error, BluetoothUnavailableError)
     assert error.reason is Availability.NOT_ALLOWED
     assert "prompt_under_name" in str(error)
@@ -658,7 +670,8 @@ async def test_the_exit_status_is_waited_for(monkeypatch: pytest.MonkeyPatch) ->
     status can be had.
     """
     asked = _exits_with(monkeypatch, (0, 0), (0, 0), (42, signal.SIGABRT))
-    error = await _why_stopped(42)
+    async with _helper() as (helper, _there):
+        error = await _why_stopped(42, helper)
     assert isinstance(error, BluetoothUnavailableError)
     assert asked == [42, 42, 42]
 
@@ -667,9 +680,50 @@ async def test_a_helper_that_exits_otherwise_just_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _exits_with(monkeypatch, (42, 1 << 8))
-    error = await _why_stopped(42)
+    async with _helper() as (helper, _there):
+        error = await _why_stopped(42, helper)
     assert type(error) is HelperFailedError
     assert "status 256" in str(error)
+
+
+async def test_an_abort_after_ready_is_a_crash_not_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    macOS refuses at the first call that needs Bluetooth, before the helper
+    is ready. An abort after that is an ordinary crash, and the helper is
+    replaced rather than given up on.
+    """
+    _exits_with(monkeypatch, (42, signal.SIGABRT))
+    async with _helper() as (helper, there):
+        await _ready(helper, there)
+        error = await _why_stopped(42, helper)
+    assert type(error) is HelperFailedError
+
+
+async def test_ready_is_recorded_before_an_end_read_with_it() -> None:
+    """
+    The answer to "ready" and the end can be read in one go, before whoever
+    asked has run again. The end is still put down to a ready helper.
+    """
+    async with _pair() as (here, there):
+        helper = Helper(here)
+        seen: list[bool] = []
+
+        async def explain() -> RfcommError:
+            seen.append(helper.ready)
+            return HelperFailedError("stopped")
+
+        async with asyncio.TaskGroup() as group:
+            group.create_task(helper.deliver(explain))
+            asking = group.create_task(helper.ask("ready"))
+            request = await _next(there)
+            # Queued as the reader queues what arrives together.
+            here._arrived.put_nowait(({"id": request["id"], "ok": None}, []))
+            here._arrived.put_nowait(None)
+            await asyncio.gather(asking, return_exceptions=True)
+
+    assert seen == [True]
 
 
 # --------------------------------------------------------------------------

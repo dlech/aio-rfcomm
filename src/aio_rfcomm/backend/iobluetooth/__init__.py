@@ -23,7 +23,12 @@ import os
 import socket
 import sys
 from collections.abc import AsyncGenerator, Callable, Collection
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+    suppress,
+)
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -540,13 +545,10 @@ class IOBluetoothBackend(BackendProvider):
                                 pass
 
                     async def confirm() -> None:
-                        nonlocal ready
-                        try:
+                        # The helper records the answer itself, the moment it
+                        # arrives, and a failure is the relay's to report.
+                        with suppress(RfcommError):
                             await helper.ask("ready")
-                        except RfcommError:
-                            # The relay hears of the stop too, and reports it.
-                            return
-                        ready = True
 
                     helper.on_stop = stopped
                     if helper.stopped:
@@ -566,6 +568,7 @@ class IOBluetoothBackend(BackendProvider):
                                 finally:
                                     confirming.cancel()
                     finally:
+                        ready = helper.ready
                         helper.on_stop = None
                         bluetooth.helper = None
             except BluetoothUnavailableError as refused:

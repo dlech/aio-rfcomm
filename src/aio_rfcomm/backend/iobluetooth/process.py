@@ -168,6 +168,9 @@ class Helper:
         # Set once the service has gone: withdrawn, or the helper stopped.
         self._unserved: RfcommError | None = None
         self._stopped: RfcommError | None = None
+        # The number of the "ready" request, and whether it was answered.
+        self._readying: int | None = None
+        self._ready = False
 
         self.on_stop: Callable[[RfcommError], None] | None = None
         """
@@ -195,6 +198,8 @@ class Helper:
             raise self._stopped
 
         number = next(self._numbers)
+        if op == "ready":
+            self._readying = number
         answer: asyncio.Future[tuple[Any, list[int]]] = (
             asyncio.get_running_loop().create_future()
         )
@@ -311,6 +316,14 @@ class Helper:
         self._end_requests(ConnectionFailedError("the service was withdrawn"))
 
     @property
+    def ready(self) -> bool:
+        """
+        Whether the helper has answered "ready": it has touched Bluetooth and
+        lived, so macOS has already decided whether it may.
+        """
+        return self._ready
+
+    @property
     def stopped(self) -> bool:
         """
         Whether the helper has been found to have stopped.
@@ -352,7 +365,13 @@ class Helper:
                 self._event(message, fds)
                 continue
 
-            answer = self._waiting.get(message.get("id", -1))
+            number = message.get("id", -1)
+            if number == self._readying and "error" not in message:
+                # Recorded here rather than by whoever asked, so that an end
+                # read in the same moment is put down to the right cause.
+                self._ready = True
+
+            answer = self._waiting.get(number)
             if answer is None or answer.done():
                 # Nobody is waiting: the request was abandoned. Any descriptor
                 # that came with the reply is ours to close.
@@ -498,7 +517,7 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
         with unwrap_lone_error():
             async with asyncio.TaskGroup() as group:
                 reader = group.create_task(
-                    helper.deliver(partial(_why_stopped, pid)),
+                    helper.deliver(partial(_why_stopped, pid, helper)),
                     name="aio-rfcomm helper",
                 )
                 try:
@@ -513,16 +532,18 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
         await _reap(pid)
 
 
-async def _why_stopped(pid: int) -> RfcommError:
+async def _why_stopped(pid: int, helper: Helper) -> RfcommError:
     """
     Work out why a helper stopped.
 
     macOS does not refuse Bluetooth when a process starts. It refuses at the
-    first call that needs it, by ending the process with ``SIGABRT``, so that
-    is the one ending with a meaning here.
+    first call that needs it, by ending the process with ``SIGABRT``. So that
+    ending means a refusal only before the helper is ready. After that it is
+    an ordinary crash, and the helper can be replaced.
 
     Args:
         pid: The helper's process id.
+        helper: The helper.
 
     Returns:
         The error to fail everything waiting on the helper with.
@@ -541,7 +562,11 @@ async def _why_stopped(pid: int) -> RfcommError:
             break
         await asyncio.sleep(0.01)
 
-    if os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGABRT:
+    if (
+        not helper.ready
+        and os.WIFSIGNALED(status)
+        and os.WTERMSIG(status) == signal.SIGABRT
+    ):
         return BluetoothUnavailableError(
             Availability.NOT_ALLOWED,
             "macOS refused Bluetooth to the helper process and ended it. "
