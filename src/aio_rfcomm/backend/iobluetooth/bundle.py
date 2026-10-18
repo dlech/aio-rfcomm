@@ -48,10 +48,29 @@ __all__ = ["build_helper"]
 
 # Bumped when the layout below changes, so a cached bundle built by an older
 # version of this package is rebuilt rather than reused.
-_LAYOUT = 1
+_LAYOUT = 2
 
 _DEFAULT_NAME = "aio-rfcomm"
 _DEFAULT_REASON = "This program uses Bluetooth to talk to a paired device."
+
+
+def _folder(name: str) -> str:
+    """
+    Name the bundle's folder after the display name.
+
+    Args:
+        name: The display name.
+
+    Returns:
+        The folder's name, ending in ``.app``.
+    """
+    # The permission dialog shows the folder's Finder name, not CFBundleName
+    # (tccd's -[TCCDAccessIdentity _makeDisplayNameBlockForURL:] reads
+    # NSURLLocalizedNameKey of the bundle, macOS 26.6.2). Finder shows a ":"
+    # in a file name as "/", so that is how a "/" gets through. File names
+    # are limited to 255 bytes.
+    stem = name.replace("/", ":").encode()[: 255 - len(".app")]
+    return f"{stem.decode(errors='ignore') or 'unnamed'}.app"
 
 
 def build_helper(name: str = _DEFAULT_NAME, reason: str = _DEFAULT_REASON) -> Path:
@@ -67,7 +86,7 @@ def build_helper(name: str = _DEFAULT_NAME, reason: str = _DEFAULT_REASON) -> Pa
         The path of the executable inside the bundle.
     """
     interpreter = Path(sys.executable).resolve()
-    app = _cache() / f"helper-{_key(interpreter, name, reason)}" / "AioRfcommHelper.app"
+    app = _cache() / f"helper-{_key(interpreter, name, reason)}" / _folder(name)
     executable = app / "Contents" / "MacOS" / "helper"
     if executable.exists():
         return executable

@@ -22,7 +22,7 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 assert not TYPE_CHECKING or sys.platform != "win32"
 
@@ -41,8 +41,9 @@ from aio_rfcomm.backend.iobluetooth import (
     _availability,
     _not_allowed,
     _wanted,
+    bundle,
 )
-from aio_rfcomm.backend.iobluetooth.bundle import _identifier, _key
+from aio_rfcomm.backend.iobluetooth.bundle import _folder, _identifier, _key
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth.process import (
     Helper,
@@ -506,6 +507,62 @@ def test_the_cache_key_follows_what_goes_into_the_bundle(tmp_path: Path) -> None
     assert _key(interpreter, "Name", "Reason") == same
     assert _key(interpreter, "Other", "Reason") != same
     assert _key(interpreter, "Name", "Other reason") != same
+
+
+def test_the_bundle_folder_is_named_after_the_name() -> None:
+    """
+    The permission dialog shows the bundle folder's Finder name, not
+    CFBundleName. Measured on macOS 26.6.2: a folder named
+    AioRfcommHelper.app put "AioRfcommHelper" in the dialog.
+    """
+    assert _folder("Robot Console") == "Robot Console.app"
+
+
+def test_a_slash_in_the_name_is_kept_as_a_colon() -> None:
+    assert _folder("Robot/Console") == "Robot:Console.app"
+
+
+def test_a_long_name_is_cut_between_characters() -> None:
+    folder = _folder("é" * 200)
+    assert len(folder.encode()) <= 255
+    assert folder == "é" * 125 + ".app"
+
+
+def test_an_empty_name_still_makes_a_folder() -> None:
+    assert _folder("") == "unnamed.app"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Finder names are macOS only")
+def test_macos_calls_the_bundle_by_the_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    tccd names the program in the dialog by NSURLLocalizedNameKey of the
+    bundle. Measured on macOS 26.6.2: with the folder named after it, the
+    dialog and Privacy & Security showed the name, slash included.
+    """
+    assert not TYPE_CHECKING or sys.platform == "darwin"
+
+    from rubicon.objc import ObjCClass, objc_const, objc_id
+    from rubicon.objc.api import ObjCInstance
+    from rubicon.objc.runtime import load_library
+
+    class URL(Protocol):
+        def getResourceValue(
+            self, value: objc_id, /, *, forKey: object, error: None
+        ) -> bool: ...
+
+    class URLClass(Protocol):
+        def fileURLWithPath(self, path: str, /) -> URL: ...
+
+    monkeypatch.setattr(bundle, "_cache", lambda: tmp_path)
+    app = bundle.build_helper("Robot/Console", "Reason").parents[2]
+
+    url = cast(URLClass, ObjCClass("NSURL")).fileURLWithPath(str(app))
+    key = objc_const(load_library("Foundation"), "NSURLLocalizedNameKey")
+    name = objc_id()
+    assert url.getResourceValue(name, forKey=key, error=None)
+    assert str(ObjCInstance(name)) == "Robot/Console"
 
 
 # --------------------------------------------------------------------------
