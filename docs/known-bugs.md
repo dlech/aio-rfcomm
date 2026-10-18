@@ -51,4 +51,21 @@ connect to the device first, and not when Windows was already connected to
 it. Seen on Windows 10.0.26200.9457 with a Mac, and on 10.0.26200.9711 with a
 Linux computer.
 
+### A channel can stay half open after a program ends
+
+If a program ends while it is opening a channel, the device can be left with
+that channel half open. Every later open of the channel then waits about four
+minutes and fails with `DeviceNotFoundError`, in new programs too. Other
+channels to the same device still open, and other computers can still open
+that channel. Disconnecting the device ends it.
+
+Windows closes the connection when the program ends. If the device accepts
+the channel after that, Windows never hangs up. The device keeps the channel
+open and does not answer later requests to open it. It happened in 1 of 20
+tries, with a device that was busy and slow to answer. Seen on Windows
+10.0.26200.9711, with a Linux computer running BlueZ 5.85.
+
+Canceling an open does not cause this. The library lets the open finish and
+then hangs up.
+
 **Next:** [API reference](reference/index.md), for every public name.

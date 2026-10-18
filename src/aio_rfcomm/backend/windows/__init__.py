@@ -59,6 +59,7 @@ from aio_rfcomm.backend.windows import publish
 from aio_rfcomm.backend.windows.addresses import format_address
 from aio_rfcomm.backend.windows.availability import follow_availability, stop_watcher
 from aio_rfcomm.backend.windows.connection import (
+    AbandonedConnects,
     WindowsChannel,
     WindowsService,
     bind_channel,
@@ -141,6 +142,7 @@ class WindowsBluetooth(BackendBluetooth):
 
         self._radio: Radio | None = None
         self._radio_token: EventRegistrationToken | None = None
+        self._abandoned = AbandonedConnects()
 
     def follow_radio(
         self,
@@ -276,7 +278,7 @@ class WindowsBluetooth(BackendBluetooth):
             channel = await look_up(device, address, service)
 
         async with AsyncExitStack() as stack:
-            sock = await open_socket(address, channel, self.address)
+            sock = await open_socket(address, channel, self.address, self._abandoned)
             stack.callback(sock.close)
 
             # An ordinary asyncio stream over a Bluetooth socket, which reads

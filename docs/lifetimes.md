@@ -69,7 +69,8 @@ Keep these in mind before putting a timeout around anything.
 **The device may still connect.** After you give up on connecting, the
 connection may still complete on the device's side. Retrying straight away can
 then fail, because a device allows only one connection per channel. Wait
-before retrying.
+before retrying. On Windows, the library lets the connection finish and then
+hangs up, and your next open of that channel waits until it has.
 
 **Do not use `asyncio.shield`.** A shielded call keeps running after you stop
 waiting for it. A shielded `receive`, for example, still holds the channel, so

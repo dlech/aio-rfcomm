@@ -586,7 +586,7 @@ async def test_a_device_that_never_answers_is_not_found(
     assert all(sock.fileno() == -1 for sock in machine.sockets)
 
 
-async def test_canceling_a_connect_closes_its_socket(
+async def test_a_canceled_connect_is_hung_up_once_it_is_over(
     windows: Bluetooth, machine: FakeWindows, freyr: FakePeer
 ) -> None:
     freyr.listening.add(5)
@@ -604,12 +604,54 @@ async def test_canceling_a_connect_closes_its_socket(
                 await asyncio.sleep(0.01)
 
             task.cancel()
+
+        # Not closed under the connect, which can leave the channel half
+        # open at the device.
+        (sock,) = machine.sockets
+        assert sock.fileno() != -1
     finally:
         freyr.hold.set()
 
-    (sock,) = machine.sockets
-    assert sock.fileno() == -1
-    assert machine.connected == []
+    while sock.fileno() != -1:
+        await asyncio.sleep(0.01)
+
+    assert machine.connected == [sock]
+    assert machine.far_end().recv(1) == b""
+
+
+async def test_an_open_waits_for_a_connect_given_up_on_to_its_channel(
+    windows: Bluetooth,
+    machine: FakeWindows,
+    freyr: FakePeer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    freyr.listening.add(5)
+    freyr.hold = threading.Event()
+    # Retrying at once would use up every attempt while the first is going.
+    monkeypatch.setattr("aio_rfcomm.backend.windows.connection._BACKOFF_SECONDS", 0)
+
+    async def connect() -> None:
+        async with windows.open_channel(RfcommDeviceInfo(FREYR), 5):
+            pass
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            task = group.create_task(connect())
+
+            while freyr.attempts == 0:
+                await asyncio.sleep(0.01)
+
+            task.cancel()
+
+        async with asyncio.TaskGroup() as group:
+            group.create_task(connect())
+            await asyncio.sleep(0.1)
+            freyr.hold.set()
+    finally:
+        freyr.hold.set()
+
+    assert freyr.attempts == 2
+    assert len(machine.connected) == 2
 
 
 # -- endings ---------------------------------------------------------------

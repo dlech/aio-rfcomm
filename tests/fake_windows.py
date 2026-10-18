@@ -44,6 +44,7 @@ ADDRESS_PROPERTY = "System.DeviceInterface.Bluetooth.DeviceAddress"
 
 # What Winsock fails a connect with, measured on Windows 10.0.26200.9457 and
 # 10.0.26200.9711.
+WSAEADDRINUSE = 10048
 WSAEHOSTDOWN = 10064
 WSAETIMEDOUT = 10060
 
@@ -536,6 +537,7 @@ class FakeWindows:
         self.watchers: list[FakeWatcher] = []
         self.sockets: list[FakeBluetoothSocket] = []
         self.connected: list[FakeBluetoothSocket] = []
+        self.connecting: set[tuple[str, int]] = set()
         self.bound: dict[int, FakeBluetoothSocket] = {}
         self.published: dict[uuid.UUID, tuple[str, int]] = {}
         self.far_ends: list[socket.socket] = []
@@ -622,6 +624,22 @@ class FakeWindows:
     def reach(self, sock: FakeBluetoothSocket, address: str, channel: int) -> None:
         """
         Connect a socket to a peer's channel, or fail the way Winsock does.
+        """
+        # Measured on Windows 10.0.26200.9711 against BlueZ 5.85: a second
+        # connect to a channel fails at once while the first is going.
+        if (address, channel) in self.connecting:
+            raise winsock_error(WSAEADDRINUSE)
+
+        self.connecting.add((address, channel))
+
+        try:
+            self._carry_out(sock, address, channel)
+        finally:
+            self.connecting.discard((address, channel))
+
+    def _carry_out(self, sock: FakeBluetoothSocket, address: str, channel: int) -> None:
+        """
+        Connect a socket, with no other connect to its channel going.
         """
         peer = self.peers.get(address)
 

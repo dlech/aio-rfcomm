@@ -40,7 +40,13 @@ from aio_rfcomm.errors import (
     ConnectionFailedError,
 )
 
-__all__ = ["WindowsChannel", "WindowsService", "bind_channel", "open_socket"]
+__all__ = [
+    "AbandonedConnects",
+    "WindowsChannel",
+    "WindowsService",
+    "bind_channel",
+    "open_socket",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -66,25 +72,65 @@ class WindowsChannel(StreamChannel):
     """
 
 
-def _settle(reached: asyncio.Future[None], error: BaseException | None) -> None:
+class AbandonedConnects:
     """
-    Hand a connect thread's outcome back to whoever is waiting.
+    Connects whose caller gave up, which Windows is still carrying out.
 
-    Args:
-        reached: The future the waiter is on.
-        error: What went wrong, or ``None`` if the socket connected.
+    While one connect to a device's channel is going, Windows fails any other
+    to the same channel at once with ``WSAEADDRINUSE``: measured on Windows
+    10.0.26200.9711, against BlueZ 5.85. So an open waits for these first.
     """
-    if reached.done():
-        # The caller gave up while the thread was still going. Nothing to
-        # tell, and the socket has already been closed underneath it.
-        return
-    if error is None:
-        reached.set_result(None)
-    else:
-        reached.set_exception(error)
+
+    def __init__(self) -> None:
+        self._going: dict[tuple[str, int], set[asyncio.Event]] = {}
+
+    async def wait(self, address: str, channel: int) -> None:
+        """
+        Wait until no connect to this channel that was given up on is going.
+
+        Args:
+            address: The device's Bluetooth address.
+            channel: The RFCOMM channel number.
+        """
+        while going := self._going.get((address, channel)):
+            await next(iter(going)).wait()
+
+    def add(self, address: str, channel: int) -> asyncio.Event:
+        """
+        Note a connect that was given up on.
+
+        Args:
+            address: The device's Bluetooth address.
+            channel: The RFCOMM channel number.
+
+        Returns:
+            What to hand to :meth:`finish` once the connect is over.
+        """
+        over = asyncio.Event()
+        self._going.setdefault((address, channel), set()).add(over)
+        return over
+
+    def finish(self, address: str, channel: int, over: asyncio.Event) -> None:
+        """
+        Note that a connect given up on is over.
+
+        Args:
+            address: The device's Bluetooth address.
+            channel: The RFCOMM channel number.
+            over: What :meth:`add` returned for it.
+        """
+        going = self._going[(address, channel)]
+        going.discard(over)
+
+        if not going:
+            del self._going[(address, channel)]
+
+        over.set()
 
 
-async def _reach(sock: socket.socket, address: str, channel: int) -> None:
+async def _reach(
+    address: str, channel: int, abandoned: AbandonedConnects
+) -> socket.socket:
     """
     Connect one socket, on a thread so the loop keeps running.
 
@@ -101,28 +147,59 @@ async def _reach(sock: socket.socket, address: str, channel: int) -> None:
     everything else had finished. A daemon thread cannot do that: the worst
     it costs is itself, until the process ends.
 
-    Closing the socket when the caller gives up is what usually makes the
-    blocking call return early, and it is worth doing, but nothing here
-    depends on it working.
+    When the caller gives up, the connect is left to finish, and the socket
+    is closed after it.
 
     Args:
-        sock: The socket to connect.
         address: The device's Bluetooth address.
         channel: The RFCOMM channel number.
+        abandoned: Connects given up on, to wait for and to add to.
+
+    Returns:
+        The connected socket.
 
     Raises:
         OSError: The connection failed.
     """
+    await abandoned.wait(address, channel)
+
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
     loop = asyncio.get_running_loop()
     reached: asyncio.Future[None] = loop.create_future()
+    over = False
+    given_up: asyncio.Event | None = None
+
+    def settle(error: BaseException | None) -> None:
+        # On the loop, once the connect is over.
+        nonlocal over
+        over = True
+
+        if reached.cancelled():
+            sock.close()
+
+            if given_up is not None:
+                abandoned.finish(address, channel, given_up)
+
+            return
+
+        if error is None:
+            reached.set_result(None)
+        else:
+            reached.set_exception(error)
 
     def connect() -> None:
+        outcome: BaseException | None = None
+
         try:
             sock.connect((address, channel))
         except BaseException as error:  # noqa: BLE001  (carried to the waiter)
-            loop.call_soon_threadsafe(_settle, reached, error)
-        else:
-            loop.call_soon_threadsafe(_settle, reached, None)
+            outcome = error
+
+        try:
+            loop.call_soon_threadsafe(settle, outcome)
+        except RuntimeError:
+            # The loop has closed, so nobody is left to hand the socket to.
+            sock.close()
 
     threading.Thread(
         target=connect, name=f"aio-rfcomm connect {address}", daemon=True
@@ -131,11 +208,27 @@ async def _reach(sock: socket.socket, address: str, channel: int) -> None:
     try:
         await reached
     except asyncio.CancelledError:
+        # Closing the socket under the connect would cut it short, and that
+        # can leave the channel half open: measured on Windows 10.0.26200.9711
+        # against a busy BlueZ 5.85, the device accepted the channel after
+        # the close, Windows never hung up, and the device ignored every
+        # later attempt to open that channel until the link dropped.
+        if over:
+            sock.close()
+        else:
+            given_up = abandoned.add(address, channel)
+
+        raise
+    except BaseException:
         sock.close()
         raise
 
+    return sock
 
-async def open_socket(address: str, channel: int, adapter: str | None) -> socket.socket:
+
+async def open_socket(
+    address: str, channel: int, adapter: str | None, abandoned: AbandonedConnects
+) -> socket.socket:
     """
     Connect a Bluetooth socket, retrying while it looks like flakiness.
 
@@ -143,6 +236,7 @@ async def open_socket(address: str, channel: int, adapter: str | None) -> socket
         address: The device's Bluetooth address.
         channel: The RFCOMM channel number.
         adapter: The adapter's address, if one should be insisted on.
+        abandoned: Connects given up on, to wait for and to add to.
 
     Returns:
         The connected socket.
@@ -155,13 +249,9 @@ async def open_socket(address: str, channel: int, adapter: str | None) -> socket
     """
     last: OSError | None = None
     for attempt in range(_ATTEMPTS):
-        sock = socket.socket(
-            socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM
-        )
         try:
-            await _reach(sock, address, channel)
+            return await _reach(address, channel, abandoned)
         except OSError as error:
-            sock.close()
             refused = translate_refusal(error, address, channel)
 
             if refused is not None:
@@ -171,11 +261,6 @@ async def open_socket(address: str, channel: int, adapter: str | None) -> socket
 
             if attempt + 1 < _ATTEMPTS:
                 await asyncio.sleep(_BACKOFF_SECONDS * (attempt + 1))
-            continue
-        except BaseException:
-            sock.close()
-            raise
-        return sock
 
     assert last is not None
     raise translate_failure(last, address, channel) from last
