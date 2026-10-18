@@ -71,12 +71,15 @@ async def _device(device: RfcommDeviceInfo, address: str) -> BluetoothDevice:
 
     Args:
         device: A description from a listing, or a bare address.
-        address: Its address, used where the description has no id.
+        address: Its address, used where the description has no device id.
 
     Returns:
         The device.
     """
-    if device.id is None:
+    # The handle is ours, kept private from users of the description.
+    device_id = device._handle  # pyright: ignore[reportPrivateUsage]
+
+    if device_id is None:
         # The stubs allow None, but measured on Windows 10.0.26200.9711 an
         # address Windows does not know still gives a device, which then does
         # not answer.
@@ -85,7 +88,7 @@ async def _device(device: RfcommDeviceInfo, address: str) -> BluetoothDevice:
         )
         return cast(BluetoothDevice, found)
 
-    return await BluetoothDevice.from_id_async(device.id)
+    return await BluetoothDevice.from_id_async(device_id)
 
 
 async def offers_any(device: BluetoothDevice, wanted: list[RfcommServiceId]) -> bool:

@@ -166,7 +166,9 @@ class BlueZBluetooth(BackendBluetooth):
 
             found.append(
                 RfcommDeviceInfo(
-                    properties["Address"].value, properties["Alias"].value, path
+                    properties["Address"].value,
+                    properties["Alias"].value,
+                    _handle=path,
                 )
             )
         return found
@@ -353,8 +355,12 @@ class BlueZBluetooth(BackendBluetooth):
             The device's object path, taken from the description where it came
             from this backend and rebuilt from the address otherwise.
         """
-        if device.id is not None:
-            return device.id
+        # The handle is ours, kept private from users of the description.
+        path = device._handle  # pyright: ignore[reportPrivateUsage]
+
+        if path is not None:
+            return path
+
         return f"{self.path}/dev_{device.address.replace(':', '_')}"
 
     @asynccontextmanager

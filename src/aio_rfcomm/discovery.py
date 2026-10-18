@@ -11,7 +11,7 @@ moment invites a polling loop and is stale the instant it is read.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 __all__ = ["RfcommDeviceInfo"]
 
@@ -20,7 +20,7 @@ __all__ = ["RfcommDeviceInfo"]
 _ADDRESS = re.compile(r"[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}")
 
 
-@dataclass(eq=False, frozen=True, slots=True)
+@dataclass(frozen=True, slots=True)
 class RfcommDeviceInfo:
     """
     A Bluetooth device.
@@ -31,6 +31,10 @@ class RfcommDeviceInfo:
     ```python
     device = RfcommDeviceInfo("00:1A:7D:DA:71:0C")
     ```
+
+    Two are equal when their addresses are, whatever their names, so one made
+    from an address finds the same device in a listing, as a set member or a
+    dictionary key too.
 
     Raises:
         ValueError: ``address`` is not a Bluetooth address.
@@ -44,19 +48,17 @@ class RfcommDeviceInfo:
     by dashes.
     """
 
-    name: str | None = None
+    name: str | None = field(default=None, compare=False)
     """
     The device's name, if the system knows one.
 
     It can be out of date, so match devices on [`address`][address] instead.
     """
 
-    id: str | None = None
-    """
-    The library's own handle for the device. Leave it alone.
-    """
-    # BlueZ's object path, where there is one, so the backend need not rebuild
-    # it from the address. None otherwise.
+    # The backend's own handle for a device it listed, so it need not find
+    # the device again from the address: BlueZ's object path, or Windows'
+    # device id. None for one made from an address.
+    _handle: str | None = field(default=None, kw_only=True, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not _ADDRESS.fullmatch(self.address):

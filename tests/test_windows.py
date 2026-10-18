@@ -441,7 +441,7 @@ async def test_paired_devices_are_listed(
 
     assert listed.address == FREYR
     assert listed.name == "freyr"
-    assert listed.id == freyr.id
+    assert listed._handle == freyr.id
 
 
 async def test_a_listing_without_an_address_is_left_out(

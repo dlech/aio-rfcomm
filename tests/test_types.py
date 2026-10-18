@@ -64,7 +64,24 @@ def test_anything_else_is_not_an_address(written: str) -> None:
 def test_a_name_is_not_needed() -> None:
     info = RfcommDeviceInfo("00:1A:7D:DA:71:0C")
     assert info.name is None
-    assert info.id is None
+    assert info._handle is None
+
+
+def test_devices_are_equal_by_address_alone() -> None:
+    made = RfcommDeviceInfo("00-1a-7d-da-71-0c")
+    listed = RfcommDeviceInfo("00:1A:7D:DA:71:0C", "freyr", _handle="/dev_00")
+
+    assert made == listed
+    assert hash(made) == hash(listed)
+    assert made in [listed]
+    assert {listed: "found"}[made] == "found"
+    assert made != RfcommDeviceInfo("00:1A:7D:DA:71:0D", "freyr")
+
+
+def test_the_handle_is_not_shown() -> None:
+    listed = RfcommDeviceInfo("00:1A:7D:DA:71:0C", "freyr", _handle="/dev_00")
+
+    assert repr(listed) == "RfcommDeviceInfo(address='00:1A:7D:DA:71:0C', name='freyr')"
 
 
 # --------------------------------------------------------------------------

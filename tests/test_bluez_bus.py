@@ -82,13 +82,13 @@ async def _until(bluetooth: Bluetooth, wanted: Availability) -> None:
 
 
 def _info(device: FakeDevice) -> RfcommDeviceInfo:
-    return RfcommDeviceInfo(device.address, device.alias, device.path)
+    return RfcommDeviceInfo(device.address, device.alias, _handle=device.path)
 
 
 def _listed(
     devices: list[RfcommDeviceInfo],
 ) -> list[tuple[str, str | None, str | None]]:
-    return [(d.address, d.name, d.id) for d in devices]
+    return [(d.address, d.name, d._handle) for d in devices]
 
 
 def _expected(*devices: FakeDevice) -> list[tuple[str, str | None, str | None]]:
@@ -458,7 +458,7 @@ async def test_a_peer_that_connects_is_accepted(bluez: FakeBlueZ) -> None:
         peer = await bluez.connect_from(device, SERVICE)
         request = await anext(service.connection_requests())
         assert request.info.address == device.address
-        assert request.info.id == device.path
+        assert request.info._handle == device.path
 
         async with request.accept() as channel:
             peer.sendall(b"ping")

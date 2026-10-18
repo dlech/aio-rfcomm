@@ -91,7 +91,7 @@ def _peer_from_path(device_path: str) -> RfcommDeviceInfo:
         What we know about the peer.
     """
     tail = device_path.rsplit("/dev_", 1)[-1]
-    return RfcommDeviceInfo(tail.replace("_", ":").upper(), None, device_path)
+    return RfcommDeviceInfo(tail.replace("_", ":").upper(), _handle=device_path)
 
 
 @asynccontextmanager

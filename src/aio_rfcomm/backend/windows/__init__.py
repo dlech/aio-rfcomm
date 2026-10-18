@@ -205,7 +205,7 @@ class WindowsBluetooth(BackendBluetooth):
                 # filter, so there is no device object to fall back on.
                 logger.debug("%s reports no Bluetooth address. Skipping", info.name)
                 continue
-            found.append(RfcommDeviceInfo(address, info.name or None, info.id))
+            found.append(RfcommDeviceInfo(address, info.name or None, _handle=info.id))
         return found
 
     @override
