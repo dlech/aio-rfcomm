@@ -71,13 +71,18 @@ class ChannelDelegate(NSObject, protocols=[IOBluetoothRFCOMMChannelDelegate]):
     Everything one open RFCOMM channel reports back.
     """
 
-    opened: asyncio.Future[None]
+    # An event with the status beside it rather than a future: a wait for the
+    # open gives up and waits again (see Channel.wait_until_open), and a
+    # waiter canceled must not cancel what the next one waits for.
+    opened: asyncio.Event
+    open_status: int
     arrived: asyncio.Queue[bytes]
     ended: asyncio.Event
 
     @objc_method
     def init(self):
-        self.opened = asyncio.get_running_loop().create_future()
+        self.opened = asyncio.Event()
+        self.open_status = 0
         self.arrived = asyncio.Queue()
         self.ended = asyncio.Event()
         return self
@@ -86,12 +91,10 @@ class ChannelDelegate(NSObject, protocols=[IOBluetoothRFCOMMChannelDelegate]):
     def rfcommChannelOpenComplete_status_(
         self, _channel: ObjCInstance, status: int
     ) -> None:
-        if self.opened.done():
+        if self.opened.is_set():
             return
-        if status:
-            self.opened.set_exception(MachError(status))
-        else:
-            self.opened.set_result(None)
+        self.open_status = status
+        self.opened.set()
 
     @objc_method
     def rfcommChannelData_data_length_(
@@ -189,8 +192,8 @@ class Channel:
         """
         Wait a while for the framework to finish opening the channel.
 
-        Waiting again after running out of time is fine: the open is still
-        heard, because only this wait ends, not the open's future.
+        Waiting again after running out of time is fine: running out ends
+        only this wait, so the open is still heard.
 
         Args:
             seconds: How long to wait this time.
@@ -201,12 +204,13 @@ class Channel:
         Raises:
             MachError: The channel could not be opened.
         """
-        opened = self._delegate.opened
-        await asyncio.wait([opened], timeout=seconds)
-        if not opened.done():
+        try:
+            async with asyncio.timeout(seconds):
+                await self._delegate.opened.wait()
+        except TimeoutError:
             return False
 
-        opened.result()
+        check(self._delegate.open_status)
         return True
 
     def connected_number(self) -> int | None:
@@ -292,9 +296,6 @@ class Channel:
         if not hasattr(self, "_channel"):
             return
 
-        # A report that comes after all is then ignored, rather than left
-        # with nobody to read it.
-        self._delegate.opened.cancel()
         unread_by_channel.pop(_address_of(self._channel), None)
         # Dropped inside a pool for the reason close() explains at length.
         with autoreleasepool():
@@ -326,7 +327,6 @@ class Channel:
         if not hasattr(self, "_channel"):
             return
 
-        self._delegate.opened.cancel()
         self._channel.closeChannel()
         try:
             if not self._delegate.ended.is_set():

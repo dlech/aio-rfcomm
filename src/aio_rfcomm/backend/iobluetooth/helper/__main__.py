@@ -73,6 +73,9 @@ class _Session:
         self.link = link
         self.group = group
         self.serving: asyncio.Task[None] | None = None
+        # Set once the serve request's task has finished, its service
+        # withdrawn. Withdrawing waits on this rather than on the task.
+        self.served = asyncio.Event()
 
 
 async def _serve(sock: socket.socket) -> None:
@@ -203,12 +206,15 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
                     # bluetoothd and leak its slot: see native.serve.
                     raise RfcommError("this helper is already serving")
                 session.serving = asyncio.current_task()
-                await _publish(session, number, message)
+                try:
+                    await _publish(session, number, message)
+                finally:
+                    session.served.set()
 
             case "withdraw":
                 if session.serving is not None:
                     session.serving.cancel()
-                    await asyncio.gather(session.serving, return_exceptions=True)
+                    await session.served.wait()
                 link.send({"id": number, "ok": None})
 
             case unknown:

@@ -108,6 +108,10 @@ reportMissingModuleSource = "none"
 # check for themselves. Enforced here rather than left to review.
 reportImplicitOverride = "error"
 
+[tool.ruff.lint]
+# Not among ruff's default rules, and what makes the banned list below bite.
+extend-select = ["TID251"]
+
 # Structured concurrency, enforced mechanically rather than by review.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "asyncio.create_task".msg = "Use asyncio.TaskGroup (structured concurrency rule)."

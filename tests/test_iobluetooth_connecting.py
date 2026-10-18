@@ -9,7 +9,7 @@ stood in for.
 import asyncio
 import sys
 import time
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -277,8 +277,9 @@ class FlakyDevice:
     ) -> int:
         self.attempts += 1
         if self.attempts >= self.report_on:
-            opened = delegate.opened  # pyright: ignore[reportAttributeAccessIssue]
-            asyncio.get_running_loop().call_soon(opened.set_result, None)
+            # As the framework reports an open: through the delegate.
+            report = cast(Any, delegate).rfcommChannelOpenComplete_status_
+            asyncio.get_running_loop().call_soon(report, None, 0)
         return 0
 
 
@@ -410,10 +411,8 @@ class StillGoingDevice(FlakyDevice):
         loop = asyncio.get_running_loop()
         if self.attempts == 2:
             loop.call_soon(native.record_open_result, ADDRESS, withChannelID, 1902)
-            opened = delegate.opened  # pyright: ignore[reportAttributeAccessIssue]
-            loop.call_later(
-                4 * connecting._OPEN_REPORT_SECONDS, opened.set_result, None
-            )
+            report = cast(Any, delegate).rfcommChannelOpenComplete_status_
+            loop.call_later(4 * connecting._OPEN_REPORT_SECONDS, report, None, 0)
         return 0
 
 
