@@ -371,6 +371,25 @@ async def test_a_radio_that_only_does_low_energy_is_no_adapter(
         assert await anext(opened.watch_availability()) is Availability.NO_ADAPTER
 
 
+async def test_an_adapter_gone_before_it_is_opened_is_no_adapter(
+    machine: FakeWindows,
+) -> None:
+    machine.adapters[0].vanishing = True
+
+    async with _open_bluetooth(WindowsBackend()) as opened:
+        assert await anext(opened.watch_availability()) is Availability.NO_ADAPTER
+
+
+async def test_an_adapter_gone_before_it_is_opened_leaves_the_others(
+    machine: FakeWindows,
+) -> None:
+    machine.adapters[0].vanishing = True
+    machine.plug_in("00:1A:7D:DA:71:0D")
+
+    async with _open_bluetooth(WindowsBackend()) as opened:
+        assert await anext(opened.watch_availability()) is Availability.USABLE
+
+
 async def test_a_first_read_that_fails_is_reported_and_read_again(
     machine: FakeWindows,
 ) -> None:

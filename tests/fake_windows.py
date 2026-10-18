@@ -130,6 +130,12 @@ class FakeAdapter:
         self.is_classic_supported = True
         self.radio = radio
 
+        self.vanishing = False
+        """
+        Whether it is unplugged just after the next listing, before it can be
+        opened.
+        """
+
     async def get_radio_async(self) -> FakeRadio:
         return self.radio
 
@@ -522,7 +528,12 @@ class _InformationStatics:
     async def find_all_async_aqs_filter(self, selector: str) -> list[FakeInformation]:
         assert selector == _ADAPTERS
         self._world.check_failure()
-        return [FakeInformation(a.id, a.name, {}) for a in self._world.adapters]
+        listed = [FakeInformation(a.id, a.name, {}) for a in self._world.adapters]
+
+        for adapter in [a for a in self._world.adapters if a.vanishing]:
+            self._world.unplug(adapter)
+
+        return listed
 
     async def find_all_async_aqs_filter_and_additional_properties(
         self, selector: str, properties: Iterable[str]

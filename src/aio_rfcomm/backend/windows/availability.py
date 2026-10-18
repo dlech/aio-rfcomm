@@ -39,16 +39,16 @@ __all__ = ["follow_availability", "list_adapters", "read_availability", "stop_wa
 logger = logging.getLogger(__name__)
 
 
-async def list_adapters() -> list[tuple[str, str | None, str | None]]:
+async def list_adapters() -> list[tuple[str, str | None, BluetoothAdapter]]:
     """
     Read every Bluetooth radio the machine has.
 
     Returns:
-        The identifier, address and name of each adapter that supports
-        Bluetooth Classic. A Low Energy only radio cannot carry RFCOMM at
-        all, so listing it would only offer a choice that cannot work.
+        The identifier and name of each adapter that supports Bluetooth
+        Classic, and the adapter itself. A Low Energy only radio cannot carry
+        RFCOMM at all, so listing it would only offer a choice that cannot work.
     """
-    found: list[tuple[str, str | None, str | None]] = []
+    found: list[tuple[str, str | None, BluetoothAdapter]] = []
     for info in await DeviceInformation.find_all_async_aqs_filter(
         BluetoothAdapter.get_device_selector()
     ):
@@ -60,14 +60,17 @@ async def list_adapters() -> list[tuple[str, str | None, str | None]]:
         # the adapter that does not carry it, not the request that is wrong.
         # Whether the radio does Classic is only on the object either way. In
         # practice there is one adapter, so this is one extra call.
-        # Never None: an id that no longer resolves fails the operation with
-        # ERROR_FILE_NOT_FOUND instead, measured on Windows 10.0.26200.9711.
-        adapter = await BluetoothAdapter.from_id_async(info.id)
-        if not adapter.is_classic_supported:
+        try:
+            adapter = await BluetoothAdapter.from_id_async(info.id)
+        except FileNotFoundError:
+            # Gone since the listing. An id that no longer resolves fails with
+            # ERROR_FILE_NOT_FOUND, never gives None, measured on Windows
+            # 10.0.26200.9711. A real unplug is not measured.
             continue
-        found.append(
-            (info.id, format_address(adapter.bluetooth_address), info.name or None)
-        )
+
+        if adapter.is_classic_supported:
+            found.append((info.id, info.name or None, adapter))
+
     return found
 
 
@@ -125,17 +128,17 @@ async def read_availability(
     # The one in use is kept while it is there. Otherwise the first.
     chosen = next((a for a in available if a[0] == bluetooth.adapter), None)
     chosen = chosen or (available[0] if available else None)
-    found = None if chosen is None else await BluetoothAdapter.from_id_async(chosen[0])
-    radio = None if found is None else await found.get_radio_async()
+    # The adapter the listing opened. Looking it up again could find it gone.
+    radio = None if chosen is None else await chosen[2].get_radio_async()
 
     if chosen is None or radio is None:
         bluetooth.follow_radio(None, None, notice)
         state.set(Availability.NO_ADAPTER)
         return
 
-    identifier, address, name = chosen
+    identifier, name, adapter = chosen
     bluetooth.follow_radio(identifier, radio, notice)
-    bluetooth.address = address
+    bluetooth.address = format_address(adapter.bluetooth_address)
     state.set(*_availability_of(radio.state, name or identifier))
 
 
