@@ -26,11 +26,12 @@ import enum
 import struct
 import uuid
 from collections.abc import Mapping
-from typing import Any
+from typing import TypeAlias
 
 __all__ = [
     "PROTOCOL_DESCRIPTOR_LIST",
     "SERVICE_NAME",
+    "DataElement",
     "SdpError",
     "parse_element",
     "read_channel",
@@ -60,6 +61,13 @@ The attribute holding a service's human-readable name.
 
 _RFCOMM = uuid.UUID("00000003-0000-1000-8000-00805f9b34fb")
 
+DataElement: TypeAlias = (
+    "int | bool | uuid.UUID | bytes | str | list[DataElement] | None"
+)
+"""
+A data element's value, as ``parse_element`` returns it.
+"""
+
 
 class _Kind(enum.IntEnum):
     """
@@ -87,7 +95,7 @@ class SdpError(Exception):
     """
 
 
-def parse_element(data: bytes) -> Any:
+def parse_element(data: bytes) -> DataElement:
     """
     Read one data element.
 
@@ -167,7 +175,7 @@ def read_name(attributes: Mapping[int, bytes]) -> str | None:
     return text.decode(errors="replace")
 
 
-def _read_element(data: bytes, offset: int) -> tuple[Any, int]:
+def _read_element(data: bytes, offset: int) -> tuple[DataElement, int]:
     """
     Read one data element and say how far it reached.
 
@@ -229,7 +237,7 @@ def _read(layout: struct.Struct, data: bytes, offset: int) -> int:
         raise SdpError(f"a data element's size ran off the end: {error}") from error
 
 
-def _decode(kind: int, value: bytes) -> Any:
+def _decode(kind: int, value: bytes) -> DataElement:
     """
     Turn one element's bytes into a Python value.
 
@@ -267,7 +275,7 @@ def _decode(kind: int, value: bytes) -> Any:
             raise SdpError(f"unknown data element type {kind}")
 
 
-def _decode_sequence(value: bytes) -> list[Any]:
+def _decode_sequence(value: bytes) -> list[DataElement]:
     """
     Read every element of a sequence.
 
@@ -277,7 +285,7 @@ def _decode_sequence(value: bytes) -> list[Any]:
     Returns:
         The elements.
     """
-    elements: list[Any] = []
+    elements: list[DataElement] = []
     offset = 0
     while offset < len(value):
         element, offset = _read_element(value, offset)

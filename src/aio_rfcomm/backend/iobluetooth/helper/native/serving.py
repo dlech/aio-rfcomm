@@ -135,7 +135,7 @@ def _channels_in_use() -> set[int]:
         logger.debug("could not read the local services", exc_info=True)
         return set()
 
-    used = set()
+    used: set[int] = set()
 
     for record in records:
         number = ctypes.c_char()

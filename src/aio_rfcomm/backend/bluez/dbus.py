@@ -149,9 +149,9 @@ async def add_match(bus: MessageBus, rule: str) -> None:
             body=[rule],
         )
     )
-    if reply is None or reply.message_type is MessageType.ERROR:
+    if reply.message_type is MessageType.ERROR:
         # Not fatal: Bluetooth still works, but changes to it go unnoticed.
-        logger.warning("the system bus refused %s: %s", rule, reply and reply.body)
+        logger.warning("the system bus refused %s: %s", rule, reply.body)
 
 
 def optional_string(value: Variant | None) -> str | None:

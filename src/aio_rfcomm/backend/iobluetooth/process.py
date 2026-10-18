@@ -332,7 +332,7 @@ class Helper:
         while True:
             frame = await self._link.receive()
             if frame is None:
-                self._stop(HelperFailedError("the macOS Bluetooth helper stopped"))
+                self.stop(HelperFailedError("the macOS Bluetooth helper stopped"))
                 return
 
             message, fds = frame
@@ -411,7 +411,7 @@ class Helper:
                 self.forget(waiting.handle)
         self._requests.put_nowait(None)
 
-    def _stop(self, error: RfcommError) -> None:
+    def stop(self, error: RfcommError) -> None:
         """
         Fail everything outstanding, because the helper has gone.
 
@@ -494,7 +494,7 @@ async def run_helper() -> AsyncGenerator[Helper, None]:
     finally:
         # Whatever still waits on this helper -- a channel closing, say --
         # hears that it has gone rather than waiting for it forever.
-        helper._stop(HelperFailedError("the macOS Bluetooth helper was stopped"))
+        helper.stop(HelperFailedError("the macOS Bluetooth helper was stopped"))
         link.close()
         await _reap(pid)
 

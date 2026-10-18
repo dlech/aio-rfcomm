@@ -8,6 +8,7 @@ Finding devices, and the channel a service is on, through WinRT.
 from __future__ import annotations
 
 import logging
+from typing import cast
 from uuid import UUID
 
 from winrt.system import unbox_string
@@ -67,24 +68,21 @@ async def _device(device: RfcommDeviceInfo, address: str) -> BluetoothDevice:
 
     Args:
         device: A description from a listing, or a bare address.
-        address: Its address, for the error message.
+        address: Its address, used where the description has no id.
 
     Returns:
         The device.
-
-    Raises:
-        DeviceNotFoundError: The device did not answer.
     """
-    if device.id is not None:
-        found = await BluetoothDevice.from_id_async(device.id)
-    else:
+    if device.id is None:
+        # The stubs allow None, but measured on Windows 10.0.26200.9711 an
+        # address Windows does not know still gives a device, which then does
+        # not answer.
         found = await BluetoothDevice.from_bluetooth_address_async(
             parse_address(address)
         )
+        return cast(BluetoothDevice, found)
 
-    if found is None:
-        raise DeviceNotFoundError(address)
-    return found
+    return await BluetoothDevice.from_id_async(device.id)
 
 
 async def offers_any(device: BluetoothDevice, wanted: list[RfcommServiceId]) -> bool:

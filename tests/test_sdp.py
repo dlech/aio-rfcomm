@@ -103,7 +103,9 @@ def test_a_medium_uuid_expands_onto_the_base() -> None:
 
 
 def test_a_full_uuid_is_taken_as_it_is() -> None:
-    assert parse_element(RECORD[0x0001])[0] == SERVICE
+    classes = parse_element(RECORD[0x0001])
+    assert isinstance(classes, list)
+    assert classes[0] == SERVICE
 
 
 def test_text_stays_bytes() -> None:

@@ -186,7 +186,8 @@ async def _answer(session: _Session, message: dict[str, Any]) -> None:
                 link.send({"id": number, "ok": None})
 
             case "devices":
-                wanted = [UUID(u) for u in message.get("service") or []]
+                services: list[str] = message.get("service") or []
+                wanted = [UUID(u) for u in services]
                 link.send(
                     {
                         "id": number,

@@ -187,11 +187,9 @@ class WindowsBluetooth(BackendBluetooth):
         ):
             address = read_address(info)
             if wanted:
+                # Never None, measured on Windows 10.0.26200.9711: an unknown
+                # address still gives a device, and a malformed id fails.
                 device = await BluetoothDevice.from_id_async(info.id)
-                if device is None:
-                    # Paired, but the radio cannot produce it -- switched off,
-                    # or removed between the listing and now.
-                    continue
                 if not await offers_any(device, wanted):
                     continue
                 if address is None:

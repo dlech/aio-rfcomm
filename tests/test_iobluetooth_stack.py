@@ -74,7 +74,7 @@ class _Helpers:
         finally:
             # What run_helper ends with: whatever still waits is released, and
             # the helper reads end of file and stops.
-            helper._stop(HelperFailedError("the helper was stopped"))
+            helper.stop(HelperFailedError("the helper was stopped"))
             helper._link.close()
             async with asyncio.timeout(1):
                 await asyncio.gather(serving, return_exceptions=True)

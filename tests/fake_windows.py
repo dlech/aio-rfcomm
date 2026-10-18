@@ -462,8 +462,15 @@ class _AdapterStatics:
     def get_device_selector(self) -> str:
         return _ADAPTERS
 
-    async def from_id_async(self, id: str) -> FakeAdapter | None:
-        return next((a for a in self._world.adapters if a.id == id), None)
+    async def from_id_async(self, id: str) -> FakeAdapter:
+        found = next((a for a in self._world.adapters if a.id == id), None)
+
+        if found is None:
+            # Measured on Windows 10.0.26200.9711: an id that no longer
+            # resolves fails the operation rather than giving None.
+            raise FileNotFoundError(2, "The system cannot find the file specified.")
+
+        return found
 
 
 class _DeviceStatics:
@@ -474,9 +481,23 @@ class _DeviceStatics:
         assert paired
         return _PAIRED
 
-    async def from_id_async(self, id: str) -> FakeDevice | None:
+    async def from_id_async(self, id: str) -> FakeDevice:
         peer = next((p for p in self._world.peers.values() if p.id == id), None)
-        return None if peer is None else FakeDevice(peer)
+
+        if peer is None:
+            # Measured on Windows 10.0.26200.9711: never None. An unknown
+            # address still gives a device, and a malformed id fails.
+            prefix = "Bluetooth#Bluetooth"
+            digits = id.removeprefix(prefix)
+
+            if not id.startswith(prefix) or len(digits) != 12:
+                raise OSError(
+                    22, "The provided device ID is not a valid BluetoothDevice object."
+                )
+
+            return await self.from_bluetooth_address_async(int(digits, 16))
+
+        return FakeDevice(peer)
 
     async def from_bluetooth_address_async(self, address: int) -> FakeDevice:
         text = address.to_bytes(6, "big").hex(":").upper()

@@ -57,8 +57,10 @@ async def list_adapters() -> list[tuple[str, str | None, str | None]]:
         # the adapter that does not carry it, not the request that is wrong.
         # Whether the radio does Classic is only on the object either way. In
         # practice there is one adapter, so this is one extra call.
+        # Never None: an id that no longer resolves fails the operation with
+        # ERROR_FILE_NOT_FOUND instead, measured on Windows 10.0.26200.9711.
         adapter = await BluetoothAdapter.from_id_async(info.id)
-        if adapter is None or not adapter.is_classic_supported:
+        if not adapter.is_classic_supported:
             continue
         found.append(
             (info.id, format_address(adapter.bluetooth_address), info.name or None)
@@ -101,8 +103,8 @@ def _availability_of(radio: RadioState, name: str) -> tuple[Availability, str | 
                 Availability.SWITCHED_OFF,
                 f"{name} is switched off. Turn Bluetooth on",
             )
-        case unexpected:
-            assert_never(unexpected)
+        case _:
+            assert_never(radio)
 
 
 async def read_availability(
