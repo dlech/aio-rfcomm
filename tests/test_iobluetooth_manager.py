@@ -286,7 +286,8 @@ async def test_every_state_is_reported_as_it_comes(manager: FakeManager) -> None
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
         native.report_states(
-            lambda state, authorization: reports.append((state, authorization))
+            lambda state, authorization: reports.append((state, authorization)),
+            asyncio.Event(),
         )
     )
     try:
@@ -313,7 +314,9 @@ async def test_a_restart_is_reported_state_by_state(manager: FakeManager) -> Non
     manager.state = CBManagerState.POWERED_ON
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(
+            lambda state, _auth: reports.append((state, 0)), asyncio.Event()
+        )
     )
     try:
         await until_observed(manager)
@@ -354,7 +357,9 @@ async def test_a_state_that_settles_unheard_is_still_reported(
     )
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(
+            lambda state, _auth: reports.append((state, 0)), asyncio.Event()
+        )
     )
     try:
         states = [state for state, _ in await _reported(reports, 2)]
@@ -373,7 +378,9 @@ async def test_a_state_still_unknown_after_observing_is_looked_at_again(
     manager.state = CBManagerState.UNKNOWN
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(
+            lambda state, _auth: reports.append((state, 0)), asyncio.Event()
+        )
     )
     try:
         await until_observed(manager)
@@ -393,7 +400,7 @@ async def test_giving_up_on_the_watch_stops_observing(manager: FakeManager) -> N
     """
     manager.state = CBManagerState.POWERED_ON
     watching = asyncio.ensure_future(
-        native.report_states(lambda _state, _authorization: None)
+        native.report_states(lambda _state, _authorization: None, asyncio.Event())
     )
     await until_observed(manager)
     watching.cancel()
@@ -430,7 +437,8 @@ async def test_the_authorization_is_said_before_the_manager_is_reached(
     monkeypatch.setattr(bindings, "CBManager", FakeAuthorization(unasked))
     watching = asyncio.ensure_future(
         native.report_states(
-            lambda state, authorization: reports.append((state, authorization))
+            lambda state, authorization: reports.append((state, authorization)),
+            asyncio.Event(),
         )
     )
     try:
@@ -463,7 +471,9 @@ async def test_a_controller_that_never_comes_up_is_unsupported(
     )
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(
+            lambda state, _auth: reports.append((state, 0)), asyncio.Event()
+        )
     )
     try:
         states = [state for state, _ in await _reported(reports, 2)]
@@ -487,7 +497,9 @@ async def test_a_central_manager_does_not_overrule_a_known_state(
     monkeypatch.setattr(bindings, "ObjCClass", find_class)
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
-        native.report_states(lambda state, _auth: reports.append((state, 0)))
+        native.report_states(
+            lambda state, _auth: reports.append((state, 0)), asyncio.Event()
+        )
     )
     try:
         await _reported(reports, 2)
@@ -527,7 +539,8 @@ async def test_a_manager_that_cannot_be_reached_reports_the_power_once(
     reports: list[tuple[int, int]] = []
     watching = asyncio.ensure_future(
         native.report_states(
-            lambda state, authorization: reports.append((state, authorization))
+            lambda state, authorization: reports.append((state, authorization)),
+            asyncio.Event(),
         )
     )
     try:

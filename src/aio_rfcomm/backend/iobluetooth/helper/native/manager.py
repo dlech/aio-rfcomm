@@ -15,6 +15,7 @@ its state.
 import asyncio
 import logging
 import sys
+import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 
@@ -217,6 +218,41 @@ def _classic_manager() -> _Manager | None:
         return None
 
 
+async def _reach_classic_manager() -> _Manager | None:
+    """
+    Reach the classic manager on a thread of its own, the first time.
+
+    This thread runs the event loop, and a permission dialog would hold it in
+    the coordinator's ``init``. Nothing there needs it: the coordinator makes
+    both managers on a dispatch queue of its own, and their first state
+    arrives there (disassembly of macOS 26.6.2). Measured on macOS 26.6.2:
+    reached from another thread, the managers report and IOBluetooth works
+    from this one afterwards.
+
+    Returns:
+        The manager, or ``None`` if the private path to it has gone.
+    """
+    loop = asyncio.get_running_loop()
+    reached: asyncio.Future[_Manager | None] = loop.create_future()
+
+    def settle(manager: _Manager | None) -> None:
+        if not reached.done():
+            reached.set_result(manager)
+
+    def reach() -> None:
+        manager = _classic_manager()
+        try:
+            loop.call_soon_threadsafe(settle, manager)
+        except RuntimeError:
+            # The loop has closed: the dialog was answered as the helper exits.
+            pass
+
+    # A daemon, so that a dialog nobody answers does not keep the helper from
+    # exiting.
+    threading.Thread(target=reach, name="aio-rfcomm manager", daemon=True).start()
+    return await reached
+
+
 def _central_manager() -> _Manager | None:
     """
     Reach the central manager the coordinator keeps beside the classic one.
@@ -274,7 +310,9 @@ async def _wait_until_settled(manager: _Manager) -> None:
     await _wait_for_state(manager, lambda state: state not in _UNSETTLED)
 
 
-async def report_states(report: Callable[[int, int], None]) -> NoReturn:
+async def report_states(
+    report: Callable[[int, int], None], reached: asyncio.Event
+) -> NoReturn:
     """
     Report the manager's state now, and again on every change.
 
@@ -293,6 +331,10 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
     Args:
         report: Called with each ``CBManagerState`` and the
             ``CBManagerAuthorization`` at the time, on this loop's thread.
+        reached: Set once the manager has been reached. Until then, any
+            IOBluetooth call on this thread can hold it until a permission
+            dialog is answered, since most of them reach the manager too and
+            wait for the first to finish (measured on macOS 26.6.2).
     """
     last: tuple[int, int] | None = None
 
@@ -302,11 +344,12 @@ async def report_states(report: Callable[[int, int], None]) -> NoReturn:
             last = (state, authorization)
             report(state, authorization)
 
-    # Said first, because reaching the manager can block this thread until a
-    # permission dialog is answered, and reading this does not.
+    # Said first, because reaching the manager can take until a permission
+    # dialog is answered, and reading this does not.
     once(CBManagerState.UNKNOWN, read_authorization())
 
-    manager = _classic_manager()
+    manager = await _reach_classic_manager()
+    reached.set()
     if manager is None:
         powered = read_power_state()
         once(

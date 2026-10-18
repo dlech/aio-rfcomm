@@ -15,6 +15,7 @@ left out, since the child would not have the fake.
 import asyncio
 import socket
 import sys
+import threading
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from uuid import UUID
 assert not TYPE_CHECKING or sys.platform == "darwin"
 
 import pytest
+from typing_extensions import override
 
 if sys.platform != "darwin":
     pytest.skip("IOBluetooth is macOS only", allow_module_level=True)
@@ -31,6 +33,7 @@ from aio_rfcomm.availability import Availability
 from aio_rfcomm.backend.iobluetooth import IOBluetoothBackend, IOBluetoothBluetooth
 from aio_rfcomm.backend.iobluetooth.codes import CBManagerAuthorization, CBManagerState
 from aio_rfcomm.backend.iobluetooth.helper import __main__ as helper_main
+from aio_rfcomm.backend.iobluetooth.helper.native import bindings
 from aio_rfcomm.backend.iobluetooth.process import Helper, HelperFailedError
 from aio_rfcomm.backend.iobluetooth.protocol import Link
 from aio_rfcomm.bluetooth import Bluetooth, _open_bluetooth
@@ -44,8 +47,10 @@ from aio_rfcomm.errors import (
 )
 from aio_rfcomm.service import RfcommConnectionRequest, RfcommService
 from tests.fake_iobluetooth import (
+    FakeController,
     FakeDeviceClass,
     FakeManager,
+    Framework,
     change_state,
     # An autouse fixture, used by being imported.
     clean_state,  # noqa: F401  # pyright: ignore[reportUnusedImport]
@@ -156,6 +161,42 @@ class _HeldHelper:
         """
         assert self.far is not None
         self.far.close()
+
+
+class _Dialog:
+    """
+    A permission dialog left open, as the helper's own framework calls meet it.
+
+    Measured on macOS 26.6.2: the first to reach the coordinator waits in its
+    init until the dialog is answered, and a call that reaches it meanwhile,
+    as ``IOBluetoothHostController.defaultController`` does, waits with it.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, framework: Framework) -> None:
+        self.answered = threading.Event()
+        self.held: list[threading.Thread] = []
+        dialog = self
+
+        def find_class(name: str) -> object:
+            if name == bindings.COORDINATOR:
+                dialog.wait()
+            return framework.find_class(name)
+
+        class Controller(FakeController):
+            @classmethod
+            @override
+            def defaultController(cls) -> FakeController:
+                dialog.wait()
+                return super().defaultController()
+
+        monkeypatch.setattr(bindings, "ObjCClass", find_class)
+        monkeypatch.setattr(bindings, "IOBluetoothHostController", Controller)
+
+    def wait(self) -> None:
+        self.held.append(threading.current_thread())
+        # Bounded, so that a helper holding its loop's thread here fails the
+        # test rather than hanging it.
+        self.answered.wait(5)
 
 
 @asynccontextmanager
@@ -649,6 +690,56 @@ async def test_a_held_helper_that_stops_is_not_replaced() -> None:
             assert await anext(watcher) is Availability.SERVICE_UNAVAILABLE
         await asyncio.sleep(0.05)
     assert held.starts == 1
+
+
+async def test_a_helper_held_by_a_permission_dialog_stops_when_left(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Seen in pybricks-tools' CI on a GitHub runner: the helper did not exit
+    while its dialog was open, and was killed two seconds later.
+    """
+    framework = fake_framework_parts(
+        monkeypatch, authorization=CBManagerAuthorization.NOT_DETERMINED
+    )
+    dialog = _Dialog(monkeypatch, framework)
+    try:
+        # Leaving waits at most a second for the helper to stop.
+        async with _stack() as bluetooth:
+            watcher = bluetooth.watch_availability()
+            assert await anext(watcher) is Availability.AWAITING_PERMISSION
+
+        assert dialog.held
+        assert threading.current_thread() not in dialog.held
+    finally:
+        dialog.answered.set()
+
+
+async def test_a_helper_held_by_a_permission_dialog_goes_on_once_answered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    framework = fake_framework_parts(
+        monkeypatch, authorization=CBManagerAuthorization.NOT_DETERMINED
+    )
+    dialog = _Dialog(monkeypatch, framework)
+    try:
+        async with _stack() as bluetooth:
+            watcher = bluetooth.watch_availability()
+            assert await anext(watcher) is Availability.AWAITING_PERMISSION
+
+            monkeypatch.setattr(
+                bindings.CBManager,
+                "authorization",
+                CBManagerAuthorization.ALLOWED_ALWAYS,
+            )
+            dialog.answered.set()
+            async with asyncio.timeout(1):
+                assert await anext(watcher) is Availability.USABLE
+                await bluetooth.list_known_devices()
+
+        assert threading.current_thread() not in dialog.held[:1]
+    finally:
+        dialog.answered.set()
 
 
 # --------------------------------------------------------------------------
